@@ -13,6 +13,7 @@
     "core:window:allow-set-effects",
     "opener:default",
     "dialog:default",
-    "fs:default"
+    "fs:read-all",
+    "fs:write-all"
   ]
 }

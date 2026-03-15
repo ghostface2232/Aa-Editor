@@ -7,7 +7,7 @@ import {
 } from "react";
 import { useEditor, EditorContent } from "@tiptap/react";
 import { Extension } from "@tiptap/core";
-import { Plugin, PluginKey } from "@tiptap/pm/state";
+import { Plugin, PluginKey, NodeSelection, TextSelection } from "@tiptap/pm/state";
 import { Slice } from "@tiptap/pm/model";
 import StarterKit from "@tiptap/starter-kit";
 import { Markdown } from "@tiptap/markdown";
@@ -65,6 +65,73 @@ const MarkdownPaste = Extension.create({
             tr.replaceSelection(new Slice(doc.content, 0, 0));
             _view.dispatch(tr);
             return true;
+          },
+        },
+      }),
+    ];
+  },
+});
+
+/**
+ * 테이블 노드 선택 가드:
+ * 커서가 테이블 바로 앞/뒤에서 방향키로 이동할 때, 테이블 안으로 바로 진입하지 않고
+ * 먼저 테이블 전체를 NodeSelection으로 선택한다.
+ * 이미 테이블이 NodeSelection된 상태에서 방향키를 누르면 테이블 안으로 진입한다.
+ */
+const TableNodeSelect = Extension.create({
+  name: "tableNodeSelect",
+
+  addProseMirrorPlugins() {
+    return [
+      new Plugin({
+        key: new PluginKey("tableNodeSelect"),
+        props: {
+          handleKeyDown(view, event) {
+            if (event.key !== "ArrowDown" && event.key !== "ArrowUp" &&
+                event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
+              return false;
+            }
+
+            const { state } = view;
+            const { selection, doc } = state;
+
+            // 이미 NodeSelection이면 통과 (테이블 안으로 진입)
+            if (selection instanceof NodeSelection) return false;
+
+            // TextSelection일 때만 처리
+            if (!(selection instanceof TextSelection) || !selection.empty) return false;
+
+            const pos = selection.$from;
+            const forward = event.key === "ArrowDown" || event.key === "ArrowRight";
+
+            if (forward) {
+              // 커서 뒤쪽에 테이블이 있는지 확인
+              const after = pos.after();
+              if (after < doc.content.size) {
+                const nodeAfter = doc.resolve(after).nodeAfter;
+                if (nodeAfter?.type.name === "table") {
+                  event.preventDefault();
+                  const tr = state.tr.setSelection(NodeSelection.create(doc, after));
+                  view.dispatch(tr);
+                  return true;
+                }
+              }
+            } else {
+              // 커서 앞쪽에 테이블이 있는지 확인
+              const before = pos.before();
+              if (before > 0) {
+                const nodeBefore = doc.resolve(before).nodeBefore;
+                if (nodeBefore?.type.name === "table") {
+                  event.preventDefault();
+                  const tablePos = before - nodeBefore.nodeSize;
+                  const tr = state.tr.setSelection(NodeSelection.create(doc, tablePos));
+                  view.dispatch(tr);
+                  return true;
+                }
+              }
+            }
+
+            return false;
           },
         },
       }),
@@ -143,10 +210,11 @@ interface TiptapEditorProps {
   editable: boolean;
   isDarkMode: boolean;
   onDirtyChange: (dirty: boolean) => void;
+  onReady?: () => void;
 }
 
 export const TiptapEditor = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
-  function TiptapEditor({ initialMarkdown, editable, isDarkMode, onDirtyChange }, ref) {
+  function TiptapEditor({ initialMarkdown, editable, isDarkMode, onDirtyChange, onReady }, ref) {
     const dirtyRef = useRef(false);
 
     const handleUpdate = useCallback(() => {
@@ -181,6 +249,7 @@ export const TiptapEditor = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
         TableRow,
         TableCell,
         TableHeader,
+        TableNodeSelect,
         MarkdownPaste,
         ReadonlyGuard,
       ],
@@ -191,13 +260,16 @@ export const TiptapEditor = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
       onUpdate: handleUpdate,
     });
 
+    // editor 준비 시 onReady 호출
+    useEffect(() => {
+      if (editor && onReady) onReady();
+    }, [editor, onReady]);
+
     // editable prop → ReadonlyGuard storage 동기화
     useEffect(() => {
       if (editor) {
         editor.storage.readonlyGuard.readonly = !editable;
-        if (!editable) {
-          dirtyRef.current = false;
-        }
+        if (!editable) dirtyRef.current = false;
       }
     }, [editor, editable]);
 
@@ -210,10 +282,14 @@ export const TiptapEditor = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
         },
         setContent: (markdown: string) => {
           if (!editor) return;
+          // ReadonlyGuard를 임시 해제하여 setContent가 차단되지 않게
+          const wasReadonly = editor.storage.readonlyGuard.readonly;
+          editor.storage.readonlyGuard.readonly = false;
           editor.commands.setContent(markdown, {
             emitUpdate: false,
             contentType: "markdown",
           });
+          editor.storage.readonlyGuard.readonly = wasReadonly;
           dirtyRef.current = false;
         },
         setEditable: (value: boolean) => {

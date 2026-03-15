@@ -33,7 +33,7 @@ const useStyles = makeStyles({
     paddingLeft: BTN_PADDING_X,
     paddingRight: BTN_PADDING_X,
     height: BTN_HEIGHT,
-    backgroundColor: tokens.colorNeutralBackground4,
+    backgroundColor: "var(--ui-active-bg)",
     fontWeight: 500,
   },
 });

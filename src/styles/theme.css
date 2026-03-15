@@ -58,6 +58,9 @@
   --editor-color-code-bg: var(--colorNeutralBackground3, #f6f6f6);
   --editor-color-selection: var(--colorBrandBackground2, rgba(0, 120, 212, 0.2));
 
+  /* ─── UI 컨트롤 active/hover ─── */
+  --ui-active-bg: rgba(0, 0, 0, 0.06);
+
   /* ─── 셸 레이아웃 ─── */
   --shell-sidebar-width: 260px;
   --shell-card-gap: 6px;

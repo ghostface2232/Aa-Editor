@@ -28,8 +28,6 @@ export function useMarkdownState(): MarkdownState {
   const [isDirty, setIsDirty] = useState(false);
   const [tiptapDirty, setTiptapDirty] = useState(false);
   const editorRef = useRef<Editor | null>(null);
-
-  // CodeMirror의 현재 값을 참조하기 위한 ref
   const codemirrorValueRef = useRef<string>("");
 
   const updateMarkdown = useCallback((value: string) => {
@@ -38,67 +36,64 @@ export function useMarkdownState(): MarkdownState {
     setIsDirty(true);
   }, []);
 
+  /** Tiptap dirty 시 마크다운 추출하여 state 동기화 */
+  const flushTiptapIfDirty = useCallback(() => {
+    const editor = editorRef.current;
+    if (editor && tiptapDirty) {
+      const md = editor.getMarkdown();
+      setMarkdown(md);
+      setTiptapDirty(false);
+      return md;
+    }
+    return null;
+  }, [tiptapDirty]);
+
+  /** CodeMirror → Tiptap 동기화 (ReadonlyGuard bypass 포함) */
+  const syncCmToTiptap = useCallback(() => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    const cmValue = codemirrorValueRef.current;
+    setMarkdown(cmValue);
+    editor.storage.readonlyGuard.readonly = false;
+    editor.commands.setContent(cmValue, { contentType: "markdown" });
+  }, []);
+
   const toggleEditing = useCallback(() => {
     const editor = editorRef.current;
     if (!editor) return;
 
     if (isEditing) {
-      // 편집 → 읽기
       if (editorMode === "richtext") {
-        if (tiptapDirty) {
-          const md = editor.getMarkdown();
-          setMarkdown(md);
-          setIsDirty(true);
-          setTiptapDirty(false);
-        }
+        flushTiptapIfDirty();
       } else {
-        // CodeMirror → 읽기: Tiptap에 마크다운 반영
-        const cmValue = codemirrorValueRef.current;
-        setMarkdown(cmValue);
-        setIsDirty(true);
-        // ReadonlyGuard를 임시로 풀어 setContent가 차단되지 않게
-        editor.storage.readonlyGuard.readonly = false;
-        editor.commands.setContent(cmValue, { contentType: "markdown" });
+        syncCmToTiptap();
         setEditorMode("richtext");
       }
       setIsEditing(false);
     } else {
-      // 읽기 → 편집 (Rich Text)
       setEditorMode("richtext");
       setIsEditing(true);
     }
-  }, [isEditing, editorMode, tiptapDirty]);
+  }, [isEditing, editorMode, flushTiptapIfDirty, syncCmToTiptap]);
 
   const switchEditorMode = useCallback(() => {
     const editor = editorRef.current;
     if (!editor || !isEditing) return;
 
     if (editorMode === "richtext") {
-      // Rich Text → CodeMirror
-      if (tiptapDirty) {
-        const md = editor.getMarkdown();
-        codemirrorValueRef.current = md;
-        setMarkdown(md);
-        setIsDirty(true);
-        setTiptapDirty(false);
+      const flushed = flushTiptapIfDirty();
+      if (!flushed) {
+        // tiptapDirty가 아니면 현재 markdown을 CM ref에 동기화
+        codemirrorValueRef.current = markdown;
       } else {
-        setMarkdown((prev) => {
-          codemirrorValueRef.current = prev;
-          return prev;
-        });
+        codemirrorValueRef.current = flushed;
       }
       setEditorMode("markdown");
     } else {
-      // CodeMirror → Rich Text: Tiptap에 마크다운 반영
-      const cmValue = codemirrorValueRef.current;
-      setMarkdown(cmValue);
-      setIsDirty(true);
-      // ReadonlyGuard를 임시로 풀어 setContent가 차단되지 않게
-      editor.storage.readonlyGuard.readonly = false;
-      editor.commands.setContent(cmValue, { contentType: "markdown" });
+      syncCmToTiptap();
       setEditorMode("richtext");
     }
-  }, [isEditing, editorMode, tiptapDirty]);
+  }, [isEditing, editorMode, markdown, flushTiptapIfDirty, syncCmToTiptap]);
 
   return {
     markdown,

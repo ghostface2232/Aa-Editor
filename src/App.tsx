@@ -11,6 +11,7 @@ import {
 import { PanelLeftRegular, PanelLeftFilled } from "@fluentui/react-icons";
 import { getCurrentWindow, Effect } from "@tauri-apps/api/window";
 import { useMarkdownState } from "./hooks/useMarkdownState";
+import { useFileSystem, type OpenDocument } from "./hooks/useFileSystem";
 import {
   TiptapEditor,
   type TiptapEditorHandle,
@@ -35,6 +36,14 @@ const useStyles = makeStyles({
     inset: "0",
     pointerEvents: "none",
     zIndex: 1,
+    background: "rgba(0, 0, 0, 0.78)",
+    opacity: 0,
+    transitionProperty: "opacity",
+    transitionDuration: "0.4s",
+    transitionTimingFunction: "ease",
+  },
+  micaOverlayActive: {
+    opacity: 1,
   },
   body: {
     flex: "1",
@@ -43,7 +52,6 @@ const useStyles = makeStyles({
     overflow: "hidden",
     zIndex: 2,
   },
-
   sidebarSlot: {
     width: 0,
     flexShrink: 0,
@@ -58,7 +66,7 @@ const useStyles = makeStyles({
   sidebarToggle: {
     position: "absolute",
     top: "12px",
-    left: "12px",
+    left: "8px",
     zIndex: 10,
     display: "inline-flex",
     alignItems: "center",
@@ -91,26 +99,19 @@ const useStyles = makeStyles({
     overflow: "auto",
     position: "relative",
   },
-  tiptapVisible: {
+  editorPane: {
     opacity: 1,
     transitionProperty: "opacity",
     transitionDuration: "0.15s",
     transitionTimingFunction: "ease",
     height: "100%",
   },
-  tiptapHidden: {
+  editorPaneHidden: {
     opacity: 0,
     position: "absolute",
     pointerEvents: "none",
     height: 0,
     overflow: "hidden",
-  },
-  codemirrorWrapper: {
-    opacity: 1,
-    transitionProperty: "opacity",
-    transitionDuration: "0.15s",
-    transitionTimingFunction: "ease",
-    height: "100%",
   },
 });
 
@@ -120,54 +121,100 @@ function App() {
   const state = useMarkdownState();
   const styles = useStyles();
   const tiptapRef = useRef<TiptapEditorHandle>(null);
+  const [tiptapEditor, setTiptapEditor] = useState<import("@tiptap/react").Editor | null>(null);
 
-  // OS Mica 효과
+  // 열린 문서 목록 — Untitled 하나로 시작
+  const [openDocuments, setOpenDocuments] = useState<OpenDocument[]>([
+    { filePath: "", fileName: "Untitled", isDirty: false },
+  ]);
+  const [activeDocIndex, setActiveDocIndex] = useState(0);
+
+  const fs = useFileSystem(
+    state,
+    tiptapRef,
+    openDocuments,
+    setOpenDocuments,
+    activeDocIndex,
+    setActiveDocIndex,
+  );
+
+  // OS Mica 효과: 마운트 시 1회
   useEffect(() => {
     getCurrentWindow()
       .setEffects({ effects: [Effect.Mica] })
-      .catch(() => {
-        document.documentElement.style.setProperty(
-          "--shell-fallback-bg",
-          isDarkMode ? "#2a2a28" : "#f0ece4",
-        );
-      });
+      .catch(() => {});
+  }, []);
+
+  // Mica 미지원 시 fallback 배경
+  useEffect(() => {
+    document.documentElement.style.setProperty(
+      "--shell-fallback-bg",
+      isDarkMode ? "#2a2a28" : "#f0ece4",
+    );
   }, [isDarkMode]);
 
-  // TiptapEditor ref를 editorRef에 연결
-  useEffect(() => {
+  // TiptapEditor ref → editorRef 연결 (editor 변경 시만)
+  const syncEditorRef = useCallback(() => {
     if (tiptapRef.current) {
       const editor = tiptapRef.current.getEditor();
       state.editorRef.current = editor ?? null;
+      if (editor && editor !== tiptapEditor) {
+        setTiptapEditor(editor);
+      }
     }
-  });
+  }, [tiptapEditor, state.editorRef]);
+
+  // TiptapEditor가 마운트된 후 1회 + editor 변경 시
+  useEffect(syncEditorRef, [syncEditorRef]);
+
+  // isDirty → openDocuments 동기화
+  useEffect(() => {
+    setOpenDocuments((docs) => {
+      if (activeDocIndex < 0 || activeDocIndex >= docs.length) return docs;
+      const current = docs[activeDocIndex];
+      if (current.isDirty === state.isDirty) return docs;
+      const updated = [...docs];
+      updated[activeDocIndex] = { ...current, isDirty: state.isDirty };
+      return updated;
+    });
+  }, [state.isDirty, activeDocIndex]);
 
   // 단축키
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.ctrlKey && e.key === "e") {
-        e.preventDefault();
-        state.toggleEditing();
-      }
-      if (e.ctrlKey && e.key === "/" && state.isEditing) {
-        e.preventDefault();
-        state.switchEditorMode();
-      }
+      if (e.ctrlKey && e.key === "e") { e.preventDefault(); state.toggleEditing(); }
+      if (e.ctrlKey && e.key === "/" && state.isEditing) { e.preventDefault(); state.switchEditorMode(); }
+      if (e.ctrlKey && e.key === "o") { e.preventDefault(); fs.openFile(); }
+      if (e.ctrlKey && !e.shiftKey && e.key === "s") { e.preventDefault(); fs.saveFile(); }
+      if (e.ctrlKey && e.shiftKey && e.key === "S") { e.preventDefault(); fs.saveFileAs(); }
+      if (e.ctrlKey && e.key === "n") { e.preventDefault(); fs.newFile(); }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [state.toggleEditing, state.switchEditorMode, state.isEditing]);
+  }, [state.toggleEditing, state.switchEditorMode, state.isEditing, fs.openFile, fs.saveFile, fs.saveFileAs, fs.newFile]);
+
+  // 창 닫기 시 isDirty 확인
+  useEffect(() => {
+    const unlisten = getCurrentWindow().onCloseRequested(async (event) => {
+      if (state.isDirty) {
+        const { confirm } = await import("@tauri-apps/plugin-dialog");
+        const shouldClose = await confirm(
+          "저장되지 않은 변경사항이 있습니다. 정말 닫으시겠습니까?",
+          { title: "Markdown Studio", kind: "warning", okLabel: "닫기", cancelLabel: "취소" },
+        );
+        if (!shouldClose) event.preventDefault();
+      }
+    });
+    return () => { unlisten.then((fn) => fn()); };
+  }, [state.isDirty]);
 
   const handleTiptapDirty = useCallback(
-    (dirty: boolean) => {
-      state.setTiptapDirty(dirty);
-    },
+    (dirty: boolean) => state.setTiptapDirty(dirty),
     [state.setTiptapDirty],
   );
 
   const handleCodemirrorChange = useCallback(
-    (value: string) => {
-      state.updateMarkdown(value);
-    },
+    (value: string) => state.updateMarkdown(value),
     [state.updateMarkdown],
   );
 
@@ -180,13 +227,10 @@ function App() {
       data-theme={isDarkMode ? "dark" : "light"}
     >
       <div className={styles.root}>
-        {/* 다크모드 오버레이 */}
-        {isDarkMode && (
-          <div
-            className={styles.micaOverlay}
-            style={{ background: "rgba(0, 0, 0, 0.78)" }}
-          />
-        )}
+        <div className={mergeClasses(
+          styles.micaOverlay,
+          isDarkMode && styles.micaOverlayActive,
+        )} />
 
         <TitleBar
           filePath={state.filePath}
@@ -207,42 +251,40 @@ function App() {
             />
           </div>
 
-          <div
-            className={mergeClasses(
-              styles.sidebarSlot,
-              sidebarOpen && styles.sidebarSlotOpen,
-            )}
-          >
-            <Sidebar />
+          <div className={mergeClasses(
+            styles.sidebarSlot,
+            sidebarOpen && styles.sidebarSlotOpen,
+          )}>
+            <Sidebar
+              openDocuments={openDocuments}
+              activeDocIndex={activeDocIndex}
+              onSwitchDocument={fs.switchDocument}
+            />
           </div>
 
           <div className={styles.floatingCard}>
-            <div className={styles.content}>
-              {state.isEditing && (
-                <EditorToolbar
-                  editorMode={state.editorMode}
-                  onSwitchMode={state.switchEditorMode}
-                />
-              )}
+            <EditorToolbar
+              editorMode={state.editorMode}
+              onSwitchMode={state.switchEditorMode}
+              editor={tiptapEditor}
+              sidebarOpen={sidebarOpen}
+              visible={state.isEditing}
+            />
 
-              {/* Tiptap: 항상 마운트 */}
-              <div
-                className={
-                  showCodeMirror ? styles.tiptapHidden : styles.tiptapVisible
-                }
-              >
+            <div className={styles.content}>
+              <div className={showCodeMirror ? styles.editorPaneHidden : styles.editorPane}>
                 <TiptapEditor
                   ref={tiptapRef}
                   initialMarkdown={state.markdown}
                   editable={state.isEditing && state.editorMode === "richtext"}
                   isDarkMode={isDarkMode}
                   onDirtyChange={handleTiptapDirty}
+                  onReady={syncEditorRef}
                 />
               </div>
 
-              {/* CodeMirror: markdown 편집 모드에서만 마운트 */}
               {showCodeMirror && (
-                <div className={styles.codemirrorWrapper}>
+                <div className={styles.editorPane}>
                   <MarkdownEditor
                     value={state.markdown}
                     onChange={handleCodemirrorChange}

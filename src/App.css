@@ -57,3 +57,29 @@ body {
 [data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.25);
 }
+
+/* ─── 다크 모드 전환: 대상 한정 트랜지션 ─── */
+.fui-FluentProvider,
+.ProseMirror,
+.cm-editor {
+  transition: color 0.3s ease, background-color 0.3s ease;
+}
+
+/* ─── Fluent UI Button hover/pressed: 투명 검정 오버레이 ─── */
+.fui-Button:hover {
+  background-color: rgba(0, 0, 0, 0.04) !important;
+}
+.fui-Button:active {
+  background-color: rgba(0, 0, 0, 0.08) !important;
+}
+[data-theme="dark"] .fui-Button:hover {
+  background-color: rgba(255, 255, 255, 0.06) !important;
+}
+[data-theme="dark"] .fui-Button:active {
+  background-color: rgba(255, 255, 255, 0.1) !important;
+}
+
+/* ─── 다크 모드에서 active 배경 변수 오버라이드 ─── */
+[data-theme="dark"] {
+  --ui-active-bg: rgba(255, 255, 255, 0.12);
+}

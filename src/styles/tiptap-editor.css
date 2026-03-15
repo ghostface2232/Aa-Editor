@@ -13,6 +13,29 @@
   outline: none;
 }
 
+/* ─── GapCursor: 가로 커서 → 세로 캐럿으로 변경 ─── */
+.ProseMirror .ProseMirror-gapcursor {
+  position: relative;
+  pointer-events: none;
+}
+
+.ProseMirror .ProseMirror-gapcursor::after {
+  display: block;
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 2px;
+  height: 1.2em;
+  border-top: none;
+  border-left: 2px solid var(--editor-color-text);
+  content: "";
+  animation: blink-caret 1s step-end infinite;
+}
+
+@keyframes blink-caret {
+  50% { opacity: 0; }
+}
+
 /* ─── 텍스트 선택: 모든 모드에서 허용 ─── */
 .ProseMirror {
   -webkit-user-select: text !important;
@@ -249,6 +272,13 @@
 .ProseMirror th {
   background-color: var(--editor-color-bg-subtle);
   font-weight: 500;
+}
+
+/* 테이블 NodeSelection 하이라이트 */
+.ProseMirror table.ProseMirror-selectednode {
+  outline: 2px solid var(--editor-color-accent);
+  outline-offset: 2px;
+  border-radius: 4px;
 }
 
 /* ─── Placeholder ─── */
