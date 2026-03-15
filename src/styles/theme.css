@@ -1,0 +1,83 @@
+/*
+ * theme.css
+ * Tiptap 에디터와 CodeMirror 에디터가 공유하는 CSS 변수.
+ *
+ * 색상은 Fluent UI v9 FluentProvider가 DOM에 주입하는 CSS 변수를 직접 참조하므로,
+ * webLightTheme ↔ webDarkTheme 전환 시 별도 다크모드 오버라이드 없이 자동 반영된다.
+ */
+
+/* ─── @font-face ─── */
+@font-face {
+  font-family: "SF Pro KR";
+  src: url("/fonts/SFProKR-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "SF Pro KR";
+  src: url("/fonts/SFProKR-Medium.woff2") format("woff2");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "SF Pro KR";
+  src: url("/fonts/SFProKR-Semibold.woff2") format("woff2");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "SF Mono";
+  src: url("/fonts/SF-Mono-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "SF Mono";
+  src: url("/fonts/SF-Mono-Medium.woff2") format("woff2");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  /* ─── 색상 (Fluent UI 토큰 매핑 + fallback) ─── */
+  --editor-color-text: var(--colorNeutralForeground1, #1b1b1f);
+  --editor-color-text-secondary: var(--colorNeutralForeground2, #616161);
+  --editor-color-bg: var(--colorNeutralBackground1, #ffffff);
+  --editor-color-bg-subtle: var(--colorNeutralBackground2, #f8f8f8);
+  --editor-color-border: var(--colorNeutralStroke1, #e0e0e0);
+  --editor-color-accent: var(--colorBrandForeground1, #0078d4);
+  --editor-color-code-bg: var(--colorNeutralBackground3, #f6f6f6);
+  --editor-color-selection: var(--colorBrandBackground2, rgba(0, 120, 212, 0.2));
+
+  /* ─── 셸 레이아웃 ─── */
+  --shell-sidebar-width: 260px;
+  --shell-card-gap: 6px;
+  /* Mica 미지원 시 JS가 설정하는 fallback 배경 (기본값: 투명) */
+  --shell-fallback-bg: transparent;
+
+  /* ─── 폰트 ─── */
+  --editor-font-family-sans: "SF Pro KR", system-ui, sans-serif;
+  --editor-font-family-mono: "SF Mono", "SF Pro KR", ui-monospace, monospace;
+  --editor-font-family-serif: "SF Pro KR", Georgia, serif;
+  --editor-font-family: var(--editor-font-family-sans);
+
+  /* ─── 레이아웃 (테마와 무관, 독립 정의) ─── */
+  --editor-font-size: 16px;
+  --editor-line-height: 1.7;
+  --editor-max-width: 720px;
+  --editor-padding-x: 2rem;
+  --editor-padding-y: 3rem;
+  --heading1-size: 2em;
+  --heading2-size: 1.5em;
+  --heading3-size: 1.25em;
+  --editor-radius: 8px;
+}

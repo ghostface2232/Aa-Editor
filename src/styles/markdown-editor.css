@@ -1,0 +1,49 @@
+/* ─── CodeMirror Markdown 소스 에디터 ─── */
+
+.markdown-editor .cm-editor {
+  background: transparent;
+  font-family: var(--editor-font-family-mono);
+  font-size: var(--editor-font-size);
+}
+
+.markdown-editor .cm-editor.cm-focused {
+  outline: none;
+}
+
+.markdown-editor .cm-scroller {
+  line-height: var(--editor-line-height);
+  overflow-x: hidden;
+}
+
+/* 콘텐츠 영역: 풀 넓이, 좌측 정렬, 폰트 명시 */
+.markdown-editor .cm-content,
+.markdown-editor .cm-line {
+  font-family: var(--editor-font-family-mono) !important;
+  font-size: var(--editor-font-size) !important;
+}
+
+.markdown-editor .cm-content {
+  padding: var(--editor-padding-y) var(--editor-padding-x);
+  caret-color: var(--editor-color-accent);
+}
+
+/* 거터 숨김 */
+.markdown-editor .cm-gutters {
+  display: none;
+}
+
+/* 활성 라인 */
+.markdown-editor .cm-activeLine {
+  background: transparent;
+}
+
+/* 선택 하이라이트: focused + unfocused 모두 커버 */
+.markdown-editor .cm-editor .cm-selectionBackground,
+.markdown-editor .cm-editor.cm-focused .cm-selectionBackground {
+  background: rgba(0, 120, 212, 0.3) !important;
+}
+
+/* 커서 */
+.markdown-editor .cm-cursor {
+  border-left-color: var(--editor-color-text);
+}

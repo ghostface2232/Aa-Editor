@@ -1,0 +1,427 @@
+/* ─── ProseMirror 기본 레이아웃 ─── */
+.ProseMirror {
+  outline: none;
+  color: var(--editor-color-text);
+  font-family: var(--editor-font-family);
+  font-size: var(--editor-font-size);
+  line-height: var(--editor-line-height);
+  padding: var(--editor-padding-y) var(--editor-padding-x);
+  min-height: 100%;
+}
+
+.ProseMirror:focus {
+  outline: none;
+}
+
+/* ─── 텍스트 선택: 모든 모드에서 허용 ─── */
+.ProseMirror {
+  -webkit-user-select: text !important;
+  user-select: text !important;
+}
+
+/* ─── 읽기 모드 ─── */
+.tiptap-readonly .ProseMirror {
+  cursor: default;
+  caret-color: transparent;
+}
+/* 실제 텍스트 요소 위에서만 I-beam */
+.tiptap-readonly .ProseMirror p,
+.tiptap-readonly .ProseMirror h1,
+.tiptap-readonly .ProseMirror h2,
+.tiptap-readonly .ProseMirror h3,
+.tiptap-readonly .ProseMirror h4,
+.tiptap-readonly .ProseMirror h5,
+.tiptap-readonly .ProseMirror h6,
+.tiptap-readonly .ProseMirror li,
+.tiptap-readonly .ProseMirror td,
+.tiptap-readonly .ProseMirror th,
+.tiptap-readonly .ProseMirror blockquote,
+.tiptap-readonly .ProseMirror pre,
+.tiptap-readonly .ProseMirror code,
+.tiptap-readonly .ProseMirror a,
+.tiptap-readonly .ProseMirror span {
+  cursor: text;
+}
+
+/* 읽기 모드에서 placeholder 숨김 */
+.tiptap-readonly .is-editor-empty::before {
+  display: none !important;
+}
+
+/* ─── 헤딩 ─── */
+.ProseMirror h1 {
+  font-size: var(--heading1-size);
+  font-weight: 600;
+  margin-top: 1.5em;
+  margin-bottom: 0.5em;
+  line-height: 1.3;
+}
+
+.ProseMirror h2 {
+  font-size: var(--heading2-size);
+  font-weight: 500;
+  margin-top: 1.25em;
+  margin-bottom: 0.4em;
+  line-height: 1.35;
+}
+
+.ProseMirror h3 {
+  font-size: var(--heading3-size);
+  font-weight: 500;
+  margin-top: 1em;
+  margin-bottom: 0.3em;
+  line-height: 1.4;
+}
+
+.ProseMirror h1:first-child,
+.ProseMirror h2:first-child,
+.ProseMirror h3:first-child {
+  margin-top: 0;
+}
+
+/* ─── 단락 ─── */
+.ProseMirror p {
+  margin-bottom: 0.75em;
+}
+
+/* ─── 인라인 코드 ─── */
+.ProseMirror code {
+  background-color: var(--editor-color-code-bg);
+  padding: 0.15em 0.4em;
+  border-radius: 4px;
+  font-family: var(--editor-font-family-mono);
+  font-size: 0.9em;
+}
+
+/* ─── 코드블럭 ─── */
+.ProseMirror pre {
+  position: relative;
+  background-color: var(--editor-color-code-bg);
+  padding: 0;
+  border-radius: var(--editor-radius);
+  overflow: hidden;
+  margin-bottom: 0.75em;
+  font-family: var(--editor-font-family-mono);
+  font-size: 0.9em;
+  line-height: 1.5;
+}
+
+/* 코드블럭 상단 타이틀 바 */
+.ProseMirror pre::before {
+  content: attr(data-language);
+  display: block;
+  padding: 0.4rem 1rem;
+  background-color: var(--editor-color-border);
+  font-family: var(--editor-font-family-sans);
+  font-size: 0.75em;
+  color: var(--editor-color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.ProseMirror pre code {
+  display: block;
+  padding: 1rem;
+  background: none;
+  border-radius: 0;
+  font-size: inherit;
+  color: inherit;
+  overflow-x: auto;
+}
+
+/* ─── 인용문 ─── */
+.ProseMirror blockquote {
+  border-left: 3px solid var(--editor-color-border);
+  padding-left: 1em;
+  margin-left: 0;
+  margin-right: 0;
+  margin-bottom: 0.75em;
+  color: var(--editor-color-text-secondary);
+}
+
+/* 중첩 인용문 */
+.ProseMirror blockquote blockquote {
+  margin-top: 0.5em;
+  margin-bottom: 0.5em;
+}
+
+/* ─── 리스트 ─── */
+.ProseMirror ul,
+.ProseMirror ol {
+  padding-left: 1.5em;
+  margin-bottom: 0.75em;
+}
+
+.ProseMirror li {
+  margin-bottom: 0.25em;
+}
+
+.ProseMirror li > p {
+  margin-bottom: 0.25em;
+}
+
+/* 중첩 리스트: 상위 리스트의 margin-bottom 제거 */
+.ProseMirror li > ul,
+.ProseMirror li > ol {
+  margin-top: 0.25em;
+  margin-bottom: 0.25em;
+}
+
+/* 중첩 리스트 스타일 변경 */
+.ProseMirror ul { list-style-type: disc; }
+.ProseMirror ul ul { list-style-type: circle; }
+.ProseMirror ul ul ul { list-style-type: square; }
+.ProseMirror ol { list-style-type: decimal; }
+.ProseMirror ol ol { list-style-type: lower-alpha; }
+.ProseMirror ol ol ol { list-style-type: lower-roman; }
+
+/* ─── 체크박스 리스트 ─── */
+.ProseMirror ul[data-type="taskList"] {
+  list-style: none;
+  padding-left: 0;
+}
+
+.ProseMirror ul[data-type="taskList"] li {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5em;
+}
+
+.ProseMirror ul[data-type="taskList"] li > label {
+  flex-shrink: 0;
+  margin-top: 0.3em;
+}
+
+.ProseMirror ul[data-type="taskList"] li > label input[type="checkbox"] {
+  cursor: pointer;
+  width: 16px;
+  height: 16px;
+  accent-color: var(--editor-color-accent);
+}
+
+/* 읽기 모드에서 체크박스 비활성 */
+.tiptap-readonly ul[data-type="taskList"] li > label input[type="checkbox"] {
+  pointer-events: none;
+}
+
+.ProseMirror ul[data-type="taskList"] li > div {
+  flex: 1;
+}
+
+/* ─── 수평선 ─── */
+.ProseMirror hr {
+  border: none;
+  border-top: 2px solid var(--editor-color-border);
+  margin: 2em 0;
+}
+
+/* ─── 링크 ─── */
+.ProseMirror a {
+  color: var(--editor-color-accent);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+/* ─── 이미지 ─── */
+.ProseMirror img {
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--editor-radius);
+  margin-bottom: 0.75em;
+}
+
+/* ─── 테이블 ─── */
+.ProseMirror table {
+  border-collapse: collapse;
+  width: 100%;
+  margin-bottom: 0.75em;
+  overflow: auto;
+}
+
+.ProseMirror th,
+.ProseMirror td {
+  border: 1px solid var(--editor-color-border);
+  padding: 0.5em 0.75em;
+  text-align: left;
+  vertical-align: top;
+}
+
+.ProseMirror th {
+  background-color: var(--editor-color-bg-subtle);
+  font-weight: 500;
+}
+
+/* ─── Placeholder ─── */
+.ProseMirror p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  color: var(--editor-color-text-secondary);
+  opacity: 0.5;
+  pointer-events: none;
+  height: 0;
+}
+
+/* ─── hljs 구문 강조 색상 ─── */
+.ProseMirror pre .hljs-comment,
+.ProseMirror pre .hljs-quote {
+  color: var(--editor-color-text-secondary);
+  font-style: italic;
+}
+
+.ProseMirror pre .hljs-keyword,
+.ProseMirror pre .hljs-selector-tag,
+.ProseMirror pre .hljs-built_in {
+  color: var(--editor-color-accent);
+}
+
+.ProseMirror pre .hljs-string,
+.ProseMirror pre .hljs-attr {
+  color: #0a7e07;
+}
+
+.ProseMirror pre .hljs-number,
+.ProseMirror pre .hljs-literal {
+  color: #9c5d27;
+}
+
+.ProseMirror pre .hljs-title,
+.ProseMirror pre .hljs-section {
+  font-weight: 500;
+}
+
+/* ═══════════════════════════════════════════
+   다크 모드
+   ═══════════════════════════════════════════ */
+[data-theme="dark"] .ProseMirror {
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .ProseMirror code {
+  background-color: #1a1a1a;
+}
+
+[data-theme="dark"] .ProseMirror pre {
+  background-color: #1a1a1a;
+}
+
+[data-theme="dark"] .ProseMirror pre::before {
+  background-color: #222222;
+  color: #7a7a7a;
+}
+
+[data-theme="dark"] .ProseMirror blockquote {
+  border-left-color: #404040;
+  color: #9e9e9e;
+}
+
+[data-theme="dark"] .ProseMirror hr {
+  border-top-color: #404040;
+}
+
+[data-theme="dark"] .ProseMirror a {
+  color: #4da6ff;
+}
+
+[data-theme="dark"] .ProseMirror th,
+[data-theme="dark"] .ProseMirror td {
+  border-color: #404040;
+}
+
+[data-theme="dark"] .ProseMirror th {
+  background-color: #222222;
+}
+
+[data-theme="dark"] .ProseMirror p.is-editor-empty:first-child::before {
+  color: #9e9e9e;
+}
+
+/* hljs 다크 */
+[data-theme="dark"] .ProseMirror pre .hljs-comment,
+[data-theme="dark"] .ProseMirror pre .hljs-quote {
+  color: #6e7681;
+}
+
+[data-theme="dark"] .ProseMirror pre .hljs-keyword,
+[data-theme="dark"] .ProseMirror pre .hljs-selector-tag,
+[data-theme="dark"] .ProseMirror pre .hljs-built_in {
+  color: #6cb6ff;
+}
+
+[data-theme="dark"] .ProseMirror pre .hljs-string,
+[data-theme="dark"] .ProseMirror pre .hljs-attr {
+  color: #7ee787;
+}
+
+[data-theme="dark"] .ProseMirror pre .hljs-number,
+[data-theme="dark"] .ProseMirror pre .hljs-literal {
+  color: #f0b072;
+}
+
+/* ═══════════════════════════════════════════
+   @media print
+   ═══════════════════════════════════════════ */
+@media print {
+  /* 앱 셸 UI 숨김 */
+  [data-tauri-drag-region],
+  .titlebar,
+  .sidebar,
+  .sidebar-toggle,
+  .editor-toolbar,
+  .status-bar,
+  .floating-pill {
+    display: none !important;
+  }
+
+  html, body, #root {
+    height: auto;
+    overflow: visible;
+    background: white !important;
+  }
+
+  /* 배경색 제거, 깨끗한 흑백 */
+  .ProseMirror {
+    color: #000;
+    background: white;
+    padding: 0;
+    max-width: 100%;
+    font-size: 12pt;
+    line-height: 1.6;
+  }
+
+  /* 적절한 페이지 여백 */
+  @page {
+    margin: 2cm;
+  }
+
+  /* 코드블럭 배경 유지, 줄바꿈 보장 */
+  .ProseMirror pre {
+    background-color: #f5f5f5 !important;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    page-break-inside: avoid;
+  }
+
+  .ProseMirror code {
+    background-color: #f5f5f5 !important;
+  }
+
+  /* 이미지 페이지 넘김 방지 */
+  .ProseMirror img {
+    page-break-inside: avoid;
+    max-width: 100%;
+  }
+
+  /* 헤딩 다음에 페이지 넘김 방지 */
+  .ProseMirror h1,
+  .ProseMirror h2,
+  .ProseMirror h3 {
+    page-break-after: avoid;
+  }
+
+  /* 링크 URL 표시 */
+  .ProseMirror a::after {
+    content: " (" attr(href) ")";
+    font-size: 0.8em;
+    color: #666;
+  }
+}

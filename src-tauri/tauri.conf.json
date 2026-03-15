@@ -14,7 +14,12 @@
       {
         "title": "markdown-studio",
         "width": 800,
-        "height": 600
+        "height": 600,
+        "decorations": false,
+        "transparent": true,
+        "windowEffects": {
+          "effects": ["mica"]
+        }
       }
     ],
     "security": {
