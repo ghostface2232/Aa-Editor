@@ -301,6 +301,7 @@ function App() {
               markdown={state.markdown}
               isEditing={state.isEditing}
               editorMode={state.editorMode}
+              editor={tiptapEditor}
             />
           </div>
         </div>
