@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useState, useEffect } from "react";
 import { makeStyles, tokens } from "@fluentui/react-components";
 import type { EditorMode } from "../hooks/useMarkdownState";
 import type { Editor } from "@tiptap/react";
@@ -27,6 +27,28 @@ const useStyles = makeStyles({
   },
 });
 
+function useEditorStats(editor: Editor | null) {
+  const [stats, setStats] = useState({ charCount: 0, lineCount: 0 });
+
+  useEffect(() => {
+    if (!editor) return;
+
+    const update = () => {
+      const text = editor.state.doc.textContent;
+      setStats({
+        charCount: text.length,
+        lineCount: editor.state.doc.childCount,
+      });
+    };
+
+    update(); // 초기값
+    editor.on("update", update);
+    return () => { editor.off("update", update); };
+  }, [editor]);
+
+  return stats;
+}
+
 interface StatusBarProps {
   markdown: string;
   isEditing: boolean;
@@ -36,25 +58,13 @@ interface StatusBarProps {
 
 export function StatusBar({ markdown, isEditing, editorMode, editor }: StatusBarProps) {
   const styles = useStyles();
+  const editorStats = useEditorStats(editor);
 
-  // Rich Text/읽기 모드: editor의 텍스트에서 카운트
-  // Markdown 모드: state.markdown에서 카운트
-  const { charCount, lineCount } = useMemo(() => {
-    if (editorMode === "markdown" && isEditing) {
-      return {
-        charCount: markdown.length,
-        lineCount: markdown ? markdown.split("\n").length : 0,
-      };
-    }
-    if (editor) {
-      const text = editor.state.doc.textContent;
-      return {
-        charCount: text.length,
-        lineCount: editor.state.doc.childCount,
-      };
-    }
-    return { charCount: 0, lineCount: 0 };
-  }, [markdown, isEditing, editorMode, editor?.state.doc]);
+  const useMarkdownSource = isEditing && editorMode === "markdown";
+  const charCount = useMarkdownSource ? markdown.length : editorStats.charCount;
+  const lineCount = useMarkdownSource
+    ? (markdown ? markdown.split("\n").length : 0)
+    : editorStats.lineCount;
 
   const modeLabel = !isEditing
     ? "읽기"
