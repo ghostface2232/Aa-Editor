@@ -12,6 +12,8 @@ import {
   Square20Regular,
 } from "@fluentui/react-icons";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { t } from "../i18n";
+import type { Locale } from "../hooks/useSettings";
 
 const useStyles = makeStyles({
   titleBar: {
@@ -60,8 +62,6 @@ const useStyles = makeStyles({
     gap: "8px",
     marginRight: "12px",
   },
-
-  /* 밑줄 탭 스타일 모드 셀렉터 */
   tabGroup: {
     display: "flex",
     alignItems: "center",
@@ -102,7 +102,6 @@ const useStyles = makeStyles({
       backgroundColor: tokens.colorBrandForeground1,
     },
   },
-
   windowControls: {
     display: "flex",
     alignItems: "center",
@@ -131,6 +130,7 @@ interface TitleBarProps {
   isDirty: boolean;
   isEditing: boolean;
   isDarkMode: boolean;
+  locale: Locale;
   onToggleDarkMode: () => void;
   onToggleEditing: () => void;
 }
@@ -140,11 +140,13 @@ export function TitleBar({
   isDirty,
   isEditing,
   isDarkMode,
+  locale,
   onToggleDarkMode,
   onToggleEditing,
 }: TitleBarProps) {
   const styles = useStyles();
   const appWindow = getCurrentWindow();
+  const i = (key: Parameters<typeof t>[0]) => t(key, locale);
 
   const fileName = filePath ? filePath.split(/[\\/]/).pop() : null;
   const displayName = fileName
@@ -157,7 +159,7 @@ export function TitleBar({
     <div className={styles.titleBar} data-tauri-drag-region>
       <div className={styles.left} data-tauri-drag-region>
         <span className={styles.appIcon}>📝</span>
-        <span className={styles.appName}>Markdown Studio</span>
+        <span className={styles.appName}>{i("app.name")}</span>
         {displayName && (
           <>
             <span className={styles.appName}>—</span>
@@ -176,7 +178,7 @@ export function TitleBar({
             onClick={() => isEditing && onToggleEditing()}
             size="small"
           >
-            읽기
+            {i("mode.read")}
           </Button>
           <Button
             appearance="subtle"
@@ -184,12 +186,12 @@ export function TitleBar({
             onClick={() => !isEditing && onToggleEditing()}
             size="small"
           >
-            편집
+            {i("mode.edit")}
           </Button>
         </div>
 
         <Tooltip
-          content={isDarkMode ? "Light mode" : "Dark mode"}
+          content={isDarkMode ? i("theme.light") : i("theme.dark")}
           relationship="label"
         >
           <Button

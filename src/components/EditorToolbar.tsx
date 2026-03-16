@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState, useCallback } from "react";
 import {
   Button,
   Tooltip,
@@ -8,7 +9,6 @@ import {
   MenuList,
   MenuItem,
   makeStyles,
-  mergeClasses,
   tokens,
 } from "@fluentui/react-components";
 import {
@@ -29,42 +29,48 @@ import {
   ChevronDownRegular,
 } from "@fluentui/react-icons";
 import { PillSelector } from "./PillSelector";
+import { pickAndInsertImage } from "../extensions/ImageDrop";
+import { t } from "../i18n";
 import type { EditorMode } from "../hooks/useMarkdownState";
 import type { Editor } from "@tiptap/react";
+import type { Locale } from "../hooks/useSettings";
 
 const useStyles = makeStyles({
   bar: {
-    display: "flex",
-    alignItems: "center",
-    gap: "2px",
-    padding: "6px 12px",
     flexShrink: 0,
-    flexWrap: "nowrap",
+    overflow: "hidden",
     borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
     zIndex: 5,
-    overflow: "hidden",
-    maxHeight: "44px",
-    transitionProperty: "max-height, opacity, padding, border-bottom-width",
+    transitionProperty: "height, opacity, border-bottom-color",
     transitionDuration: "0.25s",
     transitionTimingFunction: "ease",
   },
-  barHidden: {
-    maxHeight: "0",
-    opacity: 0,
-    paddingTop: "0",
-    paddingBottom: "0",
-    borderBottomWidth: "0",
+  grid: {
+    display: "grid",
+    gridTemplateColumns: "auto 1fr auto",
+    alignItems: "center",
+    columnGap: "6px",
+    rowGap: "4px",
+    padding: "6px 12px",
   },
+  /* tools 기본: 1줄 모드 (grid-column/row 등은 JS에서 직접 설정) */
   tools: {
     display: "flex",
     alignItems: "center",
     gap: "2px",
-    flexShrink: 0,
+    whiteSpace: "nowrap",
+    gridColumn: "2",
+    gridRow: "1",
+    justifySelf: "center",
   },
-  spacer: {
-    flex: 1,
-    minWidth: "8px",
+  undo: {
+    gridColumn: "3",
+    gridRow: "1",
+    justifySelf: "end",
+    display: "flex",
+    alignItems: "center",
+    gap: "2px",
   },
   divider: {
     height: "20px",
@@ -94,6 +100,7 @@ const useStyles = makeStyles({
     borderRadius: "6px",
     border: "none",
     fontSize: "12px",
+    fontWeight: 400,
     gap: "4px",
   },
   headingBtnActive: {
@@ -109,10 +116,13 @@ const useStyles = makeStyles({
   },
 });
 
-const MODE_ITEMS = [
-  { key: "richtext", label: "Rich Text" },
-  { key: "markdown", label: "Markdown" },
-];
+function getHeadingLabel(editor: Editor | null, locale: Locale): string {
+  if (!editor) return t("heading.body", locale);
+  for (let lvl = 1; lvl <= 6; lvl++) {
+    if (editor.isActive("heading", { level: lvl })) return `H${lvl}`;
+  }
+  return t("heading.body", locale);
+}
 
 interface EditorToolbarProps {
   editorMode: EditorMode;
@@ -120,6 +130,7 @@ interface EditorToolbarProps {
   editor: Editor | null;
   sidebarOpen: boolean;
   visible: boolean;
+  locale: Locale;
 }
 
 export function EditorToolbar({
@@ -128,21 +139,86 @@ export function EditorToolbar({
   editor,
   sidebarOpen,
   visible,
+  locale,
 }: EditorToolbarProps) {
   const styles = useStyles();
+  const i = (key: Parameters<typeof t>[0]) => t(key, locale);
   const isRichText = editorMode === "richtext";
+  const modeItems = [
+    { key: "richtext", label: i("editor.richtext") },
+    { key: "markdown", label: i("editor.markdown") },
+  ];
   const showTools = visible && isRichText && !!editor;
 
+  const gridRef = useRef<HTMLDivElement>(null);
+  const toolsRef = useRef<HTMLDivElement>(null);
+  const isTwoRows = useRef(false);
+
+  const [barHeight, setBarHeight] = useState(0);
+
+  /* 에디터 selection/transaction 변경 시 툴바 리렌더 (서식 상태 동기화) */
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!editor) return;
+    const bump = () => setTick((n) => n + 1);
+    editor.on("selectionUpdate", bump);
+    editor.on("transaction", bump);
+    return () => {
+      editor.off("selectionUpdate", bump);
+      editor.off("transaction", bump);
+    };
+  }, [editor]);
+
+  /**
+   * ResizeObserver 콜백: DOM 직접 조작으로 1줄/2줄 전환.
+   * React state를 건드리지 않으므로 re-render → observer 루프가 발생하지 않는다.
+   * 레이아웃 확정 후 barHeight만 state로 전달한다.
+   */
+  const BREAKPOINT = 680;
+
+  const applyLayout = useCallback((t: HTMLElement, twoRows: boolean) => {
+    if (twoRows) {
+      t.style.gridColumn = "1 / -1";
+      t.style.gridRow = "2";
+      t.style.justifySelf = "stretch";
+      t.style.justifyContent = "space-between";
+    } else {
+      t.style.gridColumn = "2";
+      t.style.gridRow = "1";
+      t.style.justifySelf = "center";
+      t.style.justifyContent = "";
+    }
+  }, []);
+
+  const measure = useCallback(() => {
+    const g = gridRef.current;
+    const t = toolsRef.current;
+    if (!g) return;
+
+    if (t) {
+      const needs = g.clientWidth < BREAKPOINT;
+      isTwoRows.current = needs;
+      applyLayout(t, needs);
+    }
+
+    setBarHeight(g.offsetHeight);
+  }, [applyLayout]);
+
+  useEffect(() => {
+    const el = gridRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [measure]);
+
+  // showTools 변경 시 DOM 렌더 완료 후 measure (이중 rAF로 레이아웃 확정 보장)
+  useEffect(() => {
+    requestAnimationFrame(() => requestAnimationFrame(measure));
+  }, [showTools, measure]);
+
   const isHeading = editor?.isActive("heading") ?? false;
-  const headingLabel = !editor
-    ? "본문"
-    : editor.isActive("heading", { level: 1 })
-      ? "H1"
-      : editor.isActive("heading", { level: 2 })
-        ? "H2"
-        : editor.isActive("heading", { level: 3 })
-          ? "H3"
-          : "본문";
+  const headingLabel = getHeadingLabel(editor, locale);
 
   const tb = (
     tooltip: string,
@@ -162,105 +238,114 @@ export function EditorToolbar({
 
   return (
     <div
-      className={mergeClasses(styles.bar, !visible && styles.barHidden)}
-      style={visible && !sidebarOpen ? { paddingLeft: "46px" } : undefined}
+      className={styles.bar}
+      style={{
+        height: visible ? barHeight : 0,
+        opacity: visible ? 1 : 0,
+        borderBottomColor: visible ? undefined : "transparent",
+      }}
     >
-      <PillSelector
-        items={MODE_ITEMS}
-        activeKey={editorMode}
-        onSelect={() => onSwitchMode()}
-      />
+      <div
+        ref={gridRef}
+        className={styles.grid}
+        style={visible && !sidebarOpen ? { paddingLeft: "46px" } : undefined}
+      >
+        <div>
+          <PillSelector
+            items={modeItems}
+            activeKey={editorMode}
+            onSelect={() => onSwitchMode()}
+          />
+        </div>
 
-      {/* 서식 도구: Rich Text일 때 슬라이드 인, Markdown일 때 슬라이드 아웃 */}
-      <div className={styles.tools} style={!showTools ? { display: "none" } : undefined}>
-        <Divider vertical className={styles.divider} />
+        {showTools && (
+          <>
+            <div ref={toolsRef} className={styles.tools}>
+              <Menu>
+                <MenuTrigger>
+                  <Button
+                    appearance="subtle"
+                    className={isHeading ? styles.headingBtnActive : styles.headingBtn}
+                    icon={<ChevronDownRegular />}
+                    iconPosition="after"
+                  >
+                    {headingLabel}
+                  </Button>
+                </MenuTrigger>
+                <MenuPopover>
+                  <MenuList>
+                    <MenuItem onClick={() => editor?.chain().focus().setParagraph().run()}>
+                      <span style={{ fontSize: "0.95em", fontWeight: 400 }}>{i("heading.body")}</span>
+                    </MenuItem>
+                    <MenuItem onClick={() => editor?.chain().focus().toggleHeading({ level: 1 }).run()}>
+                      <span style={{ fontSize: "1.4em", fontWeight: 600 }}>{i("heading.h1")}</span>
+                    </MenuItem>
+                    <MenuItem onClick={() => editor?.chain().focus().toggleHeading({ level: 2 }).run()}>
+                      <span style={{ fontSize: "1.2em", fontWeight: 500 }}>{i("heading.h2")}</span>
+                    </MenuItem>
+                    <MenuItem onClick={() => editor?.chain().focus().toggleHeading({ level: 3 }).run()}>
+                      <span style={{ fontSize: "1.05em", fontWeight: 500 }}>{i("heading.h3")}</span>
+                    </MenuItem>
+                  </MenuList>
+                </MenuPopover>
+              </Menu>
 
-        {/* 헤딩 드롭다운 */}
-        <Menu>
-          <MenuTrigger>
-            <Button
-              appearance="subtle"
-              className={isHeading ? styles.headingBtnActive : styles.headingBtn}
-              icon={<ChevronDownRegular />}
-              iconPosition="after"
-            >
-              {headingLabel}
-            </Button>
-          </MenuTrigger>
-          <MenuPopover>
-            <MenuList>
-              <MenuItem onClick={() => editor?.chain().focus().setParagraph().run()}>
-                본문
-              </MenuItem>
-              <MenuItem onClick={() => editor?.chain().focus().toggleHeading({ level: 1 }).run()}>
-                <span style={{ fontSize: "1.4em", fontWeight: 600 }}>제목 1</span>
-              </MenuItem>
-              <MenuItem onClick={() => editor?.chain().focus().toggleHeading({ level: 2 }).run()}>
-                <span style={{ fontSize: "1.2em", fontWeight: 500 }}>제목 2</span>
-              </MenuItem>
-              <MenuItem onClick={() => editor?.chain().focus().toggleHeading({ level: 3 }).run()}>
-                <span style={{ fontSize: "1.05em", fontWeight: 500 }}>제목 3</span>
-              </MenuItem>
-            </MenuList>
-          </MenuPopover>
-        </Menu>
+              <Divider vertical className={styles.divider} />
 
-        <Divider vertical className={styles.divider} />
+              {tb(i("tool.bold"), <TextBoldRegular />,
+                () => editor?.chain().focus().toggleBold().run(),
+                editor?.isActive("bold") ?? false)}
+              {tb(i("tool.italic"), <TextItalicRegular />,
+                () => editor?.chain().focus().toggleItalic().run(),
+                editor?.isActive("italic") ?? false)}
+              {tb(i("tool.underline"), <TextUnderlineRegular />,
+                () => editor?.chain().focus().toggleUnderline().run(),
+                editor?.isActive("underline") ?? false)}
+              {tb(i("tool.strike"), <TextStrikethroughRegular />,
+                () => editor?.chain().focus().toggleStrike().run(),
+                editor?.isActive("strike") ?? false)}
+              {tb(i("tool.code"), <CodeRegular />,
+                () => editor?.chain().focus().toggleCode().run(),
+                editor?.isActive("code") ?? false)}
 
-        {tb("굵게 (Ctrl+B)", <TextBoldRegular />,
-          () => editor?.chain().focus().toggleBold().run(),
-          editor?.isActive("bold") ?? false)}
-        {tb("기울임 (Ctrl+I)", <TextItalicRegular />,
-          () => editor?.chain().focus().toggleItalic().run(),
-          editor?.isActive("italic") ?? false)}
-        {tb("밑줄 (Ctrl+U)", <TextUnderlineRegular />,
-          () => editor?.chain().focus().toggleUnderline().run(),
-          editor?.isActive("underline") ?? false)}
-        {tb("취소선", <TextStrikethroughRegular />,
-          () => editor?.chain().focus().toggleStrike().run(),
-          editor?.isActive("strike") ?? false)}
-        {tb("인라인 코드", <CodeRegular />,
-          () => editor?.chain().focus().toggleCode().run(),
-          editor?.isActive("code") ?? false)}
+              <Divider vertical className={styles.divider} />
 
-        <Divider vertical className={styles.divider} />
+              {tb(i("tool.bulletList"), <TextBulletListRegular />,
+                () => editor?.chain().focus().toggleBulletList().run(),
+                editor?.isActive("bulletList") ?? false)}
+              {tb(i("tool.orderedList"), <TextNumberListLtrRegular />,
+                () => editor?.chain().focus().toggleOrderedList().run(),
+                editor?.isActive("orderedList") ?? false)}
+              {tb(i("tool.taskList"), <TaskListLtrRegular />,
+                () => editor?.chain().focus().toggleTaskList().run(),
+                editor?.isActive("taskList") ?? false)}
+              {tb(i("tool.blockquote"), <TextQuoteOpeningRegular />,
+                () => editor?.chain().focus().toggleBlockquote().run(),
+                editor?.isActive("blockquote") ?? false)}
+              {tb(i("tool.hr"), <LineHorizontal1Regular />,
+                () => editor?.chain().focus().setHorizontalRule().run(),
+                false)}
+              {tb(i("tool.codeBlock"), <CodeBlockRegular />,
+                () => editor?.chain().focus().toggleCodeBlock().run(),
+                editor?.isActive("codeBlock") ?? false)}
 
-        {tb("글머리 기호 목록", <TextBulletListRegular />,
-          () => editor?.chain().focus().toggleBulletList().run(),
-          editor?.isActive("bulletList") ?? false)}
-        {tb("번호 목록", <TextNumberListLtrRegular />,
-          () => editor?.chain().focus().toggleOrderedList().run(),
-          editor?.isActive("orderedList") ?? false)}
-        {tb("할 일 목록", <TaskListLtrRegular />,
-          () => editor?.chain().focus().toggleTaskList().run(),
-          editor?.isActive("taskList") ?? false)}
-        {tb("인용문", <TextQuoteOpeningRegular />,
-          () => editor?.chain().focus().toggleBlockquote().run(),
-          editor?.isActive("blockquote") ?? false)}
-        {tb("구분선", <LineHorizontal1Regular />,
-          () => editor?.chain().focus().setHorizontalRule().run(),
-          false)}
-        {tb("코드 블록", <CodeBlockRegular />,
-          () => editor?.chain().focus().toggleCodeBlock().run(),
-          editor?.isActive("codeBlock") ?? false)}
+              <Divider vertical className={styles.divider} />
 
-        <Divider vertical className={styles.divider} />
+              {tb(i("tool.image"), <ImageAddRegular />,
+                () => { if (editor) pickAndInsertImage(editor); },
+                false)}
+            </div>
 
-        {tb("이미지 삽입", <ImageAddRegular />,
-          () => {
-            const url = window.prompt("이미지 URL");
-            if (url) editor?.chain().focus().setImage({ src: url }).run();
-          },
-          false)}
-
-        <div className={styles.spacer} />
-
-        {tb("실행취소 (Ctrl+Z)", <ArrowUndoRegular />,
-          () => editor?.chain().focus().undo().run(),
-          false)}
-        {tb("다시실행 (Ctrl+Y)", <ArrowRedoRegular />,
-          () => editor?.chain().focus().redo().run(),
-          false)}
+            <div className={styles.undo}>
+              {tb(i("tool.undo"), <ArrowUndoRegular />,
+                () => editor?.chain().focus().undo().run(),
+                false)}
+              {tb(i("tool.redo"), <ArrowRedoRegular />,
+                () => editor?.chain().focus().redo().run(),
+                false)}
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

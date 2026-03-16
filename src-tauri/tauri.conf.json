@@ -15,6 +15,8 @@
         "title": "markdown-studio",
         "width": 800,
         "height": 600,
+        "minWidth": 800,
+        "minHeight": 400,
         "decorations": false,
         "transparent": true,
         "windowEffects": {

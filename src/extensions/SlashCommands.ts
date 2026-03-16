@@ -1,0 +1,176 @@
+import { Extension } from "@tiptap/core";
+import { ReactRenderer } from "@tiptap/react";
+import Suggestion from "@tiptap/suggestion";
+import type { SuggestionOptions, SuggestionProps } from "@tiptap/suggestion";
+import {
+  SlashCommandList,
+  type SlashCommandItem,
+  type SlashCommandListRef,
+} from "../components/SlashCommand";
+import { pickAndInsertImage } from "./ImageDrop";
+import { t, type I18nKey } from "../i18n";
+import type { Locale } from "../hooks/useSettings";
+
+const SlashCommands = Extension.create({
+  name: "slashCommands",
+
+  addStorage() {
+    return { locale: "ko" as Locale };
+  },
+
+  addOptions() {
+    return {
+      suggestion: {
+        char: "/",
+        startOfLine: false,
+        command: ({
+          editor,
+          range,
+          props,
+        }: {
+          editor: any;
+          range: any;
+          props: SlashCommandItem;
+        }) => {
+          props.command({ editor, range });
+        },
+      } satisfies Partial<SuggestionOptions>,
+    };
+  },
+
+  addProseMirrorPlugins() {
+    return [
+      Suggestion({
+        editor: this.editor,
+        ...this.options.suggestion,
+        items: ({ query }: { query: string }) => {
+          const locale = this.storage.locale as Locale;
+          return getSlashItems(locale).filter((item) => {
+            const q = query.toLowerCase();
+            return (
+              item.title.toLowerCase().includes(q) ||
+              item.searchTerms.some((st) => st.includes(q))
+            );
+          });
+        },
+        render: () => {
+          let component: ReactRenderer<SlashCommandListRef> | null = null;
+          let popup: HTMLDivElement | null = null;
+
+          return {
+            onStart: (props: SuggestionProps) => {
+              component = new ReactRenderer(SlashCommandList, {
+                props,
+                editor: props.editor,
+              });
+
+              popup = document.createElement("div");
+              popup.style.position = "fixed";
+              popup.style.zIndex = "50";
+              popup.appendChild(component.element);
+              document.body.appendChild(popup);
+
+              updatePosition(popup, props);
+            },
+
+            onUpdate: (props: SuggestionProps) => {
+              component?.updateProps(props);
+              if (popup) updatePosition(popup, props);
+            },
+
+            onKeyDown: (props: { event: KeyboardEvent }) => {
+              if (props.event.key === "Escape") {
+                popup?.remove();
+                component?.destroy();
+                popup = null;
+                component = null;
+                return true;
+              }
+              return component?.ref?.onKeyDown(props.event) ?? false;
+            },
+
+            onExit: () => {
+              popup?.remove();
+              component?.destroy();
+              popup = null;
+              component = null;
+            },
+          };
+        },
+      }),
+    ];
+  },
+});
+
+const MENU_MAX_HEIGHT = 320;
+const GAP = 4;
+
+function updatePosition(popup: HTMLDivElement, props: SuggestionProps) {
+  const { clientRect } = props;
+  if (!clientRect) return;
+  const rect = typeof clientRect === "function" ? clientRect() : clientRect;
+  if (!rect) return;
+
+  const spaceBelow = window.innerHeight - rect.bottom - GAP;
+  const spaceAbove = rect.top - GAP;
+  const menuHeight = Math.min(
+    popup.firstElementChild?.scrollHeight ?? MENU_MAX_HEIGHT,
+    MENU_MAX_HEIGHT,
+  );
+
+  // 아래 공간이 부족하고 위가 더 넓으면 위로 플립
+  if (spaceBelow < menuHeight && spaceAbove > spaceBelow) {
+    popup.style.top = "";
+    popup.style.bottom = `${window.innerHeight - rect.top + GAP}px`;
+  } else {
+    popup.style.bottom = "";
+    popup.style.top = `${rect.bottom + GAP}px`;
+  }
+
+  popup.style.left = `${rect.left}px`;
+}
+
+interface SlashItemDef {
+  titleKey: I18nKey;
+  descKey: I18nKey;
+  searchTerms: string[];
+  icon: string;
+  command: SlashCommandItem["command"];
+}
+
+const SLASH_DEFS: SlashItemDef[] = [
+  { titleKey: "slash.text", descKey: "slash.text.desc", searchTerms: ["paragraph", "text", "본문", "텍스트"], icon: "TextT",
+    command: ({ editor, range }) => { editor.chain().focus().deleteRange(range).setParagraph().run(); } },
+  { titleKey: "slash.h1", descKey: "slash.h1.desc", searchTerms: ["heading", "h1", "제목"], icon: "TextHeader1",
+    command: ({ editor, range }) => { editor.chain().focus().deleteRange(range).setHeading({ level: 1 }).run(); } },
+  { titleKey: "slash.h2", descKey: "slash.h2.desc", searchTerms: ["heading", "h2", "제목"], icon: "TextHeader2",
+    command: ({ editor, range }) => { editor.chain().focus().deleteRange(range).setHeading({ level: 2 }).run(); } },
+  { titleKey: "slash.h3", descKey: "slash.h3.desc", searchTerms: ["heading", "h3", "제목"], icon: "TextHeader3",
+    command: ({ editor, range }) => { editor.chain().focus().deleteRange(range).setHeading({ level: 3 }).run(); } },
+  { titleKey: "slash.bulletList", descKey: "slash.bulletList.desc", searchTerms: ["bullet", "list", "unordered", "리스트"], icon: "TextBulletList",
+    command: ({ editor, range }) => { editor.chain().focus().deleteRange(range).toggleBulletList().run(); } },
+  { titleKey: "slash.orderedList", descKey: "slash.orderedList.desc", searchTerms: ["ordered", "number", "list", "리스트", "번호"], icon: "TextNumberListLtr",
+    command: ({ editor, range }) => { editor.chain().focus().deleteRange(range).toggleOrderedList().run(); } },
+  { titleKey: "slash.taskList", descKey: "slash.taskList.desc", searchTerms: ["task", "todo", "checkbox", "체크", "할일"], icon: "TaskListLtr",
+    command: ({ editor, range }) => { editor.chain().focus().deleteRange(range).toggleTaskList().run(); } },
+  { titleKey: "slash.blockquote", descKey: "slash.blockquote.desc", searchTerms: ["quote", "blockquote", "인용"], icon: "TextQuoteOpening",
+    command: ({ editor, range }) => { editor.chain().focus().deleteRange(range).toggleBlockquote().run(); } },
+  { titleKey: "slash.codeBlock", descKey: "slash.codeBlock.desc", searchTerms: ["code", "codeblock", "코드"], icon: "CodeBlock",
+    command: ({ editor, range }) => { editor.chain().focus().deleteRange(range).toggleCodeBlock().run(); } },
+  { titleKey: "slash.hr", descKey: "slash.hr.desc", searchTerms: ["hr", "divider", "horizontal", "구분"], icon: "LineHorizontal1",
+    command: ({ editor, range }) => { editor.chain().focus().deleteRange(range).setHorizontalRule().run(); } },
+  { titleKey: "slash.image", descKey: "slash.image.desc", searchTerms: ["image", "img", "사진", "이미지"], icon: "ImageAdd",
+    command: ({ editor, range }) => { editor.chain().focus().deleteRange(range).run(); pickAndInsertImage(editor); } },
+];
+
+export function getSlashItems(locale: Locale): SlashCommandItem[] {
+  return SLASH_DEFS.map((d) => ({
+    title: t(d.titleKey, locale),
+    description: t(d.descKey, locale),
+    searchTerms: d.searchTerms,
+    icon: d.icon,
+    command: d.command,
+  }));
+}
+
+export default SlashCommands;

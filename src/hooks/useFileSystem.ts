@@ -1,22 +1,11 @@
 import { useCallback } from "react";
-import { open, save, confirm } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";
+import { getNotesDir, saveManifest, deriveTitle, type NoteDoc } from "./useNotesLoader";
 import type { MarkdownState } from "./useMarkdownState";
 import type { TiptapEditorHandle } from "../components/TiptapEditor";
 
-export interface OpenDocument {
-  filePath: string;
-  fileName: string;
-  isDirty: boolean;
-}
-
-export interface FileSystemActions {
-  openFile: () => Promise<void>;
-  saveFile: () => Promise<void>;
-  saveFileAs: () => Promise<void>;
-  newFile: () => Promise<void>;
-  switchDocument: (index: number) => void;
-}
+export type { NoteDoc } from "./useNotesLoader";
 
 const MD_FILTERS = [{ name: "Markdown", extensions: ["md", "markdown", "mdx", "txt"] }];
 
@@ -24,7 +13,6 @@ function getFileName(path: string): string {
   return path.split(/[\\/]/).pop() || "untitled.md";
 }
 
-/** 현재 에디터에서 최신 마크다운 추출 */
 function getCurrentMarkdown(
   state: MarkdownState,
   tiptapRef: React.RefObject<TiptapEditorHandle | null>,
@@ -36,7 +24,6 @@ function getCurrentMarkdown(
   return editor ? editor.getMarkdown() : state.markdown;
 }
 
-/** Tiptap에 마크다운 로드 (ReadonlyGuard bypass는 handle 내부에서 처리) */
 function loadIntoEditor(
   tiptapRef: React.RefObject<TiptapEditorHandle | null>,
   content: string,
@@ -44,7 +31,6 @@ function loadIntoEditor(
   tiptapRef.current?.setContent(content);
 }
 
-/** 문서 state 일괄 리셋 */
 function resetDocState(
   state: MarkdownState,
   filePath: string | null,
@@ -56,143 +42,185 @@ function resetDocState(
   state.setTiptapDirty(false);
 }
 
-/** isDirty 시 저장 확인. true=계속 진행, false=취소 */
-async function confirmDirty(
-  state: MarkdownState,
-  doSave: () => Promise<void>,
-): Promise<boolean> {
-  if (!state.isDirty) return true;
-  const result = await confirm(
-    "저장되지 않은 변경사항이 있습니다. 저장하시겠습니까?",
-    { title: "Markdown Studio", kind: "warning", okLabel: "저장", cancelLabel: "저장하지 않음" },
-  );
-  if (result) await doSave();
-  return true;
-}
-
-/** 파일에 저장하고 문서 목록 업데이트 */
-async function writeAndUpdate(
-  path: string,
-  content: string,
-  state: MarkdownState,
-  activeDocIndex: number,
-  setOpenDocuments: React.Dispatch<React.SetStateAction<OpenDocument[]>>,
-) {
-  await writeTextFile(path, content);
-  state.setFilePath(path);
-  state.setIsDirty(false);
-  state.setTiptapDirty(false);
-  const fileName = getFileName(path);
-  setOpenDocuments((docs) => {
-    const updated = [...docs];
-    if (updated[activeDocIndex]) {
-      updated[activeDocIndex] = { filePath: path, fileName, isDirty: false };
-    }
-    return updated;
-  });
+export interface FileSystemActions {
+  openFile: () => Promise<void>;
+  saveFile: () => Promise<void>;
+  saveFileAs: () => Promise<void>;
+  newNote: () => Promise<void>;
+  switchDocument: (index: number) => void;
 }
 
 export function useFileSystem(
   state: MarkdownState,
   tiptapRef: React.RefObject<TiptapEditorHandle | null>,
-  openDocuments: OpenDocument[],
-  setOpenDocuments: React.Dispatch<React.SetStateAction<OpenDocument[]>>,
-  activeDocIndex: number,
-  setActiveDocIndex: React.Dispatch<React.SetStateAction<number>>,
+  docs: NoteDoc[],
+  setDocs: React.Dispatch<React.SetStateAction<NoteDoc[]>>,
+  activeIndex: number,
+  setActiveIndex: React.Dispatch<React.SetStateAction<number>>,
 ): FileSystemActions {
 
-  const saveFile = useCallback(async () => {
+  /** 현재 문서의 content를 캐시에 저장 */
+  const cacheCurrentContent = useCallback(() => {
     const md = getCurrentMarkdown(state, tiptapRef);
-    let path = state.filePath;
-    if (!path) {
+    setDocs((prev) => {
+      const updated = [...prev];
+      if (updated[activeIndex]) {
+        updated[activeIndex] = { ...updated[activeIndex], content: md };
+      }
+      return updated;
+    });
+    return md;
+  }, [state.isEditing, state.editorMode, state.markdown, activeIndex, setDocs]);
+
+  /** 즉시 저장 (Ctrl+S) */
+  const saveFile = useCallback(async () => {
+    const doc = docs[activeIndex];
+    if (!doc) return;
+
+    const md = getCurrentMarkdown(state, tiptapRef);
+
+    if (doc.isExternal && !doc.filePath) {
       const selected = await save({ filters: MD_FILTERS, defaultPath: "untitled.md" });
       if (!selected) return;
-      path = selected;
+      doc.filePath = selected;
     }
-    await writeAndUpdate(path, md, state, activeDocIndex, setOpenDocuments);
-  }, [state.filePath, state.isEditing, state.editorMode, state.markdown, activeDocIndex, setOpenDocuments]);
 
+    await writeTextFile(doc.filePath, md);
+
+    setDocs((prev) => {
+      const updated = [...prev];
+      if (updated[activeIndex]) {
+        const title = deriveTitle(md) || updated[activeIndex].fileName;
+        updated[activeIndex] = {
+          ...updated[activeIndex],
+          content: md,
+          isDirty: false,
+          updatedAt: Date.now(),
+          fileName: doc.isExternal ? updated[activeIndex].fileName : title || "Untitled",
+        };
+      }
+      return updated;
+    });
+
+    state.setIsDirty(false);
+    state.setTiptapDirty(false);
+  }, [docs, activeIndex, state.isEditing, state.editorMode, state.markdown, setDocs]);
+
+  /** 다른 이름으로 저장 (내보내기) */
   const saveFileAs = useCallback(async () => {
     const md = getCurrentMarkdown(state, tiptapRef);
-    const defaultName = state.filePath ? getFileName(state.filePath) : "untitled.md";
+    const doc = docs[activeIndex];
+    const defaultName = doc?.filePath ? getFileName(doc.filePath) : "untitled.md";
     const selected = await save({ filters: MD_FILTERS, defaultPath: defaultName });
     if (!selected) return;
-    await writeAndUpdate(selected, md, state, activeDocIndex, setOpenDocuments);
-  }, [state.filePath, state.isEditing, state.editorMode, state.markdown, activeDocIndex, setOpenDocuments]);
+    await writeTextFile(selected, md);
+  }, [docs, activeIndex, state.isEditing, state.editorMode, state.markdown]);
 
+  /** 외부 파일 열기 */
   const openFile = useCallback(async () => {
-    const canProceed = await confirmDirty(state, saveFile);
-    if (!canProceed) return;
+    // 현재 문서 내용 캐시
+    cacheCurrentContent();
 
     const selected = await open({ filters: MD_FILTERS, multiple: false });
     if (!selected) return;
 
     const path = selected as string;
+
+    // 이미 열려 있는지 확인
+    const existingIdx = docs.findIndex((d) => d.filePath === path);
+    if (existingIdx >= 0) {
+      setActiveIndex(existingIdx);
+      loadIntoEditor(tiptapRef, docs[existingIdx].content);
+      resetDocState(state, path, docs[existingIdx].content);
+      return;
+    }
+
     const content = await readTextFile(path);
     const fileName = getFileName(path);
 
+    // 노트 디렉토리 내부인지 확인
+    let isExternal = true;
+    try {
+      const notesDir = await getNotesDir();
+      if (path.startsWith(notesDir)) isExternal = false;
+    } catch {}
+
+    const newDoc: NoteDoc = {
+      id: crypto.randomUUID(),
+      filePath: path,
+      fileName,
+      isExternal,
+      isDirty: false,
+      content,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+
+    setDocs((prev) => {
+      const next = [...prev, newDoc];
+      setActiveIndex(next.length - 1);
+      saveManifest(next, newDoc.id).catch(() => {});
+      return next;
+    });
+
     loadIntoEditor(tiptapRef, content);
     resetDocState(state, path, content);
+  }, [docs, activeIndex, cacheCurrentContent, setDocs, setActiveIndex]);
 
-    // 이미 열린 문서면 활성화, 아니면 추가
-    setOpenDocuments((docs) => {
-      const existingIdx = docs.findIndex((d) => d.filePath === path);
-      if (existingIdx >= 0) {
-        const updated = [...docs];
-        updated[existingIdx] = { filePath: path, fileName, isDirty: false };
-        setActiveDocIndex(existingIdx);
-        return updated;
-      }
-      setActiveDocIndex(docs.length);
-      return [...docs, { filePath: path, fileName, isDirty: false }];
+  /** 새 내부 메모 생성 */
+  const newNote = useCallback(async () => {
+    cacheCurrentContent();
+
+    const id = crypto.randomUUID();
+    let filePath = "";
+    try {
+      const dir = await getNotesDir();
+      filePath = `${dir}/${id}.md`;
+      await writeTextFile(filePath, "");
+    } catch {
+      // 브라우저 환경 fallback
+    }
+
+    const newDoc: NoteDoc = {
+      id,
+      filePath,
+      fileName: "Untitled",
+      isExternal: false,
+      isDirty: false,
+      content: "",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+
+    setDocs((prev) => {
+      const next = [...prev, newDoc];
+      setActiveIndex(next.length - 1);
+      saveManifest(next, newDoc.id).catch(() => {});
+      return next;
     });
-  }, [state.isDirty, state.filePath, saveFile, setOpenDocuments, setActiveDocIndex]);
-
-  const newFile = useCallback(async () => {
-    const canProceed = await confirmDirty(state, saveFile);
-    if (!canProceed) return;
 
     loadIntoEditor(tiptapRef, "");
-    resetDocState(state, null, "");
+    resetDocState(state, filePath, "");
+  }, [cacheCurrentContent, setDocs, setActiveIndex]);
 
-    setOpenDocuments((docs) => {
-      setActiveDocIndex(docs.length);
-      return [...docs, { filePath: "", fileName: "Untitled", isDirty: false }];
-    });
-  }, [state.isDirty, saveFile, setOpenDocuments, setActiveDocIndex]);
-
+  /** 문서 전환 */
   const switchDocument = useCallback(
     (index: number) => {
-      if (index === activeDocIndex) return;
+      if (index === activeIndex) return;
+      if (index < 0 || index >= docs.length) return;
 
-      setOpenDocuments((docs) => {
-        if (index < 0 || index >= docs.length) return docs;
-        // 현재 문서 dirty 상태 저장
-        const updated = [...docs];
-        if (updated[activeDocIndex]) {
-          updated[activeDocIndex] = { ...updated[activeDocIndex], isDirty: state.isDirty };
-        }
-        return updated;
-      });
+      // 현재 문서 내용 캐시
+      cacheCurrentContent();
 
-      // 대상 문서 로드
-      const target = openDocuments[index];
-      if (!target) return;
+      const target = docs[index];
+      loadIntoEditor(tiptapRef, target.content);
+      resetDocState(state, target.filePath, target.content);
+      setActiveIndex(index);
 
-      if (target.filePath) {
-        readTextFile(target.filePath).then((content) => {
-          loadIntoEditor(tiptapRef, content);
-          resetDocState(state, target.filePath, content);
-        });
-      } else {
-        loadIntoEditor(tiptapRef, "");
-        resetDocState(state, null, "");
-      }
-
-      setActiveDocIndex(index);
+      saveManifest(docs, target.id).catch(() => {});
     },
-    [state.isDirty, activeDocIndex, openDocuments, setOpenDocuments, setActiveDocIndex],
+    [docs, activeIndex, cacheCurrentContent, setActiveIndex],
   );
 
-  return { openFile, saveFile, saveFileAs, newFile, switchDocument };
+  return { openFile, saveFile, saveFileAs, newNote, switchDocument };
 }

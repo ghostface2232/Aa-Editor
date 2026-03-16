@@ -22,11 +22,16 @@ import { TableRow } from "@tiptap/extension-table-row";
 import { TableCell } from "@tiptap/extension-table-cell";
 import { TableHeader } from "@tiptap/extension-table-header";
 import { common, createLowlight } from "lowlight";
+import SlashCommands from "../extensions/SlashCommands";
+import ImageDrop from "../extensions/ImageDrop";
+import { t } from "../i18n";
+import type { Locale } from "../hooks/useSettings";
 import "../styles/tiptap-editor.css";
 
 declare module "@tiptap/core" {
   interface Storage {
     readonlyGuard: { readonly: boolean };
+    slashCommands: { locale: string };
   }
 }
 
@@ -209,12 +214,14 @@ interface TiptapEditorProps {
   initialMarkdown: string;
   editable: boolean;
   isDarkMode: boolean;
+  locale: Locale;
+  spellcheck: boolean;
   onDirtyChange: (dirty: boolean) => void;
   onReady?: () => void;
 }
 
 export const TiptapEditor = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
-  function TiptapEditor({ initialMarkdown, editable, isDarkMode, onDirtyChange, onReady }, ref) {
+  function TiptapEditor({ initialMarkdown, editable, isDarkMode, locale, spellcheck, onDirtyChange, onReady }, ref) {
     const dirtyRef = useRef(false);
 
     const handleUpdate = useCallback(() => {
@@ -241,7 +248,7 @@ export const TiptapEditor = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
           },
         }).configure({ lowlight }),
         Image,
-        Placeholder.configure({ placeholder: "여기에 글을 작성하세요..." }),
+        Placeholder.configure({ placeholder: t("placeholder", locale) }),
         Typography,
         TextAlign.configure({ types: ["heading", "paragraph"] }),
         Underline,
@@ -252,6 +259,8 @@ export const TiptapEditor = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
         TableNodeSelect,
         MarkdownPaste,
         ReadonlyGuard,
+        SlashCommands,
+        ImageDrop,
       ],
       content: initialMarkdown,
       contentType: "markdown",
@@ -272,6 +281,21 @@ export const TiptapEditor = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
         if (!editable) dirtyRef.current = false;
       }
     }, [editor, editable]);
+
+    // locale → SlashCommands storage 동기화
+    useEffect(() => {
+      if (editor && editor.storage.slashCommands) {
+        editor.storage.slashCommands.locale = locale;
+      }
+    }, [editor, locale]);
+
+    // spellcheck 속성 동기화
+    useEffect(() => {
+      const el = editor?.view.dom;
+      if (el) {
+        el.setAttribute("spellcheck", String(spellcheck));
+      }
+    }, [editor, spellcheck]);
 
     useImperativeHandle(
       ref,

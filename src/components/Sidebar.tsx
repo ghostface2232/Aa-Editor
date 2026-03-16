@@ -1,6 +1,13 @@
-import { Button, makeStyles, tokens } from "@fluentui/react-components";
-import { SettingsRegular, DocumentRegular } from "@fluentui/react-icons";
-import type { OpenDocument } from "../hooks/useFileSystem";
+import { Button, Tooltip, makeStyles, tokens } from "@fluentui/react-components";
+import {
+  SettingsRegular,
+  DocumentRegular,
+  DocumentAddRegular,
+  ArrowImportRegular,
+} from "@fluentui/react-icons";
+import { t } from "../i18n";
+import type { NoteDoc } from "../hooks/useNotesLoader";
+import type { Locale } from "../hooks/useSettings";
 
 const SIDE_PADDING = "8px";
 
@@ -12,20 +19,37 @@ const useStyles = makeStyles({
     height: "100%",
     backgroundColor: "transparent",
     flexShrink: 0,
-    paddingTop: "50px",
+  },
+  header: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "flex-end",
+    paddingTop: "12px",
+    paddingBottom: "8px",
+    paddingLeft: SIDE_PADDING,
+    paddingRight: "11px",
+    flexShrink: 0,
+  },
+  newBtn: {
+    borderRadius: "6px",
+    border: "none",
+    minWidth: "auto",
+    height: "28px",
+    width: "28px",
+    padding: "0",
   },
   body: {
     flex: 1,
     overflow: "auto",
     paddingLeft: SIDE_PADDING,
     paddingRight: SIDE_PADDING,
-    paddingTop: "4px",
   },
   docItem: {
     display: "flex",
     alignItems: "center",
     width: "100%",
     justifyContent: "flex-start",
+    textAlign: "left",
     border: "none",
     borderRadius: "6px",
     fontSize: "13px",
@@ -39,6 +63,7 @@ const useStyles = makeStyles({
     alignItems: "center",
     width: "100%",
     justifyContent: "flex-start",
+    textAlign: "left",
     border: "none",
     borderRadius: "6px",
     fontSize: "13px",
@@ -53,6 +78,15 @@ const useStyles = makeStyles({
     overflow: "hidden",
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
+    flex: 1,
+    textAlign: "left",
+  },
+  badge: {
+    display: "flex",
+    alignItems: "center",
+    flexShrink: 0,
+    color: tokens.colorNeutralForeground3,
+    fontSize: "12px",
   },
   dirty: {
     fontSize: "10px",
@@ -79,55 +113,81 @@ const useStyles = makeStyles({
     borderRadius: "6px",
     fontSize: "13px",
     gap: "8px",
+    minHeight: "36px",
     paddingLeft: "8px",
     paddingRight: "8px",
   },
 });
 
 interface SidebarProps {
-  openDocuments: OpenDocument[];
-  activeDocIndex: number;
+  docs: NoteDoc[];
+  activeIndex: number;
   onSwitchDocument: (index: number) => void;
+  onNewNote: () => void;
+  locale: Locale;
+  onOpenSettings: () => void;
 }
 
 export function Sidebar({
-  openDocuments,
-  activeDocIndex,
+  docs,
+  activeIndex,
   onSwitchDocument,
+  onNewNote,
+  locale,
+  onOpenSettings,
 }: SidebarProps) {
   const styles = useStyles();
+  const i = (key: Parameters<typeof t>[0]) => t(key, locale);
 
   return (
     <div className={styles.sidebar}>
+      <div className={styles.header}>
+        <Tooltip content={i("sidebar.newNote")} relationship="label">
+          <Button
+            appearance="subtle"
+            icon={<DocumentAddRegular />}
+            className={styles.newBtn}
+            onClick={onNewNote}
+          />
+        </Tooltip>
+      </div>
+
       <div className={styles.body}>
-        {openDocuments.length === 0 ? (
+        {docs.length === 0 ? (
           <span className={styles.empty}>
-            Ctrl+O로 파일을 열거나 Ctrl+N으로 새 문서를 만드세요.
+            {i("sidebar.empty")}
           </span>
         ) : (
-          openDocuments.map((doc, i) => (
+          docs.map((doc, idx) => (
             <Button
-              key={doc.filePath || `untitled-${i}`}
+              key={doc.id}
               appearance="subtle"
               icon={<DocumentRegular />}
-              className={i === activeDocIndex ? styles.docItemActive : styles.docItem}
-              onClick={() => onSwitchDocument(i)}
+              className={idx === activeIndex ? styles.docItemActive : styles.docItem}
+              onClick={() => onSwitchDocument(idx)}
               size="small"
             >
               <span className={styles.docName}>{doc.fileName}</span>
               {doc.isDirty && <span className={styles.dirty}>●</span>}
+              {doc.isExternal && (
+                <Tooltip content={i("sidebar.externalFile")} relationship="label">
+                  <span className={styles.badge}><ArrowImportRegular fontSize={14} /></span>
+                </Tooltip>
+              )}
             </Button>
           ))
         )}
       </div>
+
       <div className={styles.footer}>
         <Button
           appearance="subtle"
           icon={<SettingsRegular />}
           className={styles.settingsBtn}
           size="small"
+          onClick={onOpenSettings}
         >
-          설정
+          {i("sidebar.settings")}
         </Button>
       </div>
     </div>

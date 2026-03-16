@@ -24,6 +24,7 @@ const useStyles = makeStyles({
     paddingLeft: BTN_PADDING_X,
     paddingRight: BTN_PADDING_X,
     height: BTN_HEIGHT,
+    whiteSpace: "nowrap",
   },
   btnActive: {
     borderRadius: INNER_RADIUS,
@@ -35,6 +36,7 @@ const useStyles = makeStyles({
     height: BTN_HEIGHT,
     backgroundColor: "var(--ui-active-bg)",
     fontWeight: 500,
+    whiteSpace: "nowrap",
   },
 });
 

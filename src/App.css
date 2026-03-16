@@ -24,10 +24,10 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* ─── 스크롤바 ─── */
+/* ─── 스크롤바: 얇고 둥글고, 호버 시에만 표시 ─── */
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
 }
 
 ::-webkit-scrollbar-track {
@@ -35,22 +35,41 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.15);
-  border-radius: 4px;
+  background: transparent;
+  border-radius: 3px;
+  transition: background 0.2s ease;
 }
 
-::-webkit-scrollbar-thumb:hover {
+/* 컨테이너 호버 시에만 thumb 표시 */
+*:hover > ::-webkit-scrollbar-thumb,
+*:hover::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.12);
+}
+
+*:hover > ::-webkit-scrollbar-thumb:hover,
+*:hover::-webkit-scrollbar-thumb:hover {
   background: rgba(0, 0, 0, 0.25);
 }
 
-/* 다크 모드 스크롤바 */
-[data-theme="dark"] ::-webkit-scrollbar-thumb,
-.fui-FluentProvider[data-fui-focus-visible] ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.15);
+*:hover > ::-webkit-scrollbar-thumb:active,
+*:hover::-webkit-scrollbar-thumb:active {
+  background: rgba(0, 0, 0, 0.35);
 }
 
-[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
+/* 다크 모드 */
+[data-theme="dark"] *:hover > ::-webkit-scrollbar-thumb,
+[data-theme="dark"] *:hover::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+[data-theme="dark"] *:hover > ::-webkit-scrollbar-thumb:hover,
+[data-theme="dark"] *:hover::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.25);
+}
+
+[data-theme="dark"] *:hover > ::-webkit-scrollbar-thumb:active,
+[data-theme="dark"] *:hover::-webkit-scrollbar-thumb:active {
+  background: rgba(255, 255, 255, 0.35);
 }
 
 /* ─── 다크 모드 전환: 대상 한정 트랜지션 ─── */
@@ -78,3 +97,9 @@ body {
 [data-theme="dark"] {
   --ui-active-bg: rgba(255, 255, 255, 0.12);
 }
+
+/* ─── 다크 모드 Dialog backdrop 강화 ─── */
+.fui-DialogSurface__backdrop {
+  transition: background-color 0.2s ease;
+}
+
