@@ -17,13 +17,14 @@ function fileToDataUrl(file: File): Promise<string> {
   });
 }
 
-/** Uint8Array → base64 data URL */
+/** Uint8Array → base64 data URL (chunk 처리로 O(N) 보장) */
 function bytesToDataUrl(bytes: Uint8Array, mimeType: string): string {
-  let binary = "";
-  for (let i = 0; i < bytes.length; i++) {
-    binary += String.fromCharCode(bytes[i]);
+  const CHUNK = 8192;
+  const parts: string[] = [];
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    parts.push(String.fromCharCode(...bytes.subarray(i, i + CHUNK)));
   }
-  return `data:${mimeType};base64,${btoa(binary)}`;
+  return `data:${mimeType};base64,${btoa(parts.join(""))}`;
 }
 
 function mimeFromExt(ext: string): string {

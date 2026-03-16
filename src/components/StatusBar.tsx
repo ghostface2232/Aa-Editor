@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { makeStyles, tokens } from "@fluentui/react-components";
 import { t } from "../i18n";
 import type { EditorMode } from "../hooks/useMarkdownState";
@@ -32,34 +32,42 @@ function useEditorStats(editor: Editor | null) {
     if (!editor) return;
 
     const update = () => {
-      const text = editor.state.doc.textContent;
-      const pos = editor.state.selection.$head;
-      // 현재 커서가 위치한 top-level 블록의 인덱스 (1-based)
+      const doc = editor.state.doc;
       let row = 1;
       try {
-        const resolved = editor.state.doc.resolve(pos.pos);
-        // depth 1 = top-level block node
-        row = resolved.index(0) + 1;
-      } catch {
-        row = 1;
-      }
-      setStats({
-        charCount: text.length,
-        lineCount: editor.state.doc.childCount,
-        cursorRow: row,
+        row = doc.resolve(editor.state.selection.$head.pos).index(0) + 1;
+      } catch {}
+      setStats((prev) => {
+        const next = {
+          charCount: doc.textContent.length,
+          lineCount: doc.childCount,
+          cursorRow: row,
+        };
+        // 변경 없으면 동일 참조 반환 → 불필요한 리렌더 방지
+        if (prev.charCount === next.charCount && prev.lineCount === next.lineCount && prev.cursorRow === next.cursorRow) {
+          return prev;
+        }
+        return next;
       });
     };
 
     update();
-    editor.on("update", update);
-    editor.on("selectionUpdate", update);
-    return () => {
-      editor.off("update", update);
-      editor.off("selectionUpdate", update);
-    };
+    // transaction은 update + selectionUpdate를 모두 포함
+    editor.on("transaction", update);
+    return () => { editor.off("transaction", update); };
   }, [editor]);
 
   return stats;
+}
+
+/** 뉴라인 문자 수 세기 (split보다 효율적) */
+function countLines(str: string): number {
+  if (!str) return 0;
+  let count = 1;
+  for (let i = 0; i < str.length; i++) {
+    if (str.charCodeAt(i) === 10) count++;
+  }
+  return count;
 }
 
 interface StatusBarProps {
@@ -76,10 +84,9 @@ export function StatusBar({ markdown, isEditing, editorMode, editor, locale }: S
   const i = (key: Parameters<typeof t>[0]) => t(key, locale);
 
   const useMarkdownSource = isEditing && editorMode === "markdown";
+  const mdLineCount = useMemo(() => countLines(markdown), [markdown]);
   const charCount = useMarkdownSource ? markdown.length : editorStats.charCount;
-  const lineCount = useMarkdownSource
-    ? (markdown ? markdown.split("\n").length : 0)
-    : editorStats.lineCount;
+  const lineCount = useMarkdownSource ? mdLineCount : editorStats.lineCount;
 
   return (
     <div className={styles.statusBar}>

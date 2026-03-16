@@ -15,7 +15,7 @@ import { useFileSystem } from "./hooks/useFileSystem";
 import { useNotesLoader } from "./hooks/useNotesLoader";
 import { useAutoSave } from "./hooks/useAutoSave";
 import { useSettings } from "./hooks/useSettings";
-import { t } from "./i18n";
+
 import {
   TiptapEditor,
   type TiptapEditorHandle,
@@ -206,21 +206,7 @@ function App() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [state.toggleEditing, state.switchEditorMode, state.isEditing, fs.openFile, fs.saveFile, fs.saveFileAs, fs.newNote]);
 
-  // 창 닫기 — 내부 메모는 자동 저장이므로 외부 파일만 확인
-  useEffect(() => {
-    const unlisten = getCurrentWindow().onCloseRequested(async (event) => {
-      const activeDoc = docs[activeIndex];
-      if (state.isDirty && activeDoc?.isExternal) {
-        const { confirm } = await import("@tauri-apps/plugin-dialog");
-        const shouldClose = await confirm(
-          t("dialog.unsavedClose", locale),
-          { title: "Markdown Studio", kind: "warning", okLabel: t("dialog.close", locale), cancelLabel: t("dialog.cancel", locale) },
-        );
-        if (!shouldClose) event.preventDefault();
-      }
-    });
-    return () => { unlisten.then((fn) => fn()); };
-  }, [state.isDirty, locale, docs, activeIndex]);
+  // 창 닫기 — 자동 저장이므로 별도 확인 없이 닫기 허용
 
   const handleTiptapDirty = useCallback(
     (dirty: boolean) => state.setTiptapDirty(dirty),

@@ -15,6 +15,8 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { t } from "../i18n";
 import type { Locale } from "../hooks/useSettings";
 
+const appWindow = getCurrentWindow();
+
 const useStyles = makeStyles({
   titleBar: {
     display: "flex",
@@ -145,7 +147,6 @@ export function TitleBar({
   onToggleEditing,
 }: TitleBarProps) {
   const styles = useStyles();
-  const appWindow = getCurrentWindow();
   const i = (key: Parameters<typeof t>[0]) => t(key, locale);
 
   const fileName = filePath ? filePath.split(/[\\/]/).pop() : null;
@@ -208,19 +209,19 @@ export function TitleBar({
           appearance="subtle"
           icon={<Subtract20Regular />}
           className={styles.controlBtn}
-          onClick={() => appWindow.minimize()}
+          onClick={() => { appWindow.minimize().catch(() => {}); }}
         />
         <Button
           appearance="subtle"
           icon={<Square20Regular />}
           className={styles.controlBtn}
-          onClick={() => appWindow.toggleMaximize()}
+          onClick={() => { appWindow.toggleMaximize().catch(() => {}); }}
         />
         <Button
           appearance="subtle"
           icon={<Dismiss20Regular />}
           className={styles.closeBtn}
-          onClick={() => appWindow.close()}
+          onClick={() => { appWindow.close().catch(() => window.close()); }}
         />
       </div>
     </div>

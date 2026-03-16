@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
 import { appDataDir } from "@tauri-apps/api/path";
-import { exists, mkdir, readTextFile, writeTextFile, readDir } from "@tauri-apps/plugin-fs";
+import { mkdir, readTextFile, writeTextFile, readDir } from "@tauri-apps/plugin-fs";
 
 export interface NoteDoc {
   id: string;
@@ -30,20 +30,24 @@ export async function getNotesDir(): Promise<string> {
 
 async function ensureNotesDir(): Promise<string> {
   const dir = await getNotesDir();
-  if (!(await exists(dir))) {
-    await mkdir(dir, { recursive: true });
-  }
+  await mkdir(dir, { recursive: true }).catch(() => {});
   return dir;
 }
 
 async function readManifest(dir: string): Promise<Manifest | null> {
-  const path = `${dir}/manifest.json`;
   try {
-    if (!(await exists(path))) return null;
-    const raw = await readTextFile(path);
+    const raw = await readTextFile(`${dir}/manifest.json`);
     return JSON.parse(raw);
   } catch {
     return null;
+  }
+}
+
+async function readFileContent(path: string): Promise<string> {
+  try {
+    return await readTextFile(path);
+  } catch {
+    return "";
   }
 }
 
@@ -55,12 +59,7 @@ export async function saveManifest(
   const manifest: Manifest = {
     version: 1,
     notes: docs.map(({ id, filePath, fileName, isExternal, createdAt, updatedAt }) => ({
-      id,
-      filePath,
-      fileName,
-      isExternal,
-      createdAt,
-      updatedAt,
+      id, filePath, fileName, isExternal, createdAt, updatedAt,
     })),
     activeNoteId: activeId,
   };
@@ -83,17 +82,13 @@ export function useNotesLoader() {
         const manifest = await readManifest(dir);
 
         if (manifest && manifest.notes.length > 0) {
-          // Manifest에서 노트 목록 복원
-          const loaded: NoteDoc[] = [];
-          for (const entry of manifest.notes) {
-            let content = "";
-            try {
-              if (await exists(entry.filePath)) {
-                content = await readTextFile(entry.filePath);
-              }
-            } catch { /* 파일 없으면 빈 내용 */ }
-            loaded.push({ ...entry, isDirty: false, content });
-          }
+          // 병렬로 모든 노트 파일 로드
+          const loaded = await Promise.all(
+            manifest.notes.map(async (entry) => {
+              const content = await readFileContent(entry.filePath);
+              return { ...entry, isDirty: false, content } as NoteDoc;
+            }),
+          );
 
           setDocs(loaded);
           const idx = manifest.activeNoteId
@@ -101,32 +96,27 @@ export function useNotesLoader() {
             : 0;
           setActiveIndex(idx >= 0 ? idx : 0);
         } else {
-          // 매니페스트 없으면 notes 디렉토리 스캔 시도
+          // 매니페스트 없으면 notes 디렉토리 스캔
           let foundNotes: NoteDoc[] = [];
           try {
             const entries = await readDir(dir);
-            for (const entry of entries) {
-              if (entry.name && entry.name.endsWith(".md")) {
-                const id = entry.name.replace(/\.md$/, "");
+            const mdEntries = entries.filter((e) => e.name?.endsWith(".md"));
+            foundNotes = await Promise.all(
+              mdEntries.map(async (entry) => {
+                const id = entry.name!.replace(/\.md$/, "");
                 const fp = `${dir}/${entry.name}`;
-                let content = "";
-                try { content = await readTextFile(fp); } catch {}
-                foundNotes.push({
-                  id,
-                  filePath: fp,
+                const content = await readFileContent(fp);
+                return {
+                  id, filePath: fp,
                   fileName: deriveTitle(content) || "Untitled",
-                  isExternal: false,
-                  isDirty: false,
-                  content,
-                  createdAt: Date.now(),
-                  updatedAt: Date.now(),
-                });
-              }
-            }
+                  isExternal: false, isDirty: false, content,
+                  createdAt: Date.now(), updatedAt: Date.now(),
+                } as NoteDoc;
+              }),
+            );
           } catch {}
 
           if (foundNotes.length === 0) {
-            // 첫 실행: 빈 메모 하나 생성
             const id = crypto.randomUUID();
             const fp = `${dir}/${id}.md`;
             await writeTextFile(fp, "");
@@ -142,17 +132,11 @@ export function useNotesLoader() {
           await saveManifest(foundNotes, foundNotes[0]?.id ?? null);
         }
       } catch (err) {
-        // Tauri API 사용 불가 (브라우저 환경) — 기본 빈 문서
         console.warn("Notes loader failed (browser mode?):", err);
         setDocs([{
-          id: "local",
-          filePath: "",
-          fileName: "Untitled",
-          isExternal: false,
-          isDirty: false,
-          content: "",
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
+          id: "local", filePath: "", fileName: "Untitled",
+          isExternal: false, isDirty: false, content: "",
+          createdAt: Date.now(), updatedAt: Date.now(),
         }]);
         setActiveIndex(0);
       } finally {
@@ -161,14 +145,7 @@ export function useNotesLoader() {
     })();
   }, []);
 
-  const persistManifest = useCallback(() => {
-    if (docs.length > 0) {
-      const activeId = docs[activeIndex]?.id ?? null;
-      saveManifest(docs, activeId).catch(() => {});
-    }
-  }, [docs, activeIndex]);
-
-  return { docs, setDocs, activeIndex, setActiveIndex, isLoading, persistManifest };
+  return { docs, setDocs, activeIndex, setActiveIndex, isLoading };
 }
 
 /** 컨텐츠 첫 번째 줄에서 제목 추출 */

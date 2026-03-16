@@ -156,17 +156,13 @@ export function EditorToolbar({
 
   const [barHeight, setBarHeight] = useState(0);
 
-  /* 에디터 selection/transaction 변경 시 툴바 리렌더 (서식 상태 동기화) */
+  /* 에디터 transaction 변경 시 툴바 리렌더 (transaction은 selectionUpdate를 포함) */
   const [, setTick] = useState(0);
   useEffect(() => {
     if (!editor) return;
     const bump = () => setTick((n) => n + 1);
-    editor.on("selectionUpdate", bump);
     editor.on("transaction", bump);
-    return () => {
-      editor.off("selectionUpdate", bump);
-      editor.off("transaction", bump);
-    };
+    return () => { editor.off("transaction", bump); };
   }, [editor]);
 
   /**

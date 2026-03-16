@@ -13,7 +13,7 @@ function getFileName(path: string): string {
   return path.split(/[\\/]/).pop() || "untitled.md";
 }
 
-function getCurrentMarkdown(
+export function getCurrentMarkdown(
   state: MarkdownState,
   tiptapRef: React.RefObject<TiptapEditorHandle | null>,
 ): string {
@@ -79,13 +79,14 @@ export function useFileSystem(
 
     const md = getCurrentMarkdown(state, tiptapRef);
 
-    if (doc.isExternal && !doc.filePath) {
+    let targetPath = doc.filePath;
+    if (doc.isExternal && !targetPath) {
       const selected = await save({ filters: MD_FILTERS, defaultPath: "untitled.md" });
       if (!selected) return;
-      doc.filePath = selected;
+      targetPath = selected;
     }
 
-    await writeTextFile(doc.filePath, md);
+    await writeTextFile(targetPath, md);
 
     setDocs((prev) => {
       const updated = [...prev];
@@ -93,6 +94,7 @@ export function useFileSystem(
         const title = deriveTitle(md) || updated[activeIndex].fileName;
         updated[activeIndex] = {
           ...updated[activeIndex],
+          filePath: targetPath,
           content: md,
           isDirty: false,
           updatedAt: Date.now(),

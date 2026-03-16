@@ -391,14 +391,8 @@
    @media print
    ═══════════════════════════════════════════ */
 @media print {
-  /* 앱 셸 UI 숨김 */
-  [data-tauri-drag-region],
-  .titlebar,
-  .sidebar,
-  .sidebar-toggle,
-  .editor-toolbar,
-  .status-bar,
-  .floating-pill {
+  /* 앱 셸 UI 숨김: ProseMirror 외 모든 요소 */
+  [data-tauri-drag-region] {
     display: none !important;
   }
 

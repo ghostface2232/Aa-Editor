@@ -68,24 +68,9 @@ const dict = {
   "status.lines": { en: " lines", ko: " 줄" },
   "status.cursorRow": { en: "Line ", ko: "" },
   "status.cursorRowSuffix": { en: "", ko: "행" },
-  "status.read": { en: "Read", ko: "읽기" },
 
   /* ─── Placeholder ─── */
   "placeholder": { en: "Start writing here...", ko: "여기에 글을 작성하세요..." },
-
-  /* ─── Dialogs ─── */
-  "dialog.unsavedClose": {
-    en: "You have unsaved changes. Are you sure you want to close?",
-    ko: "저장되지 않은 변경사항이 있습니다. 정말 닫으시겠습니까?",
-  },
-  "dialog.close": { en: "Close", ko: "닫기" },
-  "dialog.cancel": { en: "Cancel", ko: "취소" },
-  "dialog.unsavedSave": {
-    en: "You have unsaved changes. Do you want to save?",
-    ko: "저장되지 않은 변경사항이 있습니다. 저장하시겠습니까?",
-  },
-  "dialog.save": { en: "Save", ko: "저장" },
-  "dialog.dontSave": { en: "Don't save", ko: "저장하지 않음" },
 
   /* ─── Settings modal ─── */
   "settings.title": { en: "Settings", ko: "설정" },

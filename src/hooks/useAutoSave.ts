@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { writeTextFile } from "@tauri-apps/plugin-fs";
 import type { NoteDoc } from "./useNotesLoader";
 import { saveManifest } from "./useNotesLoader";
+import { getCurrentMarkdown } from "./useFileSystem";
 import type { TiptapEditorHandle } from "../components/TiptapEditor";
 import type { MarkdownState } from "./useMarkdownState";
 
@@ -15,54 +16,40 @@ export function useAutoSave(
   activeIndex: number,
 ) {
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pendingRef = useRef<{ id: string; filePath: string } | null>(null);
+  // ref로 최신 값을 캡처하여 stale closure 방지
+  const stateRef = useRef({ state, tiptapRef, docs, activeIndex });
+  stateRef.current = { state, tiptapRef, docs, activeIndex };
 
   useEffect(() => {
-    const doc = docs[activeIndex];
-    if (!doc || !doc.filePath || !state.isDirty) return;
+    if (!state.isDirty) return;
 
-    // 저장 대상 캡처 (document switch 중 잘못된 대상에 저장 방지)
-    pendingRef.current = { id: doc.id, filePath: doc.filePath };
+    const doc = docs[activeIndex];
+    if (!doc?.filePath) return;
 
     if (timerRef.current) clearTimeout(timerRef.current);
     timerRef.current = setTimeout(async () => {
-      const target = pendingRef.current;
-      if (!target) return;
+      const { state: s, tiptapRef: ref, docs: latestDocs, activeIndex: idx } = stateRef.current;
+      const target = latestDocs[idx];
+      if (!target?.filePath) return;
 
-      // 현재 마크다운 추출
-      let content: string;
-      if (state.isEditing && state.editorMode === "markdown") {
-        content = state.markdown;
-      } else {
-        const editor = tiptapRef.current?.getEditor();
-        content = editor ? editor.getMarkdown() : state.markdown;
-      }
+      const content = getCurrentMarkdown(s, ref);
 
       try {
         await writeTextFile(target.filePath, content);
 
         setDocs((prev) => {
           const updated = [...prev];
-          const idx = updated.findIndex((d) => d.id === target.id);
-          if (idx >= 0) {
-            updated[idx] = {
-              ...updated[idx],
-              content,
-              isDirty: false,
-              updatedAt: Date.now(),
-            };
+          const i = updated.findIndex((d) => d.id === target.id);
+          if (i >= 0) {
+            updated[i] = { ...updated[i], content, isDirty: false, updatedAt: Date.now() };
           }
+          // 매니페스트도 최신 docs 기반으로 저장
+          saveManifest(updated, target.id).catch(() => {});
           return updated;
         });
 
-        state.setIsDirty(false);
-        state.setTiptapDirty(false);
-
-        // 매니페스트도 저장
-        saveManifest(
-          docs.map((d) => d.id === target.id ? { ...d, updatedAt: Date.now() } : d),
-          target.id,
-        ).catch(() => {});
+        s.setIsDirty(false);
+        s.setTiptapDirty(false);
       } catch (err) {
         console.warn("Auto-save failed:", err);
       }
@@ -71,5 +58,5 @@ export function useAutoSave(
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
     };
-  }, [state.isDirty, state.markdown, state.tiptapDirty]);
+  }, [state.isDirty, state.markdown, state.tiptapDirty, docs, activeIndex, setDocs]);
 }
