@@ -9,14 +9,16 @@ import {
   DocumentCopyRegular,
   DocumentRegular,
   Folder16Regular,
+  FolderOpenRegular,
   MoreHorizontalRegular,
+  RenameRegular,
   SettingsRegular,
 } from "@fluentui/react-icons";
 import { t } from "../i18n";
 import type { NoteDoc } from "../hooks/useNotesLoader";
 import type { Locale, NotesSortOrder } from "../hooks/useSettings";
 
-const SIDE_PADDING = "8px";
+const SIDE_PADDING = "4px";
 
 const useStyles = makeStyles({
   sidebar: {
@@ -26,6 +28,7 @@ const useStyles = makeStyles({
     height: "100%",
     backgroundColor: "transparent",
     flexShrink: 0,
+    userSelect: "none",
   },
   body: {
     flex: 1,
@@ -42,6 +45,27 @@ const useStyles = makeStyles({
     display: "flex",
     alignItems: "center",
     width: "100%",
+  },
+  "@keyframes docSlideIn": {
+    from: { opacity: 0, maxHeight: "0px", transform: "translateY(-4px)" },
+    to: { opacity: 1, maxHeight: "40px", transform: "translateY(0)" },
+  },
+  docItemNew: {
+    animationName: {
+      from: { opacity: 0, maxHeight: "0px", transform: "translateY(-4px)" },
+      to: { opacity: 1, maxHeight: "40px", transform: "translateY(0)" },
+    },
+    animationDuration: "0.2s",
+    animationTimingFunction: "cubic-bezier(0.4, 0, 0.2, 1)",
+    animationFillMode: "backwards",
+  },
+  docItemSlideUp: {
+    animationName: {
+      from: { transform: "translateY(34px)" },
+      to: { transform: "translateY(0)" },
+    },
+    animationDuration: "0.2s",
+    animationTimingFunction: "cubic-bezier(0.4, 0, 0.2, 1)",
   },
   docItem: {
     display: "flex",
@@ -196,7 +220,7 @@ const useStyles = makeStyles({
     flexShrink: 0,
     paddingLeft: SIDE_PADDING,
     paddingRight: SIDE_PADDING,
-    paddingBottom: "12px",
+    paddingBottom: "6px",
   },
   settingsBtn: {
     width: "100%",
@@ -236,6 +260,52 @@ const useStyles = makeStyles({
   contextMenuDanger: {
     color: tokens.colorPaletteRedForeground1,
   },
+  searchBoxWrapper: {
+    overflow: "hidden",
+    maxHeight: "0px",
+    opacity: 0,
+    transitionProperty: "max-height, opacity, margin-bottom",
+    transitionDuration: "0.2s",
+    transitionTimingFunction: "cubic-bezier(0.4, 0, 0.2, 1)",
+    marginBottom: "0px",
+  },
+  searchBoxWrapperOpen: {
+    maxHeight: "40px",
+    opacity: 1,
+    marginBottom: "4px",
+  },
+  searchBox: {
+    display: "flex",
+    alignItems: "center",
+    gap: "4px",
+    paddingLeft: "6px",
+    paddingRight: "2px",
+  },
+  searchInput: {
+    flex: 1,
+    border: "none",
+    outline: "none",
+    fontSize: "13px",
+    fontFamily: "inherit",
+    lineHeight: "28px",
+    padding: "0 8px 0 14px",
+    backgroundColor: "var(--sidebar-search-bg, rgba(0, 0, 0, 0.06))",
+    color: tokens.colorNeutralForeground1,
+    borderRadius: "6px",
+    minWidth: 0,
+    "::placeholder": {
+      color: tokens.colorNeutralForeground4,
+    },
+  },
+  searchCloseBtn: {
+    border: "none",
+    borderRadius: "4px",
+    minWidth: "auto",
+    width: "24px",
+    height: "24px",
+    padding: "0",
+    flexShrink: 0,
+  },
 });
 
 function formatTimestamp(ts: number, locale: Locale): string {
@@ -272,13 +342,18 @@ interface SidebarProps {
   onDuplicateNote: (index: number) => void;
   onExportNote: (index: number) => void;
   onRenameNote: (index: number, newName: string) => void;
+  onOpenFile: () => void;
   notesSortOrder: NotesSortOrder;
   locale: Locale;
   onOpenSettings: () => void;
+  sidebarSearchOpen: boolean;
+  sidebarSearchQuery: string;
+  onSidebarSearchQueryChange: (query: string) => void;
+  onSidebarSearchClose: () => void;
 }
 
 interface ContextMenuState {
-  index: number;
+  index: number; // -1 for empty area
   x: number;
   y: number;
 }
@@ -293,9 +368,14 @@ export function Sidebar({
   onDuplicateNote,
   onExportNote,
   onRenameNote,
+  onOpenFile,
   notesSortOrder,
   locale,
   onOpenSettings,
+  sidebarSearchOpen,
+  sidebarSearchQuery,
+  onSidebarSearchQueryChange,
+  onSidebarSearchClose,
 }: SidebarProps) {
   const styles = useStyles();
   const i = (key: Parameters<typeof t>[0]) => t(key, locale);
@@ -305,6 +385,60 @@ export function Sidebar({
   const [editingValue, setEditingValue] = useState("");
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  // Focus sidebar search input when opened
+  useEffect(() => {
+    if (sidebarSearchOpen) {
+      searchInputRef.current?.focus();
+    }
+  }, [sidebarSearchOpen]);
+
+  // Detect added/removed docs for animation
+  const prevDocListRef = useRef<string[]>(docs.map((d) => d.id));
+  const [newDocIds, setNewDocIds] = useState<Set<string>>(new Set());
+  const [slideUpFromIndex, setSlideUpFromIndex] = useState(-1);
+
+  useEffect(() => {
+    const prevList = prevDocListRef.current;
+    const prevSet = new Set(prevList);
+    const currentIds = docs.map((d) => d.id);
+    const currentSet = new Set(currentIds);
+    const timers: ReturnType<typeof setTimeout>[] = [];
+
+    // Additions
+    const added = new Set<string>();
+    for (const id of currentIds) {
+      if (!prevSet.has(id)) added.add(id);
+    }
+    if (added.size > 0) {
+      setNewDocIds(added);
+      timers.push(setTimeout(() => setNewDocIds(new Set()), 250));
+    }
+
+    // Removal — find position of removed item in previous list
+    if (currentIds.length < prevList.length) {
+      for (let i = 0; i < prevList.length; i++) {
+        if (!currentSet.has(prevList[i])) {
+          setSlideUpFromIndex(i);
+          timers.push(setTimeout(() => setSlideUpFromIndex(-1), 250));
+          break;
+        }
+      }
+    }
+
+    prevDocListRef.current = currentIds;
+    return () => timers.forEach(clearTimeout);
+  }, [docs]);
+
+  // Filter docs by search query (match against fileName, plain text only)
+  const filteredDocs = sidebarSearchQuery
+    ? docs
+        .map((doc, index) => ({ doc, originalIndex: index }))
+        .filter(({ doc }) =>
+          doc.fileName.toLowerCase().includes(sidebarSearchQuery.toLowerCase()),
+        )
+    : docs.map((doc, index) => ({ doc, originalIndex: index }));
 
   // Focus the input when editing starts
   useEffect(() => {
@@ -388,7 +522,46 @@ export function Sidebar({
 
   return (
     <div className={styles.sidebar}>
-      <div className={styles.body}>
+      <div
+        className={styles.body}
+        data-sidebar-body
+        onContextMenu={(e) => {
+          // Only trigger if clicking on the body itself or empty space, not on a doc item
+          if ((e.target as HTMLElement).closest("[data-doc-item]")) return;
+          e.preventDefault();
+          e.stopPropagation();
+          setContextMenu({ index: -1, x: e.clientX, y: e.clientY });
+        }}
+      >
+        <div className={mergeClasses(styles.searchBoxWrapper, sidebarSearchOpen && styles.searchBoxWrapperOpen)}>
+          <div className={styles.searchBox}>
+            <input
+              ref={searchInputRef}
+              className={styles.searchInput}
+              value={sidebarSearchQuery}
+              onChange={(e) => onSidebarSearchQueryChange(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  onSidebarSearchClose();
+                }
+              }}
+              placeholder={i("search.sidebarPlaceholder")}
+              spellCheck={false}
+              tabIndex={sidebarSearchOpen ? 0 : -1}
+            />
+            <Button
+              appearance="subtle"
+              className={styles.searchCloseBtn}
+              onClick={onSidebarSearchClose}
+              size="small"
+              tabIndex={sidebarSearchOpen ? 0 : -1}
+            >
+              <DismissRegular fontSize={14} />
+            </Button>
+          </div>
+        </div>
+
         <Button
           appearance="subtle"
           icon={<DocumentAddRegular />}
@@ -399,18 +572,23 @@ export function Sidebar({
           {i("sidebar.newNote")}
         </Button>
 
-        {docs.length === 0 ? (
-          <span className={styles.empty}>{i("sidebar.empty")}</span>
+        {filteredDocs.length === 0 ? (
+          <span className={styles.empty}>{sidebarSearchQuery ? "" : i("sidebar.empty")}</span>
         ) : (
-          docs.map((doc, index) => (
+          filteredDocs.map(({ doc, originalIndex }) => (
             <div
               key={doc.id}
-              className={styles.docItemWrapper}
-              onMouseEnter={() => setHoveredIndex(index)}
+              data-doc-item
+              className={mergeClasses(
+                styles.docItemWrapper,
+                newDocIds.has(doc.id) && styles.docItemNew,
+                slideUpFromIndex >= 0 && originalIndex >= slideUpFromIndex && styles.docItemSlideUp,
+              )}
+              onMouseEnter={() => setHoveredIndex(originalIndex)}
               onMouseLeave={() => setHoveredIndex(null)}
-              onContextMenu={(e) => handleContextMenu(index, e)}
+              onContextMenu={(e) => handleContextMenu(originalIndex, e)}
             >
-              {editingIndex === index ? (
+              {editingIndex === originalIndex ? (
                 <div className={styles.renameBox}>
                   <span className={styles.renameIcon}>
                     <DocumentRegular fontSize={16} />
@@ -432,15 +610,15 @@ export function Sidebar({
                   <Button
                     appearance="subtle"
                     icon={doc.isExternal ? <Folder16Regular /> : <DocumentRegular />}
-                    className={index === activeIndex ? styles.docItemActive : styles.docItem}
-                    onClick={() => onSwitchDocument(index)}
-                    onDoubleClick={() => handleDoubleClick(index)}
+                    className={originalIndex === activeIndex ? styles.docItemActive : styles.docItem}
+                    onClick={() => onSwitchDocument(originalIndex)}
+                    onDoubleClick={() => handleDoubleClick(originalIndex)}
                     size="small"
                   >
                     <span className={styles.docName}>{doc.fileName}</span>
                     <span className={mergeClasses(
                       styles.docTrailing,
-                      (hoveredIndex === index || contextMenu?.index === index) && styles.docTrailingHidden,
+                      (hoveredIndex === originalIndex || contextMenu?.index === originalIndex) && styles.docTrailingHidden,
                     )}>
                       {doc.isDirty && doc.isExternal && (
                         <span className={styles.dirtyDot}>●</span>
@@ -459,11 +637,11 @@ export function Sidebar({
                     appearance="subtle"
                     className={mergeClasses(
                       styles.moreBtn,
-                      contextMenu?.index === index
+                      contextMenu?.index === originalIndex
                         ? styles.moreBtnActive
-                        : hoveredIndex === index && styles.moreBtnVisible,
+                        : hoveredIndex === originalIndex && styles.moreBtnVisible,
                     )}
-                    onClick={(e) => handleMoreClick(index, e)}
+                    onClick={(e) => handleMoreClick(originalIndex, e)}
                     size="small"
                   >
                     <MoreHorizontalRegular fontSize={16} />
@@ -494,53 +672,87 @@ export function Sidebar({
             className={styles.contextMenu}
             style={{ left: contextMenu.x, top: contextMenu.y }}
           >
-            <Button
-              appearance="subtle"
-              icon={<DocumentCopyRegular />}
-              className={styles.contextMenuItem}
-              onClick={() => { onDuplicateNote(contextMenu.index); closeContextMenu(); }}
-              size="small"
-            >
-              {i("sidebar.duplicate")}
-            </Button>
-            <Button
-              appearance="subtle"
-              icon={<ArrowExportUpRegular />}
-              className={styles.contextMenuItem}
-              onClick={() => { onExportNote(contextMenu.index); closeContextMenu(); }}
-              size="small"
-            >
-              {i("sidebar.export")}
-            </Button>
-            <Button
-              appearance="subtle"
-              icon={<CopyRegular />}
-              className={styles.contextMenuItem}
-              onClick={() => handleCopyContent(contextMenu.index)}
-              size="small"
-            >
-              {i("sidebar.copyContent")}
-            </Button>
-            {docs[contextMenu.index]?.isExternal ? (
-              <Button
-                appearance="subtle"
-                icon={<DismissRegular />}
-                className={mergeClasses(styles.contextMenuItem, styles.contextMenuDanger)}
-                onClick={() => { onCloseNote(contextMenu.index); closeContextMenu(); }}
-                size="small"
-              >
-                {i("sidebar.close")}
-              </Button>
+            {contextMenu.index === -1 ? (
+              <>
+                <Button
+                  appearance="subtle"
+                  icon={<DocumentAddRegular />}
+                  className={styles.contextMenuItem}
+                  onClick={() => { onNewNote(); closeContextMenu(); }}
+                  size="small"
+                >
+                  {i("sidebar.newNote")}
+                </Button>
+                <Button
+                  appearance="subtle"
+                  icon={<FolderOpenRegular />}
+                  className={styles.contextMenuItem}
+                  onClick={() => { onOpenFile(); closeContextMenu(); }}
+                  size="small"
+                >
+                  {i("sidebar.open")}
+                </Button>
+              </>
             ) : (
-              <Button
-                appearance="subtle"
-                icon={<DeleteRegular />}
-                className={mergeClasses(styles.contextMenuItem, styles.contextMenuDanger)}
-                onClick={() => { onDeleteNote(contextMenu.index); closeContextMenu(); }}
-                size="small"
-              >
-                {i("sidebar.delete")}
-              </Button>
+              <>
+                <Button
+                  appearance="subtle"
+                  icon={<RenameRegular />}
+                  className={styles.contextMenuItem}
+                  onClick={() => { handleDoubleClick(contextMenu.index); closeContextMenu(); }}
+                  size="small"
+                >
+                  {i("sidebar.rename")}
+                </Button>
+                <Button
+                  appearance="subtle"
+                  icon={<DocumentCopyRegular />}
+                  className={styles.contextMenuItem}
+                  onClick={() => { onDuplicateNote(contextMenu.index); closeContextMenu(); }}
+                  size="small"
+                >
+                  {i("sidebar.duplicate")}
+                </Button>
+                <Button
+                  appearance="subtle"
+                  icon={<ArrowExportUpRegular />}
+                  className={styles.contextMenuItem}
+                  onClick={() => { onExportNote(contextMenu.index); closeContextMenu(); }}
+                  size="small"
+                >
+                  {i("sidebar.export")}
+                </Button>
+                <Button
+                  appearance="subtle"
+                  icon={<CopyRegular />}
+                  className={styles.contextMenuItem}
+                  onClick={() => handleCopyContent(contextMenu.index)}
+                  size="small"
+                >
+                  {i("sidebar.copyContent")}
+                </Button>
+                {docs[contextMenu.index]?.isExternal ? (
+                  <Button
+                    appearance="subtle"
+                    icon={<DismissRegular />}
+                    className={mergeClasses(styles.contextMenuItem, styles.contextMenuDanger)}
+                    onClick={() => { onCloseNote(contextMenu.index); closeContextMenu(); }}
+                    size="small"
+                  >
+                    {i("sidebar.close")}
+                  </Button>
+                ) : (
+                  <Button
+                    appearance="subtle"
+                    icon={<DeleteRegular />}
+                    className={mergeClasses(styles.contextMenuItem, styles.contextMenuDanger)}
+                    onClick={() => { onDeleteNote(contextMenu.index); closeContextMenu(); }}
+                    size="small"
+                  >
+                    {i("sidebar.delete")}
+                  </Button>
+                )}
+              </>
             )}
           </div>
       )}

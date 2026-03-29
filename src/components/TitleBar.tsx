@@ -6,7 +6,9 @@ import {
 } from "@fluentui/react-icons";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { t } from "../i18n";
-import type { Locale } from "../hooks/useSettings";
+import type { Locale, ParagraphSpacing } from "../hooks/useSettings";
+import type { Editor } from "@tiptap/react";
+import { AppMenu } from "./AppMenu";
 
 const appWindow = getCurrentWindow();
 
@@ -15,7 +17,7 @@ const useStyles = makeStyles({
     display: "flex",
     alignItems: "center",
     height: "40px",
-    paddingLeft: "12px",
+    paddingLeft: "8px",
     paddingRight: "0",
     backgroundColor: "transparent",
     userSelect: "none",
@@ -30,32 +32,6 @@ const useStyles = makeStyles({
     position: "relative",
     top: "2px",
     zIndex: 1,
-  },
-  appIcon: {
-    width: "16px",
-    height: "16px",
-    fontSize: "12px",
-    lineHeight: "16px",
-    textAlign: "center",
-    borderRadius: "4px",
-    backgroundColor: tokens.colorNeutralBackground3,
-    color: tokens.colorNeutralForeground1,
-    fontWeight: 600,
-  },
-  appName: {
-    fontSize: "12px",
-    fontWeight: 500,
-    color: tokens.colorNeutralForeground1,
-    whiteSpace: "nowrap",
-  },
-  fileName: {
-    fontSize: "12px",
-    color: tokens.colorNeutralForeground2,
-    opacity: 0.72,
-    whiteSpace: "nowrap",
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-    maxWidth: "320px",
   },
   dragRegion: {
     flex: 1,
@@ -136,30 +112,58 @@ const useStyles = makeStyles({
 });
 
 interface TitleBarProps {
-  documentTitle: string | null;
-  isDirty: boolean;
+  isDark: boolean;
   isEditing: boolean;
   locale: Locale;
+  editor: Editor | null;
+  paragraphSpacing: ParagraphSpacing;
   onToggleEditing: () => void;
+  onNewNote: () => void;
+  onOpenFile: () => void;
+  onToggleTheme: () => void;
+  onOpenSettings: () => void;
+  onUpdateParagraphSpacing: (v: ParagraphSpacing) => void;
+  onExportMd: () => void;
+  onExportPdf: () => void;
+  onExportRtf: () => void;
 }
 
 export function TitleBar({
-  documentTitle,
-  isDirty,
+  isDark,
   isEditing,
   locale,
+  editor,
+  paragraphSpacing,
   onToggleEditing,
+  onNewNote,
+  onOpenFile,
+  onToggleTheme,
+  onOpenSettings,
+  onUpdateParagraphSpacing,
+  onExportMd,
+  onExportPdf,
+  onExportRtf,
 }: TitleBarProps) {
   const styles = useStyles();
   const i = (key: Parameters<typeof t>[0]) => t(key, locale);
-  const displayName = documentTitle ? `${documentTitle}${isDirty ? " *" : ""}` : "";
 
   return (
     <div className={styles.titleBar} data-tauri-drag-region>
       <div className={styles.left} data-tauri-drag-region>
-        <span className={styles.appIcon}>M</span>
-        <span className={styles.appName}>{i("app.name")}</span>
-        {displayName && <span className={styles.fileName}>{displayName}</span>}
+        <AppMenu
+          locale={locale}
+          isDark={isDark}
+          editor={editor}
+          paragraphSpacing={paragraphSpacing}
+          onNewNote={onNewNote}
+          onOpenFile={onOpenFile}
+          onToggleTheme={onToggleTheme}
+          onOpenSettings={onOpenSettings}
+          onUpdateParagraphSpacing={onUpdateParagraphSpacing}
+          onExportMd={onExportMd}
+          onExportPdf={onExportPdf}
+          onExportRtf={onExportRtf}
+        />
       </div>
 
       <div className={styles.dragRegion} data-tauri-drag-region />

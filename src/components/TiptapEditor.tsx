@@ -11,6 +11,7 @@ import { Extension, type Editor } from "@tiptap/core";
 import { Plugin, PluginKey, NodeSelection, TextSelection } from "@tiptap/pm/state";
 import { Fragment, Slice } from "@tiptap/pm/model";
 import StarterKit from "@tiptap/starter-kit";
+import Underline from "@tiptap/extension-underline";
 import { Markdown } from "@tiptap/markdown";
 import CodeBlockLowlight from "@tiptap/extension-code-block-lowlight";
 import Image from "@tiptap/extension-image";
@@ -19,7 +20,6 @@ import Typography from "@tiptap/extension-typography";
 import TextAlign from "@tiptap/extension-text-align";
 import TaskList from "@tiptap/extension-task-list";
 import TaskItem from "@tiptap/extension-task-item";
-import Underline from "@tiptap/extension-underline";
 import { Table } from "@tiptap/extension-table";
 import { TableRow } from "@tiptap/extension-table-row";
 import { TableCell } from "@tiptap/extension-table-cell";
@@ -27,6 +27,7 @@ import { TableHeader } from "@tiptap/extension-table-header";
 import { common, createLowlight } from "lowlight";
 import SlashCommands from "../extensions/SlashCommands";
 import ImageDrop from "../extensions/ImageDrop";
+import { SearchHighlight } from "../extensions/SearchHighlight";
 import { t } from "../i18n";
 import type { Locale, WordWrap } from "../hooks/useSettings";
 import "../styles/tiptap-editor.css";
@@ -366,7 +367,7 @@ export const TiptapEditor = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
 
     const editor = useEditor({
       extensions: [
-        StarterKit.configure({ codeBlock: false }),
+        StarterKit.configure({ codeBlock: false, underline: false }),
         Markdown,
         CodeBlockLowlight.extend({
           renderHTML({ node, HTMLAttributes }) {
@@ -396,6 +397,7 @@ export const TiptapEditor = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
         ReadonlyGuard,
         SlashCommands,
         ImageDrop,
+        SearchHighlight,
       ],
       content: initialMarkdown,
       contentType: "markdown",

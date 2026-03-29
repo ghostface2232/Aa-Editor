@@ -1,8 +1,10 @@
-import { useMemo } from "react";
+import { useMemo, useCallback } from "react";
 import CodeMirror from "@uiw/react-codemirror";
 import { markdown as cmMarkdown } from "@codemirror/lang-markdown";
 import { languages } from "@codemirror/language-data";
 import { EditorView } from "@codemirror/view";
+import type { EditorState } from "@codemirror/state";
+import { cmSearchField } from "../extensions/cmSearchHighlight";
 import {
   HighlightStyle,
   syntaxHighlighting,
@@ -103,6 +105,7 @@ interface MarkdownEditorProps {
   onChange: (value: string) => void;
   isDarkMode: boolean;
   wordWrap: WordWrap;
+  onViewReady?: (view: EditorView) => void;
 }
 
 export function MarkdownEditor({
@@ -110,6 +113,7 @@ export function MarkdownEditor({
   onChange,
   isDarkMode,
   wordWrap,
+  onViewReady,
 }: MarkdownEditorProps) {
   const extensions = useMemo(() => {
     const hl = buildHighlightStyle(isDarkMode);
@@ -119,8 +123,16 @@ export function MarkdownEditor({
       syntaxHighlighting(hl),
       EditorView.lineWrapping,
       theme,
+      cmSearchField,
     ];
   }, [isDarkMode]);
+
+  const handleCreateEditor = useCallback(
+    (view: EditorView, _state: EditorState) => {
+      onViewReady?.(view);
+    },
+    [onViewReady],
+  );
 
   return (
     <div className={`markdown-editor ${wordWrap === "char" ? "markdown-editor-wrap-char" : "markdown-editor-wrap-word"}`}>
@@ -137,8 +149,10 @@ export function MarkdownEditor({
           bracketMatching: true,
           closeBrackets: true,
           autocompletion: false,
+          searchKeymap: false,
         }}
         height="100%"
+        onCreateEditor={handleCreateEditor}
       />
     </div>
   );

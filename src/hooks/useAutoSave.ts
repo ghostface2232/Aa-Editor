@@ -50,13 +50,15 @@ export function useAutoSave(
         const nextDocs = latestDocs.map((docEntry) => {
           if (docEntry.id !== target.id) return docEntry;
 
-          const nextTitle = deriveTitle(content) || docEntry.fileName || getDefaultDocumentTitle(locale, latestDocs.map((d) => d.fileName));
+          const autoTitle = docEntry.customName
+            ? docEntry.fileName
+            : deriveTitle(content) || docEntry.fileName || getDefaultDocumentTitle(locale, latestDocs.map((d) => d.fileName));
           return {
             ...docEntry,
             content,
             isDirty: false,
             updatedAt: Date.now(),
-            fileName: docEntry.isExternal ? docEntry.fileName : nextTitle,
+            fileName: docEntry.isExternal ? docEntry.fileName : autoTitle,
           };
         });
 

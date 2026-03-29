@@ -94,7 +94,7 @@ const useStyles = makeStyles({
     fontWeight: 500,
   },
   headingBtn: {
-    minWidth: "auto",
+    width: "88px",
     height: "28px",
     padding: "0 8px",
     borderRadius: "6px",
@@ -104,15 +104,14 @@ const useStyles = makeStyles({
     gap: "4px",
   },
   headingBtnActive: {
-    minWidth: "auto",
+    width: "88px",
     height: "28px",
     padding: "0 8px",
     borderRadius: "6px",
     border: "none",
     fontSize: "12px",
     gap: "4px",
-    backgroundColor: "var(--ui-active-bg)",
-    fontWeight: 500,
+    fontWeight: 600,
   },
 });
 

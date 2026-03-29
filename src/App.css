@@ -96,10 +96,68 @@ body {
 /* ─── 다크 모드에서 active 배경 변수 오버라이드 ─── */
 [data-theme="dark"] {
   --ui-active-bg: rgba(255, 255, 255, 0.12);
+  --sidebar-search-bg: rgba(255, 255, 255, 0.08);
 }
 
 /* ─── 다크 모드 Dialog backdrop 강화 ─── */
 .fui-DialogSurface__backdrop {
   transition: background-color 0.2s ease;
+}
+
+/* ─── Print / PDF export ─── */
+@media print {
+  /* Hide everything except the editor content */
+  body, html, #root {
+    height: auto !important;
+    overflow: visible !important;
+    background: white !important;
+  }
+
+  /* Hide app shell */
+  [data-tauri-drag-region],
+  .fui-FluentProvider > div > div:first-child, /* mica overlay */
+  [class*="titleBar"],
+  [class*="sidebarSlot"],
+  [class*="sidebarToggle"],
+  [class*="windowControls"],
+  [class*="editorToolbar"],
+  [class*="statusBar"],
+  [class*="StatusBar"],
+  #portal-root,
+  .fui-DialogSurface__backdrop,
+  .fui-DialogSurface {
+    display: none !important;
+  }
+
+  .ProseMirror {
+    padding: 0 !important;
+    margin: 0 auto !important;
+    max-width: 100% !important;
+    color: black !important;
+    background: white !important;
+    font-size: 12pt !important;
+    line-height: 1.6 !important;
+  }
+
+  .ProseMirror h1 { font-size: 22pt !important; }
+  .ProseMirror h2 { font-size: 18pt !important; }
+  .ProseMirror h3 { font-size: 14pt !important; }
+
+  .ProseMirror pre {
+    border: 1px solid #ccc !important;
+    background: #f5f5f5 !important;
+    padding: 8pt !important;
+  }
+
+  .ProseMirror img {
+    max-width: 100% !important;
+    page-break-inside: avoid;
+  }
+
+  .ProseMirror blockquote {
+    border-left: 3px solid #ccc !important;
+    padding-left: 12pt !important;
+    color: #555 !important;
+  }
 }
 

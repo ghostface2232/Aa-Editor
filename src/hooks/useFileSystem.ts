@@ -120,14 +120,16 @@ export function useFileSystem(
     const nextDocs = docs.map((entry, index) => {
       if (index !== activeIndex) return entry;
 
-      const title = deriveTitle(markdown) || entry.fileName;
+      const title = entry.customName
+        ? entry.fileName
+        : deriveTitle(markdown) || entry.fileName || getDefaultDocumentTitle(locale);
       return {
         ...entry,
         filePath: targetPath,
         content: markdown,
         isDirty: false,
         updatedAt: Date.now(),
-        fileName: entry.isExternal ? entry.fileName : title || getDefaultDocumentTitle(locale),
+        fileName: entry.isExternal ? entry.fileName : title,
       };
     });
 
@@ -435,7 +437,7 @@ export function useFileSystem(
 
     const nextDocs = docs.map((entry, i) => {
       if (i !== index) return entry;
-      return { ...entry, fileName: trimmed, filePath: newFilePath, updatedAt: Date.now() };
+      return { ...entry, fileName: trimmed, filePath: newFilePath, updatedAt: Date.now(), customName: true };
     });
 
     // Update editor state if this is the active document

@@ -1,4 +1,4 @@
-# Markdown Studio
+# Aa
 
 Windows-native Markdown editor built with Tauri v2, React, and TypeScript.
 

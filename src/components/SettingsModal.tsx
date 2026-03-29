@@ -36,9 +36,19 @@ const useStyles = makeStyles({
   },
   layout: {
     display: "flex",
-    minHeight: "380px",
+    height: "430px",
     padding: "4px",
     paddingLeft: 0,
+    position: "relative",
+  },
+  noiseOverlay: {
+    position: "absolute",
+    inset: "0",
+    borderRadius: "8px",
+    pointerEvents: "none",
+    zIndex: 2,
+    backgroundRepeat: "repeat",
+    backgroundSize: "200px 200px",
   },
   nav: {
     width: NAV_WIDTH,
@@ -219,9 +229,11 @@ export function SettingsModal({ open, onClose, settings, onUpdate }: SettingsMod
   const i = (key: Parameters<typeof t>[0]) => t(key, locale);
   const [tab, setTab] = useState<TabId>("system");
 
-  const micaBg = isDarkMode ? "rgba(32, 32, 32, 0.80)" : "rgba(243, 243, 243, 0.75)";
-  const panelBg = isDarkMode ? "rgba(45, 45, 45, 1)" : "rgba(255, 255, 255, 1)";
-  const borderColor = isDarkMode ? "rgba(255, 255, 255, 0.08)" : "rgba(0, 0, 0, 0.12)";
+  const micaBg = isDarkMode ? "rgba(44, 44, 44, 0.92)" : "rgba(243, 243, 243, 0.90)";
+  const panelBg = isDarkMode ? "rgba(56, 56, 56, 0.70)" : "rgba(255, 255, 255, 0.70)";
+  const borderColor = isDarkMode ? "rgba(255, 255, 255, 0.06)" : "rgba(0, 0, 0, 0.06)";
+  const noiseOpacity = isDarkMode ? 0.035 : 0.025;
+  const noiseSvg = `url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")`;
 
   const navItems: { id: TabId; labelKey: Parameters<typeof t>[0] }[] = [
     { id: "system", labelKey: "settings.tab.system" },
@@ -235,20 +247,24 @@ export function SettingsModal({ open, onClose, settings, onUpdate }: SettingsMod
         className={styles.surface}
         style={{
           background: micaBg,
-          backdropFilter: "blur(40px)",
-          WebkitBackdropFilter: "blur(40px)",
+          backdropFilter: "saturate(120%) blur(60px)",
+          WebkitBackdropFilter: "saturate(120%) blur(60px)",
           border: `1px solid ${borderColor}`,
           boxShadow: isDarkMode
-            ? "0 12px 48px rgba(0,0,0,0.6), 0 4px 12px rgba(0,0,0,0.4)"
+            ? "0 12px 48px rgba(0,0,0,0.5), 0 4px 12px rgba(0,0,0,0.3)"
             : "0 8px 32px rgba(0,0,0,0.12), 0 2px 8px rgba(0,0,0,0.06)",
         }}
         backdrop={{
           style: {
-            backgroundColor: isDarkMode ? "rgba(0, 0, 0, 0.5)" : "rgba(0, 0, 0, 0.3)",
+            backgroundColor: isDarkMode ? "rgba(0, 0, 0, 0.30)" : "rgba(0, 0, 0, 0.14)",
           },
         }}
       >
         <div className={styles.layout}>
+          <div
+            className={styles.noiseOverlay}
+            style={{ backgroundImage: noiseSvg, opacity: noiseOpacity }}
+          />
           <nav
             className={styles.nav}
             style={{

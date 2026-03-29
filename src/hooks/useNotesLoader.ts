@@ -13,6 +13,7 @@ export interface NoteDoc {
   content: string;
   createdAt: number;
   updatedAt: number;
+  customName?: boolean;
 }
 
 interface Manifest {
@@ -220,5 +221,5 @@ export function deriveTitle(content: string): string {
   if (!content) return "";
   const firstLine = content.trimStart().split("\n")[0];
   const heading = firstLine.replace(/^#+\s*/, "").trim();
-  return heading.slice(0, 60) || "";
+  return heading.slice(0, 20) || "";
 }

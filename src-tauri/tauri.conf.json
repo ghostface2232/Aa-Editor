@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "markdown-studio",
+  "productName": "Aa",
   "version": "0.1.0",
-  "identifier": "com.markdownstudio.app",
+  "identifier": "com.aa.app",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -12,11 +12,11 @@
   "app": {
     "windows": [
       {
-        "title": "markdown-studio",
+        "title": "Aa",
         "width": 800,
         "height": 600,
         "minWidth": 800,
-        "minHeight": 400,
+        "minHeight": 620,
         "decorations": false,
         "transparent": true,
         "windowEffects": {

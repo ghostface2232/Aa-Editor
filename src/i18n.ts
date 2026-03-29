@@ -2,7 +2,7 @@ import type { Locale } from "./hooks/useSettings";
 
 const dict = {
   /* ─── TitleBar ─── */
-  "app.name": { en: "Markdown Studio", ko: "Markdown Studio" },
+  "app.name": { en: "Aa", ko: "Aa" },
   "mode.read": { en: "Read", ko: "읽기" },
   "mode.edit": { en: "Edit", ko: "편집" },
   "theme.light": { en: "Light", ko: "라이트" },
@@ -60,8 +60,10 @@ const dict = {
     ko: "Ctrl+O로 파일을 열거나 Ctrl+N으로 새 문서를 만드세요.",
   },
   "sidebar.newNote": { en: "New document", ko: "새 문서" },
+  "sidebar.open": { en: "Open", ko: "열기" },
   "sidebar.settings": { en: "Settings", ko: "설정" },
   "sidebar.externalFile": { en: "External file", ko: "외부 파일" },
+  "sidebar.rename": { en: "Rename", ko: "이름 바꾸기" },
   "sidebar.duplicate": { en: "Duplicate", ko: "복제" },
   "sidebar.delete": { en: "Delete", ko: "삭제" },
   "sidebar.close": { en: "Close", ko: "닫기" },
@@ -104,6 +106,32 @@ const dict = {
   "settings.tab.formatting": { en: "Formatting", ko: "서식" },
   "settings.tab.shortcuts": { en: "Shortcuts", ko: "단축키" },
   "settings.spellcheck": { en: "Spelling & grammar indicators", ko: "맞춤법 및 문법 표시" },
+
+  /* ─── Search ─── */
+  "search.placeholder": { en: "Find in document", ko: "문서에서 찾기" },
+  "search.sidebarPlaceholder": { en: "Search notes", ko: "노트 검색" },
+
+  /* ─── App Menu ─── */
+  "menu.file": { en: "File", ko: "파일" },
+  "menu.newDoc": { en: "New document", ko: "새 문서" },
+  "menu.open": { en: "Open", ko: "열기" },
+  "menu.export": { en: "Export", ko: "내보내기" },
+  "menu.exportMd": { en: "Markdown (.md)", ko: "마크다운 (.md)" },
+  "menu.exportPdf": { en: "PDF (.pdf)", ko: "PDF (.pdf)" },
+  "menu.exportRtf": { en: "Rich Text (.rtf)", ko: "서식 있는 텍스트 (.rtf)" },
+  "menu.exit": { en: "Exit", ko: "종료" },
+  "menu.edit": { en: "Edit", ko: "편집" },
+  "menu.undo": { en: "Undo", ko: "실행취소" },
+  "menu.redo": { en: "Redo", ko: "다시실행" },
+  "menu.cut": { en: "Cut", ko: "잘라내기" },
+  "menu.copy": { en: "Copy", ko: "복사" },
+  "menu.selectAll": { en: "Select all", ko: "모두 선택" },
+  "menu.find": { en: "Find", ko: "찾기" },
+  "menu.view": { en: "View", ko: "보기" },
+  "menu.darkMode": { en: "Dark mode", ko: "다크 모드" },
+  "menu.lightMode": { en: "Light mode", ko: "라이트 모드" },
+  "menu.paragraphSpacing": { en: "Paragraph spacing", ko: "문단 간격" },
+  "menu.settings": { en: "Settings", ko: "설정" },
 } as const;
 
 export type I18nKey = keyof typeof dict;

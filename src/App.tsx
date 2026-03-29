@@ -8,7 +8,7 @@ import {
   tokens,
   Button,
 } from "@fluentui/react-components";
-import { PanelLeftRegular, PanelLeftFilled } from "@fluentui/react-icons";
+import { PanelLeftRegular, PanelLeftFilled, SearchRegular } from "@fluentui/react-icons";
 import { getCurrentWindow, Effect } from "@tauri-apps/api/window";
 import { useMarkdownState } from "./hooks/useMarkdownState";
 import { useFileSystem } from "./hooks/useFileSystem";
@@ -26,6 +26,10 @@ import { MarkdownEditor } from "./components/MarkdownEditor";
 import { EditorToolbar } from "./components/EditorToolbar";
 import { StatusBar } from "./components/StatusBar";
 import { SettingsModal } from "./components/SettingsModal";
+import { SearchBar } from "./components/SearchBar";
+import { searchPluginKey, type SearchPluginState } from "./extensions/SearchHighlight";
+import { setCmSearch } from "./extensions/cmSearchHighlight";
+import { exportAsMarkdown, exportAsPdf, exportAsRtf } from "./utils/exportHandlers";
 import "./App.css";
 
 const useStyles = makeStyles({
@@ -35,6 +39,12 @@ const useStyles = makeStyles({
     height: "100vh",
     color: tokens.colorNeutralForeground1,
     position: "relative",
+    transitionProperty: "filter",
+    transitionDuration: "0.2s",
+    transitionTimingFunction: "ease",
+  },
+  rootBlurred: {
+    filter: "blur(4px)",
   },
   micaOverlay: {
     position: "absolute",
@@ -57,20 +67,47 @@ const useStyles = makeStyles({
     zIndex: 2,
   },
   sidebarSlot: {
+    position: "relative",
     width: 0,
     flexShrink: 0,
     overflow: "hidden",
+  },
+  sidebarSlotAnimated: {
     transitionProperty: "width",
     transitionDuration: "0.3s",
     transitionTimingFunction: "cubic-bezier(0.4, 0, 0.2, 1)",
   },
   sidebarSlotOpen: {
     width: "var(--shell-sidebar-width)",
+    overflow: "visible",
+  },
+  sidebarResizer: {
+    position: "absolute",
+    right: "-4px",
+    top: "50%",
+    transform: "translateY(-50%)",
+    width: "8px",
+    height: "36px",
+    borderRadius: "4px",
+    cursor: "grab",
+    zIndex: 100,
+    backgroundColor: tokens.colorNeutralStroke2,
+    opacity: 0,
+    transitionProperty: "opacity",
+    transitionDuration: "0.15s",
+    ":hover": {
+      opacity: 1,
+    },
+  },
+  sidebarResizing: {
+    opacity: 1,
+    cursor: "grabbing",
+    backgroundColor: tokens.colorNeutralStroke1,
   },
   sidebarToggle: {
     position: "absolute",
     top: "12px",
-    left: "8px",
+    left: "5px",
     zIndex: 10,
     display: "inline-flex",
     alignItems: "center",
@@ -87,6 +124,18 @@ const useStyles = makeStyles({
     width: "28px",
     padding: "0",
     pointerEvents: "auto",
+  },
+  sidebarSearchBtn: {
+    position: "absolute",
+    top: "15px",
+    right: "8px",
+    zIndex: 10,
+    borderRadius: "6px",
+    border: "none",
+    minWidth: "auto",
+    height: "28px",
+    width: "28px",
+    padding: "0",
   },
   floatingCard: {
     position: "relative",
@@ -105,6 +154,14 @@ const useStyles = makeStyles({
     overflow: "auto",
     position: "relative",
   },
+  searchBarAnchor: {
+    position: "sticky",
+    top: 0,
+    height: 0,
+    zIndex: 50,
+    overflow: "visible",
+    pointerEvents: "none",
+  },
   editorPane: {
     opacity: 1,
     transitionProperty: "opacity",
@@ -121,9 +178,19 @@ const useStyles = makeStyles({
   },
 });
 
+const SIDEBAR_MIN = 200;
+const SIDEBAR_MAX = 400;
+const SIDEBAR_DEFAULT = 260;
+
 function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT);
+  const [sidebarResizing, setSidebarResizing] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [docSearchOpen, setDocSearchOpen] = useState(false);
+  const [sidebarSearchOpen, setSidebarSearchOpen] = useState(false);
+  const [sidebarSearchQuery, setSidebarSearchQuery] = useState("");
+  const [cmView, setCmView] = useState<import("@codemirror/view").EditorView | null>(null);
   const { settings, update: updateSetting, isLoaded: settingsLoaded } = useSettings();
   const isDarkMode = settings.themeMode === "dark";
   const locale = settings.locale;
@@ -239,6 +306,29 @@ function App() {
     });
   }, [state.isDirty, activeIndex]);
 
+  const activeDoc = docs[activeIndex];
+
+  const handleToggleTheme = useCallback(() => {
+    updateSetting("themeMode", isDarkMode ? "light" : "dark");
+  }, [isDarkMode, updateSetting]);
+
+  const handleExportMd = useCallback(() => {
+    const name = activeDoc?.fileName ?? "untitled";
+    const md = tiptapRef.current?.getMarkdown() ?? state.markdown;
+    exportAsMarkdown(md, name);
+  }, [activeDoc?.fileName, state.markdown]);
+
+  const handleExportPdf = useCallback(() => {
+    const el = document.querySelector(".ProseMirror") as HTMLElement | null;
+    if (el) exportAsPdf(el, activeDoc?.fileName ?? "untitled");
+  }, [activeDoc?.fileName]);
+
+  const handleExportRtf = useCallback(() => {
+    const name = activeDoc?.fileName ?? "untitled";
+    const html = tiptapEditor?.getHTML() ?? "";
+    exportAsRtf(html, name);
+  }, [activeDoc?.fileName, tiptapEditor]);
+
   // 단축키
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -248,10 +338,66 @@ function App() {
       if (e.ctrlKey && !e.shiftKey && e.key === "s") { e.preventDefault(); fs.saveFile(); }
       if (e.ctrlKey && e.shiftKey && e.key === "S") { e.preventDefault(); fs.saveFileAs(); }
       if (e.ctrlKey && e.key === "n") { e.preventDefault(); fs.newNote(); }
+      if (e.ctrlKey && e.key === "f") { e.preventDefault(); setDocSearchOpen((o) => !o); }
+      if (e.key === "Escape" && docSearchOpen) { e.preventDefault(); setDocSearchOpen(false); }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [state.toggleEditing, state.switchEditorMode, state.isEditing, fs.openFile, fs.saveFile, fs.saveFileAs, fs.newNote]);
+  }, [state.toggleEditing, state.switchEditorMode, state.isEditing, fs.openFile, fs.saveFile, fs.saveFileAs, fs.newNote, docSearchOpen]);
+
+  // 마우스 클릭 후 버튼류 요소 자동 blur → Esc/Space 시 포커스 링 방지
+  useEffect(() => {
+    const handleMouseUp = () => {
+      requestAnimationFrame(() => {
+        const el = document.activeElement as HTMLElement | null;
+        if (
+          el && el !== document.body &&
+          el.tagName !== "INPUT" &&
+          el.tagName !== "TEXTAREA" &&
+          !el.isContentEditable &&
+          !el.closest(".ProseMirror") &&
+          !el.closest(".cm-content")
+        ) {
+          el.blur();
+        }
+      });
+    };
+    window.addEventListener("mouseup", handleMouseUp);
+    return () => window.removeEventListener("mouseup", handleMouseUp);
+  }, []);
+
+  // 전역 우클릭 방지 (텍스트 필드·에디터 제외)
+  useEffect(() => {
+    const handleContextMenu = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      const isTextField =
+        target.tagName === "INPUT" ||
+        target.tagName === "TEXTAREA" ||
+        target.isContentEditable ||
+        target.closest(".ProseMirror") !== null ||
+        target.closest(".cm-content") !== null ||
+        target.closest("[data-sidebar-body]") !== null;
+      if (!isTextField) {
+        e.preventDefault();
+      }
+    };
+    window.addEventListener("contextmenu", handleContextMenu);
+    return () => window.removeEventListener("contextmenu", handleContextMenu);
+  }, []);
+
+  // 검색 닫힐 때 하이라이트 정리
+  useEffect(() => {
+    if (!docSearchOpen) {
+      if (tiptapEditor) {
+        const { tr } = tiptapEditor.state;
+        tr.setMeta(searchPluginKey, { query: "", activeIndex: 0, matches: [] } satisfies SearchPluginState);
+        tiptapEditor.view.dispatch(tr);
+      }
+      if (cmView) {
+        cmView.dispatch({ effects: setCmSearch.of({ query: "", activeIndex: 0 }) });
+      }
+    }
+  }, [docSearchOpen, tiptapEditor, cmView]);
 
   // 창 닫기 — 자동 저장이므로 별도 확인 없이 닫기 허용
 
@@ -269,7 +415,6 @@ function App() {
   );
 
   const showCodeMirror = state.isEditing && state.editorMode === "markdown";
-  const activeDoc = docs[activeIndex];
 
   return (
     <FluentProvider
@@ -277,7 +422,7 @@ function App() {
       style={{ background: "transparent" }}
       data-theme={isDarkMode ? "dark" : "light"}
     >
-      <div className={styles.root}>
+      <div className={mergeClasses(styles.root, settingsOpen && styles.rootBlurred)}>
         <div
           className={mergeClasses(
             styles.micaOverlay,
@@ -295,11 +440,20 @@ function App() {
         />
 
         <TitleBar
-          documentTitle={activeDoc?.fileName ?? null}
-          isDirty={state.isDirty}
+          isDark={isDarkMode}
           isEditing={state.isEditing}
           locale={locale}
+          editor={tiptapEditor}
+          paragraphSpacing={settings.paragraphSpacing}
           onToggleEditing={state.toggleEditing}
+          onNewNote={fs.newNote}
+          onOpenFile={fs.openFile}
+          onToggleTheme={handleToggleTheme}
+          onOpenSettings={() => setSettingsOpen(true)}
+          onUpdateParagraphSpacing={(v) => updateSetting("paragraphSpacing", v)}
+          onExportMd={handleExportMd}
+          onExportPdf={handleExportPdf}
+          onExportRtf={handleExportRtf}
         />
 
         <div className={styles.body}>
@@ -308,14 +462,31 @@ function App() {
               appearance="subtle"
               icon={sidebarOpen ? <PanelLeftFilled /> : <PanelLeftRegular />}
               className={styles.sidebarToggleBtn}
-              onClick={() => setSidebarOpen((o) => !o)}
+              onClick={() => {
+                setSidebarOpen((o) => {
+                  if (o) { setSidebarSearchOpen(false); setSidebarSearchQuery(""); }
+                  return !o;
+                });
+              }}
             />
           </div>
 
-          <div className={mergeClasses(
-            styles.sidebarSlot,
-            sidebarOpen && styles.sidebarSlotOpen,
-          )}>
+          <div
+            className={mergeClasses(
+              styles.sidebarSlot,
+              !sidebarResizing && styles.sidebarSlotAnimated,
+              sidebarOpen && styles.sidebarSlotOpen,
+            )}
+            style={sidebarOpen ? { "--shell-sidebar-width": `${sidebarWidth}px` } as React.CSSProperties : undefined}
+          >
+            {sidebarOpen && (
+              <Button
+                appearance="subtle"
+                icon={<SearchRegular />}
+                className={styles.sidebarSearchBtn}
+                onClick={() => setSidebarSearchOpen((o) => !o)}
+              />
+            )}
             <Sidebar
               docs={docs}
               activeIndex={activeIndex}
@@ -326,9 +497,39 @@ function App() {
               onDuplicateNote={fs.duplicateNote}
               onExportNote={fs.exportNote}
               onRenameNote={fs.renameNote}
+              onOpenFile={fs.openFile}
               notesSortOrder={settings.notesSortOrder}
               locale={locale}
               onOpenSettings={() => setSettingsOpen(true)}
+              sidebarSearchOpen={sidebarSearchOpen}
+              sidebarSearchQuery={sidebarSearchQuery}
+              onSidebarSearchQueryChange={setSidebarSearchQuery}
+              onSidebarSearchClose={() => { setSidebarSearchOpen(false); setSidebarSearchQuery(""); }}
+            />
+            <div
+              className={mergeClasses(
+                styles.sidebarResizer,
+                sidebarResizing && styles.sidebarResizing,
+              )}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                setSidebarResizing(true);
+                document.body.style.cursor = "grabbing";
+                const startX = e.clientX;
+                const startW = sidebarWidth;
+                const onMove = (ev: MouseEvent) => {
+                  const w = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, startW + ev.clientX - startX));
+                  setSidebarWidth(w);
+                };
+                const onUp = () => {
+                  setSidebarResizing(false);
+                  document.body.style.cursor = "";
+                  document.removeEventListener("mousemove", onMove);
+                  document.removeEventListener("mouseup", onUp);
+                };
+                document.addEventListener("mousemove", onMove);
+                document.addEventListener("mouseup", onUp);
+              }}
             />
           </div>
 
@@ -343,6 +544,17 @@ function App() {
             />
 
             <div className={styles.content}>
+              {docSearchOpen && (
+                <div className={styles.searchBarAnchor}>
+                  <SearchBar
+                    editor={tiptapEditor}
+                    cmView={cmView}
+                    isCmMode={showCodeMirror}
+                    onClose={() => setDocSearchOpen(false)}
+                    locale={locale}
+                  />
+                </div>
+              )}
               <div className={showCodeMirror ? styles.editorPaneHidden : styles.editorPane}>
                 <TiptapEditor
                   ref={tiptapRef}
@@ -366,6 +578,7 @@ function App() {
                     onChange={handleCodemirrorChange}
                     isDarkMode={isDarkMode}
                     wordWrap={settings.wordWrap}
+                    onViewReady={setCmView}
                   />
                 </div>
               )}
@@ -388,6 +601,7 @@ function App() {
         settings={settings}
         onUpdate={updateSetting}
       />
+      <div id="portal-root" />
     </FluentProvider>
   );
 }
