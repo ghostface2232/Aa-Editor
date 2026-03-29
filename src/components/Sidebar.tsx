@@ -1,8 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { Button, makeStyles, tokens, mergeClasses } from "@fluentui/react-components";
+import { Button, Tooltip, makeStyles, tokens, mergeClasses } from "@fluentui/react-components";
 import {
   ArrowExportUpRegular,
-  ChevronDownRegular,
   ChevronRightRegular,
   CopyRegular,
   DeleteRegular,
@@ -13,11 +12,12 @@ import {
   Folder16Regular,
   FolderOpenRegular,
   AddSquareMultipleRegular,
+  ArrowFlowSquareMultipleRegular,
   MoreHorizontalRegular,
   SquareMultipleRegular,
   RenameRegular,
   SettingsRegular,
-  SubtractRegular,
+  SubtractSquareMultipleRegular,
   WindowNewRegular,
 } from "@fluentui/react-icons";
 import { t } from "../i18n";
@@ -63,6 +63,12 @@ const useStyles = makeStyles({
     animationName: "docSlideUp",
     animationDuration: "0.2s",
     animationTimingFunction: "cubic-bezier(0.4, 0, 0.2, 1)",
+  },
+  groupChildExpand: {
+    animationName: "groupChildExpand",
+    animationDuration: "0.2s",
+    animationTimingFunction: "cubic-bezier(0.4, 0, 0.2, 1)",
+    animationFillMode: "backwards",
   },
   docItem: {
     display: "flex",
@@ -325,6 +331,12 @@ const useStyles = makeStyles({
     height: "16px",
     flexShrink: 0,
     color: tokens.colorNeutralForeground3,
+    transitionProperty: "transform",
+    transitionDuration: "0.15s",
+    transitionTimingFunction: "cubic-bezier(0.4, 0, 0.2, 1)",
+  },
+  groupChevronExpanded: {
+    transform: "rotate(90deg)",
   },
   groupName: {
     overflow: "hidden",
@@ -369,7 +381,7 @@ const useStyles = makeStyles({
   },
   /* ─── Multi-select ─── */
   selectCheckbox: {
-    width: "16px",
+    width: 0,
     height: "16px",
     flexShrink: 0,
     cursor: "pointer",
@@ -379,13 +391,23 @@ const useStyles = makeStyles({
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: tokens.colorNeutralForeground1,
-    opacity: 0.15,
-    transitionProperty: "opacity, background-color",
+    opacity: 0,
+    transitionProperty: "width, opacity, background-color, margin",
     transitionDuration: "0.15s",
+    transitionTimingFunction: "cubic-bezier(0.4, 0, 0.2, 1)",
     padding: 0,
+    marginLeft: 0,
+    overflow: "hidden",
     color: tokens.colorNeutralForeground1,
     fontSize: "14px",
     lineHeight: 1,
+    pointerEvents: "none",
+  },
+  selectCheckboxVisible: {
+    width: "16px",
+    opacity: 0.15,
+    marginLeft: "4px",
+    pointerEvents: "auto",
   },
   selectCheckboxChecked: {
     opacity: 1,
@@ -394,19 +416,30 @@ const useStyles = makeStyles({
   },
   selectToolbar: {
     display: "flex",
-    flexDirection: "column",
+    alignItems: "center",
     gap: "2px",
     paddingLeft: SIDE_PADDING,
     paddingRight: SIDE_PADDING,
     paddingBottom: "4px",
     borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
     paddingTop: "4px",
+    flexWrap: "wrap",
   },
   selectInfo: {
     fontSize: "12px",
     color: tokens.colorNeutralForeground3,
-    paddingLeft: "8px",
-    paddingBottom: "2px",
+    paddingLeft: "4px",
+    paddingRight: "4px",
+    flexShrink: 0,
+  },
+  selectActionBtn: {
+    border: "none",
+    borderRadius: "6px",
+    minWidth: "auto",
+    height: "28px",
+    width: "28px",
+    padding: "0",
+    flexShrink: 0,
   },
 });
 
@@ -455,7 +488,7 @@ interface SidebarProps {
   /* ─── Group props ─── */
   groups: NoteGroup[];
   groupLayout: GroupLayout;
-  onCreateGroup: (name: string, initialNoteIds?: string[]) => void;
+  onCreateGroup: (name: string, initialNoteIds?: string[]) => string;
   onRenameGroup: (groupId: string, name: string) => void;
   onDeleteGroup: (groupId: string) => void;
   onUngroupGroup: (groupId: string) => void;
@@ -467,8 +500,8 @@ interface SidebarProps {
   /* ─── Select mode (controlled from App) ─── */
   selectMode: boolean;
   onSelectModeChange: (mode: boolean) => void;
-  creatingGroup: boolean;
-  onCreatingGroupChange: (creating: boolean) => void;
+  pendingRenameGroupId: string | null;
+  onPendingRenameGroupIdClear: () => void;
 }
 
 interface ContextMenuState {
@@ -510,8 +543,8 @@ export function Sidebar({
   onDeleteNotes,
   selectMode,
   onSelectModeChange,
-  creatingGroup,
-  onCreatingGroupChange,
+  pendingRenameGroupId,
+  onPendingRenameGroupIdClear,
 }: SidebarProps) {
   const styles = useStyles();
   const i = (key: Parameters<typeof t>[0]) => t(key, locale);
@@ -522,7 +555,6 @@ export function Sidebar({
   const [editingValue, setEditingValue] = useState("");
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
   const [editingGroupValue, setEditingGroupValue] = useState("");
-  const [newGroupName, setNewGroupName] = useState("");
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [submenuOpen, setSubmenuOpen] = useState(false);
   const [submenuPos, setSubmenuPos] = useState<{ x: number; y: number } | null>(null);
@@ -530,7 +562,6 @@ export function Sidebar({
 
   const inputRef = useRef<HTMLInputElement>(null);
   const groupInputRef = useRef<HTMLInputElement>(null);
-  const newGroupInputRef = useRef<HTMLInputElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const contextMenuRef = useRef<HTMLDivElement>(null);
   const submenuParentRef = useRef<HTMLDivElement>(null);
@@ -559,6 +590,14 @@ export function Sidebar({
   const prevDocListRef = useRef<string[]>(docs.map((d) => d.id));
   const [newDocIds, setNewDocIds] = useState<Set<string>>(new Set());
   const [slideUpFromIndex, setSlideUpFromIndex] = useState(-1);
+
+  // Track groups that just expanded (for child animation)
+  const [expandedGroupIds, setExpandedGroupIds] = useState<Set<string>>(new Set());
+  const prevGroupCollapsedRef = useRef<Map<string, boolean>>(new Map());
+
+  // Track newly created groups (for slide-in animation)
+  const prevGroupIdsRef = useRef<Set<string>>(new Set(groups.map((g) => g.id)));
+  const [newGroupIds, setNewGroupIds] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     const prevList = prevDocListRef.current;
@@ -590,18 +629,55 @@ export function Sidebar({
     return () => timers.forEach(clearTimeout);
   }, [docs]);
 
+  // Detect group expand/collapse and new groups for animation
+  useEffect(() => {
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    const prevCollapsed = prevGroupCollapsedRef.current;
+    const justExpanded = new Set<string>();
+
+    for (const g of groups) {
+      const wasColl = prevCollapsed.get(g.id);
+      if (wasColl === true && !g.collapsed) {
+        justExpanded.add(g.id);
+      }
+    }
+    if (justExpanded.size > 0) {
+      setExpandedGroupIds(justExpanded);
+      timers.push(setTimeout(() => setExpandedGroupIds(new Set()), 250));
+    }
+
+    // Detect newly created groups
+    const prevIds = prevGroupIdsRef.current;
+    const addedGroups = new Set<string>();
+    for (const g of groups) {
+      if (!prevIds.has(g.id)) addedGroups.add(g.id);
+    }
+    if (addedGroups.size > 0) {
+      setNewGroupIds(addedGroups);
+      timers.push(setTimeout(() => setNewGroupIds(new Set()), 250));
+    }
+
+    prevGroupCollapsedRef.current = new Map(groups.map((g) => [g.id, g.collapsed]));
+    prevGroupIdsRef.current = new Set(groups.map((g) => g.id));
+    return () => timers.forEach(clearTimeout);
+  }, [groups]);
+
+  // Enter rename mode for a newly created group (from header button or context menu)
+  useEffect(() => {
+    if (!pendingRenameGroupId) return;
+    const group = groups.find((g) => g.id === pendingRenameGroupId);
+    if (group) {
+      setEditingGroupId(group.id);
+      setEditingGroupValue(group.name);
+      onPendingRenameGroupIdClear();
+    }
+  }, [pendingRenameGroupId, groups, onPendingRenameGroupIdClear]);
+
   // Clear selection when exiting select mode
   useEffect(() => {
     if (!selectMode) setSelectedNoteIds(new Set());
   }, [selectMode]);
 
-  // Focus new-group input when creatingGroup becomes true
-  useEffect(() => {
-    if (!creatingGroup) return;
-    setNewGroupName("");
-    const id = setTimeout(() => newGroupInputRef.current?.focus(), 0);
-    return () => clearTimeout(id);
-  }, [creatingGroup]);
 
   // Filter docs by search query
   const filteredDocs = useMemo(() => {
@@ -660,13 +736,15 @@ export function Sidebar({
     }
   }, [editingGroupId, editingGroupValue, onRenameGroup]);
 
-  const commitNewGroup = useCallback(() => {
-    const trimmed = newGroupName.trim();
-    if (trimmed) {
-      onCreateGroup(trimmed);
+  // Create group immediately with default name, then enter rename mode
+  const handleCreateGroup = useCallback(() => {
+    const defaultName = locale === "ko" ? "새 그룹" : "New group";
+    const newId = onCreateGroup(defaultName);
+    if (newId) {
+      setEditingGroupId(newId);
+      setEditingGroupValue(defaultName);
     }
-    onCreatingGroupChange(false);
-  }, [newGroupName, onCreateGroup, onCreatingGroupChange]);
+  }, [locale, onCreateGroup]);
 
   const handleDoubleClick = useCallback((index: number) => {
     setEditingIndex(index);
@@ -779,7 +857,6 @@ export function Sidebar({
   type RenderItem =
     | { kind: "note"; doc: NoteDoc; originalIndex: number; indented: boolean }
     | { kind: "group"; group: NoteGroup }
-    | { kind: "newGroup" };
 
   const renderItems = useMemo((): RenderItem[] => {
     if (isSearching) {
@@ -807,8 +884,6 @@ export function Sidebar({
           }
         }
       }
-      // New group input placeholder
-      if (creatingGroup) items.push({ kind: "newGroup" });
       // Ungrouped notes
       for (const { doc, originalIndex } of ungrouped) {
         items.push({ kind: "note", doc, originalIndex, indented: false });
@@ -845,16 +920,22 @@ export function Sidebar({
         if (slot.children) items.push(...slot.children);
       }
 
-      if (creatingGroup) items.push({ kind: "newGroup" });
     }
 
     return items;
-  }, [isSearching, filteredDocs, docs, groups, groupedNoteIds, groupLayout, notesSortOrder, creatingGroup]);
+  }, [isSearching, filteredDocs, docs, groups, groupedNoteIds, groupLayout, notesSortOrder]);
 
   const renderNoteItem = (doc: NoteDoc, originalIndex: number, indented: boolean) => {
     const isSelected = selectedNoteIds.has(doc.id);
     const isHovered = hoveredIndex === originalIndex;
     const isContextTarget = contextMenu?.type === "note" && contextMenu.index === originalIndex;
+
+    // Check if this note's group just expanded
+    const noteGroup = indented ? getGroupForNote(doc.id) : null;
+    const isInExpandingGroup = noteGroup ? expandedGroupIds.has(noteGroup.id) : false;
+    const expandStagger = isInExpandingGroup && noteGroup
+      ? noteGroup.noteIds.indexOf(doc.id) * 0.03
+      : 0;
 
     return (
       <div
@@ -864,22 +945,36 @@ export function Sidebar({
           styles.docItemWrapper,
           newDocIds.has(doc.id) && styles.docItemNew,
           slideUpFromIndex >= 0 && originalIndex >= slideUpFromIndex && styles.docItemSlideUp,
+          isInExpandingGroup && styles.groupChildExpand,
         )}
+        style={expandStagger > 0 ? { animationDelay: `${expandStagger}s` } : undefined}
         onMouseEnter={() => setHoveredIndex(originalIndex)}
         onMouseLeave={() => setHoveredIndex(null)}
-        onContextMenu={(e) => !selectMode && handleContextMenu(originalIndex, e)}
+        onContextMenu={(e) => {
+          if (selectMode) {
+            // In select mode, auto-select this note if not already, then show bulk menu
+            if (!selectedNoteIds.has(doc.id)) toggleNoteSelection(doc.id);
+            e.preventDefault();
+            e.stopPropagation();
+            setContextMenu({ type: "empty", index: -3, x: e.clientX, y: e.clientY });
+          } else {
+            handleContextMenu(originalIndex, e);
+          }
+        }}
       >
-        {selectMode && (
-          <button
-            className={mergeClasses(styles.selectCheckbox, isSelected && styles.selectCheckboxChecked)}
-            onClick={(e) => { e.stopPropagation(); toggleNoteSelection(doc.id); }}
-            style={{ marginLeft: indented ? "16px" : "4px" }}
-          >
-            <svg width="10" height="10" viewBox="0 0 10 10" fill="none" style={{ opacity: isSelected ? 1 : 0 }}>
-              <path d="M1.5 5.5L4 8L8.5 2" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-          </button>
-        )}
+        <button
+          className={mergeClasses(
+            styles.selectCheckbox,
+            selectMode && styles.selectCheckboxVisible,
+            selectMode && isSelected && styles.selectCheckboxChecked,
+          )}
+          onClick={(e) => { e.stopPropagation(); toggleNoteSelection(doc.id); }}
+          style={selectMode && indented ? { marginLeft: "16px" } : undefined}
+        >
+          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" style={{ opacity: isSelected ? 1 : 0, transition: "opacity 0.1s" }}>
+            <path d="M1.5 5.5L4 8L8.5 2" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </button>
         {editingIndex === originalIndex ? (
           <Button
             appearance="subtle"
@@ -971,7 +1066,10 @@ export function Sidebar({
       <div
         key={`group-${group.id}`}
         data-group-item
-        className={styles.docItemWrapper}
+        className={mergeClasses(
+          styles.docItemWrapper,
+          newGroupIds.has(group.id) && styles.docItemNew,
+        )}
         onMouseEnter={() => setHoveredGroupId(group.id)}
         onMouseLeave={() => setHoveredGroupId(null)}
         onContextMenu={(e) => handleGroupContextMenu(group.id, e)}
@@ -982,10 +1080,11 @@ export function Sidebar({
           size="small"
           onClick={() => !isEditing && onToggleGroupCollapsed(group.id)}
         >
-          <span className={styles.groupChevron}>
-            {group.collapsed
-              ? <ChevronRightRegular fontSize={12} />
-              : <ChevronDownRegular fontSize={12} />}
+          <span className={mergeClasses(
+            styles.groupChevron,
+            !group.collapsed && styles.groupChevronExpanded,
+          )}>
+            <ChevronRightRegular fontSize={12} />
           </span>
           {isEditing ? (
             <input
@@ -1084,7 +1183,7 @@ export function Sidebar({
           {i("sidebar.newNote")}
         </Button>
 
-        {renderItems.length === 0 && !creatingGroup ? (
+        {renderItems.length === 0 ? (
           <span className={styles.empty}>{sidebarSearchQuery ? "" : i("sidebar.empty")}</span>
         ) : (
           renderItems.map((item) => {
@@ -1093,35 +1192,6 @@ export function Sidebar({
             }
             if (item.kind === "group") {
               return renderGroupHeader(item.group);
-            }
-            if (item.kind === "newGroup") {
-              return (
-                <div key="new-group-input" className={styles.docItemWrapper}>
-                  <Button
-                    appearance="subtle"
-                    className={styles.groupHeader}
-                    size="small"
-                    style={{ pointerEvents: "none" }}
-                  >
-                    <span className={styles.groupChevron}>
-                      <ChevronDownRegular fontSize={12} />
-                    </span>
-                    <input
-                      ref={newGroupInputRef}
-                      className={styles.groupNameInput}
-                      value={newGroupName}
-                      onChange={(e) => setNewGroupName(e.target.value)}
-                      onBlur={commitNewGroup}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") { e.preventDefault(); commitNewGroup(); }
-                        if (e.key === "Escape") { e.preventDefault(); onCreatingGroupChange(false); }
-                      }}
-                      placeholder={i("sidebar.groupNamePlaceholder")}
-                      style={{ pointerEvents: "auto" }}
-                    />
-                  </Button>
-                </div>
-              );
             }
             return null;
           })
@@ -1134,71 +1204,78 @@ export function Sidebar({
           <span className={styles.selectInfo}>
             {selectedNoteIds.size}{i("sidebar.nSelected")}
           </span>
-          {groups.length > 0 && selectedNoteIds.size > 0 && (
-            <Button
-              appearance="subtle"
-              icon={<SquareMultipleRegular />}
-              className={styles.settingsBtn}
-              size="small"
-              onClick={() => {
-                // Show a simple context menu with group choices at center of sidebar
-                const body = document.querySelector("[data-sidebar-body]");
-                const rect = body?.getBoundingClientRect();
-                setContextMenu({
-                  type: "empty",
-                  index: -2, // special: select-mode move-to-group
-                  x: rect ? rect.left + rect.width / 2 : 100,
-                  y: rect ? rect.top + 60 : 100,
-                });
-              }}
-            >
-              {i("sidebar.moveToGroup")}
-            </Button>
+          <span style={{ flex: 1 }} />
+          {selectedNoteIds.size > 0 && groups.length > 0 && (
+            <Tooltip content={i("sidebar.moveToGroup")} relationship="label" positioning="above">
+              <Button
+                appearance="subtle"
+                icon={<ArrowFlowSquareMultipleRegular />}
+                className={styles.selectActionBtn}
+                size="small"
+                onClick={(e) => {
+                  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                  setContextMenu({ type: "empty", index: -2, x: rect.left, y: rect.top - 4 });
+                }}
+              />
+            </Tooltip>
           )}
           {selectedNoteIds.size > 0 && (
-            <Button
-              appearance="subtle"
-              icon={<AddSquareMultipleRegular />}
-              className={styles.settingsBtn}
-              size="small"
-              onClick={() => {
-                const ids = Array.from(selectedNoteIds);
-                onCreateGroup(
-                  locale === "ko" ? "새 그룹" : "New group",
-                  ids,
-                );
-                onSelectModeChange(false);
-              }}
-            >
-              {i("sidebar.newGroupFromSelection")}
-            </Button>
+            <Tooltip content={i("sidebar.newGroupFromSelection")} relationship="label" positioning="above">
+              <Button
+                appearance="subtle"
+                icon={<AddSquareMultipleRegular />}
+                className={styles.selectActionBtn}
+                size="small"
+                onClick={() => {
+                  const ids = Array.from(selectedNoteIds);
+                  onCreateGroup(locale === "ko" ? "새 그룹" : "New group", ids);
+                  onSelectModeChange(false);
+                }}
+              />
+            </Tooltip>
+          )}
+          {selectedNoteIds.size > 0 && Array.from(selectedNoteIds).some((id) => groupedNoteIds.has(id)) && (
+            <Tooltip content={i("sidebar.removeFromGroup")} relationship="label" positioning="above">
+              <Button
+                appearance="subtle"
+                icon={<SubtractSquareMultipleRegular />}
+                className={styles.selectActionBtn}
+                size="small"
+                onClick={() => {
+                  for (const id of selectedNoteIds) onRemoveNoteFromGroup(id);
+                  onSelectModeChange(false);
+                }}
+              />
+            </Tooltip>
           )}
           {selectedNoteIds.size > 0 && (
+            <Tooltip content={i("sidebar.deleteSelected")} relationship="label" positioning="above">
+              <Button
+                appearance="subtle"
+                icon={<DeleteRegular />}
+                className={mergeClasses(styles.selectActionBtn, styles.contextMenuDanger)}
+                size="small"
+                onClick={() => {
+                  const indices = docs
+                    .map((d, idx) => selectedNoteIds.has(d.id) ? idx : -1)
+                    .filter((idx) => idx >= 0);
+                  onDeleteNotes(indices);
+                  onSelectModeChange(false);
+                }}
+              />
+            </Tooltip>
+          )}
+          <span style={{ width: "1px", height: "16px", backgroundColor: tokens.colorNeutralStroke2, marginLeft: "2px", marginRight: "2px", flexShrink: 0 }} />
+          <Tooltip content={i("sidebar.cancelSelect")} relationship="label" positioning="above">
             <Button
               appearance="subtle"
-              icon={<DeleteRegular />}
-              className={mergeClasses(styles.settingsBtn, styles.contextMenuDanger)}
+              icon={<DismissRegular />}
+              className={styles.selectActionBtn}
               size="small"
-              onClick={() => {
-                const indices = docs
-                  .map((d, idx) => selectedNoteIds.has(d.id) ? idx : -1)
-                  .filter((idx) => idx >= 0);
-                onDeleteNotes(indices);
-                onSelectModeChange(false);
-              }}
-            >
-              {i("sidebar.deleteSelected")}
-            </Button>
-          )}
-          <Button
-            appearance="subtle"
-            icon={<DismissRegular />}
-            className={styles.settingsBtn}
-            size="small"
-            onClick={() => onSelectModeChange(false)}
-          >
-            {i("sidebar.cancelSelect")}
-          </Button>
+              style={{ opacity: 0.5 }}
+              onClick={() => onSelectModeChange(false)}
+            />
+          </Tooltip>
         </div>
       )}
 
@@ -1256,7 +1333,7 @@ export function Sidebar({
                 appearance="subtle"
                 icon={<AddSquareMultipleRegular />}
                 className={styles.contextMenuItem}
-                onClick={() => { onCreatingGroupChange(true); closeContextMenu(); }}
+                onClick={() => { handleCreateGroup(); closeContextMenu(); }}
                 size="small"
               >
                 {i("sidebar.newGroup")}
@@ -1283,6 +1360,98 @@ export function Sidebar({
                   {g.name}
                 </Button>
               ))}
+            </>
+          )}
+
+          {/* Select-mode bulk actions (right-click) */}
+          {contextMenu.type === "empty" && contextMenu.index === -3 && (
+            <>
+              {groups.length > 0 && (
+                <div
+                  ref={submenuParentRef}
+                  className={styles.submenuParent}
+                  onMouseEnter={showSubmenu}
+                  onMouseLeave={hideSubmenu}
+                >
+                  <Button
+                    appearance="subtle"
+                    icon={<ArrowFlowSquareMultipleRegular />}
+                    className={styles.contextMenuItem}
+                    size="small"
+                  >
+                    {i("sidebar.moveToGroup")}
+                    <span className={styles.submenuArrow}>▶</span>
+                  </Button>
+                  {submenuOpen && submenuPos && (
+                    <div
+                      className={styles.submenu}
+                      style={{ left: submenuPos.x, top: submenuPos.y }}
+                      onMouseEnter={keepSubmenu}
+                      onMouseLeave={hideSubmenu}
+                    >
+                      {groups.map((g) => (
+                        <Button
+                          key={g.id}
+                          appearance="subtle"
+                          className={styles.contextMenuItem}
+                          onClick={() => {
+                            onMoveNotesToGroup(Array.from(selectedNoteIds), g.id);
+                            onSelectModeChange(false);
+                            closeContextMenu();
+                          }}
+                          size="small"
+                        >
+                          {g.name}
+                        </Button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+              <Button
+                appearance="subtle"
+                icon={<AddSquareMultipleRegular />}
+                className={styles.contextMenuItem}
+                onClick={() => {
+                  onCreateGroup(locale === "ko" ? "새 그룹" : "New group", Array.from(selectedNoteIds));
+                  onSelectModeChange(false);
+                  closeContextMenu();
+                }}
+                size="small"
+              >
+                {i("sidebar.newGroupFromSelection")}
+              </Button>
+              {Array.from(selectedNoteIds).some((id) => groupedNoteIds.has(id)) && (
+              <Button
+                appearance="subtle"
+                icon={<SubtractSquareMultipleRegular />}
+                className={styles.contextMenuItem}
+                onClick={() => {
+                  for (const id of selectedNoteIds) onRemoveNoteFromGroup(id);
+                  onSelectModeChange(false);
+                  closeContextMenu();
+                }}
+                size="small"
+              >
+                {i("sidebar.removeFromGroup")}
+              </Button>
+              )}
+              <Button
+                appearance="subtle"
+                icon={<DeleteRegular />}
+                className={mergeClasses(styles.contextMenuItem, styles.contextMenuDanger)}
+                onClick={() => {
+                  const indices = docs
+                    .map((d, idx) => selectedNoteIds.has(d.id) ? idx : -1)
+                    .filter((idx) => idx >= 0);
+                  onDeleteNotes(indices);
+                  onSelectModeChange(false);
+                  closeContextMenu();
+                }}
+                size="small"
+              >
+                {i("sidebar.deleteSelected")}
+              </Button>
             </>
           )}
 
@@ -1344,7 +1513,7 @@ export function Sidebar({
                 >
                   <Button
                     appearance="subtle"
-                    icon={<SquareMultipleRegular />}
+                    icon={<ArrowFlowSquareMultipleRegular />}
                     className={styles.contextMenuItem}
                     size="small"
                   >
@@ -1422,7 +1591,7 @@ export function Sidebar({
               {docs[contextMenu.index] && getGroupForNote(docs[contextMenu.index].id) && (
                 <Button
                   appearance="subtle"
-                  icon={<SubtractRegular />}
+                  icon={<SubtractSquareMultipleRegular />}
                   className={styles.contextMenuItem}
                   onClick={() => {
                     const doc = docs[contextMenu.index];
@@ -1479,7 +1648,7 @@ export function Sidebar({
               </Button>
               <Button
                 appearance="subtle"
-                icon={<SubtractRegular />}
+                icon={<SubtractSquareMultipleRegular />}
                 className={styles.contextMenuItem}
                 onClick={() => { onUngroupGroup(contextMenu.groupId!); closeContextMenu(); }}
                 size="small"

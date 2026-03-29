@@ -255,9 +255,9 @@ function App() {
   // 그룹 관리
   const noteGroups = useNoteGroups(groups, setGroups, docs, activeIndex);
 
-  // Select 모드 & 그룹 생성 상태
+  // Select 모드 & 그룹 생성 후 rename 트리거
   const [selectMode, setSelectMode] = useState(false);
-  const [creatingGroup, setCreatingGroup] = useState(false);
+  const [pendingRenameGroupId, setPendingRenameGroupId] = useState<string | null>(null);
 
   // 초기 로드 완료 시 에디터에 첫 문서 로드
   useEffect(() => {
@@ -602,7 +602,7 @@ function App() {
           >
             {sidebarOpen && (
               <>
-                <Tooltip content={locale === "ko" ? "선택" : "Select"} relationship="label" positioning="below" appearance="inverted">
+                <Tooltip content={locale === "ko" ? "선택" : "Select"} relationship="label" positioning="below" appearance={isDarkMode ? "inverted" : undefined}>
                   <Button
                     appearance="subtle"
                     icon={<CheckboxCheckedRegular />}
@@ -611,15 +611,19 @@ function App() {
                     style={selectMode ? { backgroundColor: "var(--ui-active-bg)" } : undefined}
                   />
                 </Tooltip>
-                <Tooltip content={locale === "ko" ? "새 그룹" : "New group"} relationship="label" positioning="below" appearance="inverted">
+                <Tooltip content={locale === "ko" ? "새 그룹" : "New group"} relationship="label" positioning="below" appearance={isDarkMode ? "inverted" : undefined}>
                   <Button
                     appearance="subtle"
                     icon={<AddSquareMultipleRegular />}
                     className={styles.sidebarNewGroupBtn}
-                    onClick={() => setCreatingGroup(true)}
+                    onClick={() => {
+                      const defaultName = locale === "ko" ? "새 그룹" : "New group";
+                      const newId = noteGroups.createGroup(defaultName);
+                      setPendingRenameGroupId(newId);
+                    }}
                   />
                 </Tooltip>
-                <Tooltip content={locale === "ko" ? "검색" : "Search"} relationship="label" positioning="below" appearance="inverted">
+                <Tooltip content={locale === "ko" ? "검색" : "Search"} relationship="label" positioning="below" appearance={isDarkMode ? "inverted" : undefined}>
                   <Button
                     appearance="subtle"
                     icon={<SearchRegular />}
@@ -660,8 +664,8 @@ function App() {
               onDeleteNotes={handleDeleteNotes}
               selectMode={selectMode}
               onSelectModeChange={setSelectMode}
-              creatingGroup={creatingGroup}
-              onCreatingGroupChange={setCreatingGroup}
+              pendingRenameGroupId={pendingRenameGroupId}
+              onPendingRenameGroupIdClear={() => setPendingRenameGroupId(null)}
             />
             <div
               className={mergeClasses(
