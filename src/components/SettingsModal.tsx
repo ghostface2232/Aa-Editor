@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useEffect, useMemo } from "react";
 import {
   Button,
   Dialog,
@@ -6,16 +6,21 @@ import {
   Dropdown,
   Label,
   Option,
+  ProgressBar,
   Radio,
   RadioGroup,
   Slider,
+  Spinner,
   Switch,
   Tooltip,
   makeStyles,
   mergeClasses,
   tokens,
 } from "@fluentui/react-components";
+import { CheckmarkCircle20Regular } from "@fluentui/react-icons";
+import { getVersion } from "@tauri-apps/api/app";
 import { t } from "../i18n";
+import { useUpdater } from "../hooks/useUpdater";
 import type {
   FontFamily,
   GroupLayout,
@@ -198,7 +203,7 @@ const useStyles = makeStyles({
   },
 });
 
-type TabId = "general" | "display" | "shortcuts";
+type TabId = "general" | "display" | "shortcuts" | "about";
 
 interface SettingsModalProps {
   open: boolean;
@@ -236,6 +241,12 @@ export function SettingsModal({ open, onClose, settings, onUpdate, currentNotesD
   const isDarkMode = settings.themeMode === "dark";
   const i = (key: Parameters<typeof t>[0]) => t(key, locale);
   const [tab, setTab] = useState<TabId>("general");
+  const [appVersion, setAppVersion] = useState("");
+  const { state: updaterState, checkForUpdate, installUpdate, restartApp } = useUpdater();
+
+  useEffect(() => {
+    getVersion().then(setAppVersion).catch(() => {});
+  }, []);
 
   const themeStyles = useMemo(() => {
     const dark = isDarkMode;
@@ -258,6 +269,7 @@ export function SettingsModal({ open, onClose, settings, onUpdate, currentNotesD
     { id: "general", labelKey: "settings.tab.general" },
     { id: "display", labelKey: "settings.tab.display" },
     { id: "shortcuts", labelKey: "settings.tab.shortcuts" },
+    { id: "about", labelKey: "settings.tab.about" },
   ];
 
   return (
@@ -487,6 +499,99 @@ export function SettingsModal({ open, onClose, settings, onUpdate, currentNotesD
 
                 <span>{i("settings.shortcut.newFile")}</span>
                 <span className={styles.shortcutKey}>Ctrl+N</span>
+              </div>
+            )}
+
+            {tab === "about" && (
+              <div className={styles.section} style={{ justifyContent: "space-between", height: "100%" }}>
+                <div>
+                  {/* App info */}
+                  <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "4px" }}>
+                    <img
+                      src={isDarkMode ? "/Aa_icon_dark.png" : "/Aa_icon.png"}
+                      alt="Aa"
+                      style={{ width: "40px", height: "40px", borderRadius: "8px" }}
+                    />
+                    <div>
+                      <div style={{ fontSize: "16px", fontWeight: 600, color: tokens.colorNeutralForeground1 }}>Aa</div>
+                      <div style={{ fontSize: "12px", color: tokens.colorNeutralForeground3 }}>v{appVersion}</div>
+                    </div>
+                  </div>
+
+                  {/* Update section */}
+                  <div className={settingItemClass(styles)} style={{ paddingTop: "18px" }}>
+                    {updaterState.status === "idle" && (
+                      <Button appearance="subtle" size="small" onClick={checkForUpdate}>
+                        {i("about.checkUpdate")}
+                      </Button>
+                    )}
+
+                    {updaterState.status === "checking" && (
+                      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                        <Spinner size="tiny" />
+                        <span style={{ fontSize: "13px", color: tokens.colorNeutralForeground3 }}>
+                          {i("about.checking")}
+                        </span>
+                      </div>
+                    )}
+
+                    {updaterState.status === "upToDate" && (
+                      <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                        <CheckmarkCircle20Regular style={{ color: tokens.colorPaletteGreenForeground1 }} />
+                        <span style={{ fontSize: "13px", color: tokens.colorNeutralForeground2 }}>
+                          {i("about.upToDate")}
+                        </span>
+                      </div>
+                    )}
+
+                    {updaterState.status === "available" && (
+                      <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                        <span style={{ fontSize: "13px", fontWeight: 500 }}>
+                          {i("about.available")}: v{updaterState.version}
+                        </span>
+                        {updaterState.body && (
+                          <div style={{ fontSize: "12px", color: tokens.colorNeutralForeground3, whiteSpace: "pre-wrap", maxHeight: "120px", overflow: "auto" }}>
+                            {updaterState.body}
+                          </div>
+                        )}
+                        <Button appearance="primary" size="small" onClick={installUpdate}>
+                          {i("about.install")}
+                        </Button>
+                      </div>
+                    )}
+
+                    {updaterState.status === "downloading" && (
+                      <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                        <span style={{ fontSize: "13px", color: tokens.colorNeutralForeground3 }}>
+                          {i("about.downloading")} {updaterState.progress}%
+                        </span>
+                        <ProgressBar value={updaterState.progress / 100} />
+                      </div>
+                    )}
+
+                    {updaterState.status === "ready" && (
+                      <Button appearance="primary" size="small" onClick={restartApp}>
+                        {i("about.restart")}
+                      </Button>
+                    )}
+
+                    {updaterState.status === "error" && (
+                      <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                        <span style={{ fontSize: "12px", color: tokens.colorPaletteRedForeground1 }}>
+                          {i("about.error")}
+                        </span>
+                        <Button appearance="subtle" size="small" onClick={checkForUpdate}>
+                          {i("about.checkUpdate")}
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Copyright */}
+                <div style={{ fontSize: "12px", color: tokens.colorNeutralForeground3 }}>
+                  {i("about.copyright")}
+                </div>
               </div>
             )}
           </div>

@@ -125,6 +125,18 @@ const dict = {
   "settings.groupsFirst": { en: "Groups first", ko: "그룹 우선" },
   "settings.mixed": { en: "Mixed", ko: "혼합" },
 
+  /* ─── About tab ─── */
+  "settings.tab.about": { en: "About", ko: "정보" },
+  "about.checkUpdate": { en: "Check for updates", ko: "업데이트 확인" },
+  "about.checking": { en: "Checking for updates...", ko: "업데이트를 확인하는 중..." },
+  "about.upToDate": { en: "You're on the latest version", ko: "최신 버전입니다" },
+  "about.available": { en: "Update available", ko: "업데이트 가능" },
+  "about.install": { en: "Install update", ko: "업데이트 설치" },
+  "about.downloading": { en: "Downloading...", ko: "다운로드 중..." },
+  "about.restart": { en: "Restart to apply update", ko: "재시작하여 업데이트 적용" },
+  "about.error": { en: "Unable to check for updates. Please try again later.", ko: "업데이트를 확인할 수 없습니다. 나중에 다시 시도하세요." },
+  "about.copyright": { en: "© 2025 Focal Point", ko: "© 2025 Focal Point" },
+
   /* ─── Notes Directory ─── */
   "settings.notesDirectory": { en: "Notes folder", ko: "저장 위치" },
   "settings.notesDirectory.change": { en: "Change", ko: "변경" },
