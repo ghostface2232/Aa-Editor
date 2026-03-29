@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { Button, Tooltip, makeStyles, tokens, mergeClasses } from "@fluentui/react-components";
 import {
+  ArrowDownloadRegular,
   ArrowExportUpRegular,
   ChevronRightRegular,
   CopyRegular,
@@ -9,21 +10,25 @@ import {
   DocumentAddRegular,
   DocumentCopyRegular,
   DocumentRegular,
-  Folder16Regular,
-  FolderOpenRegular,
-  AddSquareMultipleRegular,
-  ArrowFlowSquareMultipleRegular,
+  FolderAddRegular,
+  FolderArrowRightRegular,
+  FolderRegular,
   MoreHorizontalRegular,
-  SquareMultipleRegular,
   RenameRegular,
   SettingsRegular,
-  SubtractSquareMultipleRegular,
   WindowNewRegular,
 } from "@fluentui/react-icons";
 import { t } from "../i18n";
 import type { NoteDoc, NoteGroup } from "../hooks/useNotesLoader";
 import type { GroupLayout, Locale, NotesSortOrder } from "../hooks/useSettings";
 import { openNewWindow } from "../utils/newWindow";
+
+/* FolderAddRegular의 + 를 − 로 바꾼 커스텀 아이콘 */
+const FolderSubtractRegular = () => (
+  <svg fill="currentColor" aria-hidden="true" width="1em" height="1em" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg">
+    <path d="M4.5 3A2.5 2.5 0 0 0 2 5.5v9A2.5 2.5 0 0 0 4.5 17h5.1c-.16-.32-.3-.65-.4-1H4.5A1.5 1.5 0 0 1 3 14.5V8h4.09c.4 0 .78-.16 1.06-.44L9.7 6h5.79c.83 0 1.5.67 1.5 1.5v2.1c.36.18.7.4 1 .66V7.5A2.5 2.5 0 0 0 15.5 5H9.7L8.23 3.51A1.75 1.75 0 0 0 6.98 3H4.5ZM3 5.5C3 4.67 3.67 4 4.5 4h2.48c.2 0 .4.08.53.22L8.8 5.5 7.44 6.85a.5.5 0 0 1-.35.15H3V5.5Zm16 9a4.5 4.5 0 1 1-9 0 4.5 4.5 0 0 1 9 0Zm-6.5-.5a.5.5 0 0 0 0 1h4.5a.5.5 0 0 0 0-1h-4.5Z" fill="currentColor" />
+  </svg>
+);
 
 const SIDE_PADDING = "4px";
 
@@ -69,6 +74,14 @@ const useStyles = makeStyles({
     animationDuration: "0.2s",
     animationTimingFunction: "cubic-bezier(0.4, 0, 0.2, 1)",
     animationFillMode: "backwards",
+  },
+  groupCollapseOut: {
+    animationName: "groupCollapseOut",
+    animationDuration: "0.2s",
+    animationTimingFunction: "cubic-bezier(0.4, 0, 0.2, 1)",
+    animationFillMode: "forwards",
+    overflow: "hidden",
+    pointerEvents: "none",
   },
   docItem: {
     display: "flex",
@@ -473,11 +486,10 @@ interface SidebarProps {
   onSwitchDocument: (index: number) => void;
   onNewNote: () => void;
   onDeleteNote: (index: number) => void;
-  onCloseNote: (index: number) => void;
   onDuplicateNote: (index: number) => void;
   onExportNote: (index: number) => void;
   onRenameNote: (index: number, newName: string) => void;
-  onOpenFile: () => void;
+  onImportFile: () => void;
   notesSortOrder: NotesSortOrder;
   locale: Locale;
   onOpenSettings: () => void;
@@ -518,11 +530,10 @@ export function Sidebar({
   onSwitchDocument,
   onNewNote,
   onDeleteNote,
-  onCloseNote,
   onDuplicateNote,
   onExportNote,
   onRenameNote,
-  onOpenFile,
+  onImportFile,
   notesSortOrder,
   locale,
   onOpenSettings,
@@ -597,6 +608,9 @@ export function Sidebar({
 
   // Track newly created groups (for slide-in animation)
   const prevGroupIdsRef = useRef<Set<string>>(new Set(groups.map((g) => g.id)));
+
+  // Track groups being removed (for collapse-out animation)
+  const [removingGroupIds, setRemovingGroupIds] = useState<Set<string>>(new Set());
   const [newGroupIds, setNewGroupIds] = useState<Set<string>>(new Set());
 
   useEffect(() => {
@@ -692,17 +706,7 @@ export function Sidebar({
   useEffect(() => {
     if (editingIndex !== null && inputRef.current) {
       inputRef.current.focus();
-      const doc = docs[editingIndex];
-      if (doc?.isExternal) {
-        const dotIndex = editingValue.lastIndexOf(".");
-        if (dotIndex > 0) {
-          inputRef.current.setSelectionRange(0, dotIndex);
-        } else {
-          inputRef.current.select();
-        }
-      } else {
-        inputRef.current.select();
-      }
+      inputRef.current.select();
     }
   }, [editingIndex]);
 
@@ -745,6 +749,16 @@ export function Sidebar({
       setEditingGroupValue(defaultName);
     }
   }, [locale, onCreateGroup]);
+
+  const animateGroupRemoval = useCallback((groupId: string, noteIds: string[], callback: () => void) => {
+    // Collect all IDs to animate: group header + its child notes
+    const allIds = new Set<string>([groupId, ...noteIds]);
+    setRemovingGroupIds(allIds);
+    setTimeout(() => {
+      callback();
+      setRemovingGroupIds(new Set());
+    }, 200);
+  }, []);
 
   const handleDoubleClick = useCallback((index: number) => {
     setEditingIndex(index);
@@ -933,6 +947,7 @@ export function Sidebar({
     // Check if this note's group just expanded
     const noteGroup = indented ? getGroupForNote(doc.id) : null;
     const isInExpandingGroup = noteGroup ? expandedGroupIds.has(noteGroup.id) : false;
+    const isInRemovingGroup = removingGroupIds.has(doc.id);
     const expandStagger = isInExpandingGroup && noteGroup
       ? noteGroup.noteIds.indexOf(doc.id) * 0.03
       : 0;
@@ -946,6 +961,7 @@ export function Sidebar({
           newDocIds.has(doc.id) && styles.docItemNew,
           slideUpFromIndex >= 0 && originalIndex >= slideUpFromIndex && styles.docItemSlideUp,
           isInExpandingGroup && styles.groupChildExpand,
+          isInRemovingGroup && styles.groupCollapseOut,
         )}
         style={expandStagger > 0 ? { animationDelay: `${expandStagger}s` } : undefined}
         onMouseEnter={() => setHoveredIndex(originalIndex)}
@@ -978,7 +994,7 @@ export function Sidebar({
         {editingIndex === originalIndex ? (
           <Button
             appearance="subtle"
-            icon={doc.isExternal ? <Folder16Regular /> : <DocumentRegular />}
+            icon={<DocumentRegular />}
             className={mergeClasses(
               originalIndex === activeIndex ? styles.docItemActive : styles.docItem,
               indented && !selectMode && styles.docItemIndented,
@@ -1003,7 +1019,7 @@ export function Sidebar({
           <>
             <Button
               appearance="subtle"
-              icon={doc.isExternal ? <Folder16Regular /> : <DocumentRegular />}
+              icon={<DocumentRegular />}
               className={mergeClasses(
                 originalIndex === activeIndex ? styles.docItemActive : styles.docItem,
                 indented && !selectMode && styles.docItemIndented,
@@ -1022,7 +1038,7 @@ export function Sidebar({
                 styles.docTrailing,
                 (isHovered || isContextTarget) && styles.docTrailingHidden,
               )}>
-                {doc.isDirty && doc.isExternal && (
+                {doc.isDirty && (
                   <span className={styles.dirtyDot}>●</span>
                 )}
                 <span className={styles.docTimestamp}>
@@ -1061,6 +1077,7 @@ export function Sidebar({
     const isGroupHovered = hoveredGroupId === group.id;
     const isContextTarget = contextMenu?.type === "group" && contextMenu.groupId === group.id;
     const noteCount = group.noteIds.filter((id) => docs.some((d) => d.id === id)).length;
+    const isRemoving = removingGroupIds.has(group.id);
 
     return (
       <div
@@ -1069,6 +1086,7 @@ export function Sidebar({
         className={mergeClasses(
           styles.docItemWrapper,
           newGroupIds.has(group.id) && styles.docItemNew,
+          isRemoving && styles.groupCollapseOut,
         )}
         onMouseEnter={() => setHoveredGroupId(group.id)}
         onMouseLeave={() => setHoveredGroupId(null)}
@@ -1209,7 +1227,7 @@ export function Sidebar({
             <Tooltip content={i("sidebar.moveToGroup")} relationship="label" positioning="above">
               <Button
                 appearance="subtle"
-                icon={<ArrowFlowSquareMultipleRegular />}
+                icon={<FolderArrowRightRegular />}
                 className={styles.selectActionBtn}
                 size="small"
                 onClick={(e) => {
@@ -1223,7 +1241,7 @@ export function Sidebar({
             <Tooltip content={i("sidebar.newGroupFromSelection")} relationship="label" positioning="above">
               <Button
                 appearance="subtle"
-                icon={<AddSquareMultipleRegular />}
+                icon={<FolderAddRegular />}
                 className={styles.selectActionBtn}
                 size="small"
                 onClick={() => {
@@ -1238,7 +1256,7 @@ export function Sidebar({
             <Tooltip content={i("sidebar.removeFromGroup")} relationship="label" positioning="above">
               <Button
                 appearance="subtle"
-                icon={<SubtractSquareMultipleRegular />}
+                icon={<FolderSubtractRegular />}
                 className={styles.selectActionBtn}
                 size="small"
                 onClick={() => {
@@ -1313,12 +1331,12 @@ export function Sidebar({
               </Button>
               <Button
                 appearance="subtle"
-                icon={<FolderOpenRegular />}
+                icon={<ArrowDownloadRegular />}
                 className={styles.contextMenuItem}
-                onClick={() => { onOpenFile(); closeContextMenu(); }}
+                onClick={() => { onImportFile(); closeContextMenu(); }}
                 size="small"
               >
-                {i("sidebar.open")}
+                {i("sidebar.import")}
               </Button>
               <Button
                 appearance="subtle"
@@ -1331,7 +1349,7 @@ export function Sidebar({
               </Button>
               <Button
                 appearance="subtle"
-                icon={<AddSquareMultipleRegular />}
+                icon={<FolderAddRegular />}
                 className={styles.contextMenuItem}
                 onClick={() => { handleCreateGroup(); closeContextMenu(); }}
                 size="small"
@@ -1348,7 +1366,7 @@ export function Sidebar({
                 <Button
                   key={g.id}
                   appearance="subtle"
-                  icon={<SquareMultipleRegular />}
+                  icon={<FolderRegular />}
                   className={styles.contextMenuItem}
                   onClick={() => {
                     onMoveNotesToGroup(Array.from(selectedNoteIds), g.id);
@@ -1375,7 +1393,7 @@ export function Sidebar({
                 >
                   <Button
                     appearance="subtle"
-                    icon={<ArrowFlowSquareMultipleRegular />}
+                    icon={<FolderArrowRightRegular />}
                     className={styles.contextMenuItem}
                     size="small"
                   >
@@ -1410,7 +1428,7 @@ export function Sidebar({
               )}
               <Button
                 appearance="subtle"
-                icon={<AddSquareMultipleRegular />}
+                icon={<FolderAddRegular />}
                 className={styles.contextMenuItem}
                 onClick={() => {
                   onCreateGroup(locale === "ko" ? "새 그룹" : "New group", Array.from(selectedNoteIds));
@@ -1424,7 +1442,7 @@ export function Sidebar({
               {Array.from(selectedNoteIds).some((id) => groupedNoteIds.has(id)) && (
               <Button
                 appearance="subtle"
-                icon={<SubtractSquareMultipleRegular />}
+                icon={<FolderSubtractRegular />}
                 className={styles.contextMenuItem}
                 onClick={() => {
                   for (const id of selectedNoteIds) onRemoveNoteFromGroup(id);
@@ -1470,7 +1488,7 @@ export function Sidebar({
                 appearance="subtle"
                 icon={<WindowNewRegular />}
                 className={styles.contextMenuItem}
-                onClick={() => { openNewWindow(docs[contextMenu.index]?.filePath); closeContextMenu(); }}
+                onClick={() => { openNewWindow(docs[contextMenu.index]?.id); closeContextMenu(); }}
                 size="small"
               >
                 {i("sidebar.openInNewWindow")}
@@ -1513,7 +1531,7 @@ export function Sidebar({
                 >
                   <Button
                     appearance="subtle"
-                    icon={<ArrowFlowSquareMultipleRegular />}
+                    icon={<FolderArrowRightRegular />}
                     className={styles.contextMenuItem}
                     size="small"
                   >
@@ -1544,7 +1562,7 @@ export function Sidebar({
                       ))}
                       <Button
                         appearance="subtle"
-                        icon={<AddSquareMultipleRegular />}
+                        icon={<FolderAddRegular />}
                         className={styles.contextMenuItem}
                         onClick={() => {
                           const doc = docs[contextMenu.index];
@@ -1569,7 +1587,7 @@ export function Sidebar({
               {groups.length === 0 && (
                 <Button
                   appearance="subtle"
-                  icon={<AddSquareMultipleRegular />}
+                  icon={<FolderAddRegular />}
                   className={styles.contextMenuItem}
                   onClick={() => {
                     const doc = docs[contextMenu.index];
@@ -1591,7 +1609,7 @@ export function Sidebar({
               {docs[contextMenu.index] && getGroupForNote(docs[contextMenu.index].id) && (
                 <Button
                   appearance="subtle"
-                  icon={<SubtractSquareMultipleRegular />}
+                  icon={<FolderSubtractRegular />}
                   className={styles.contextMenuItem}
                   onClick={() => {
                     const doc = docs[contextMenu.index];
@@ -1604,27 +1622,15 @@ export function Sidebar({
                 </Button>
               )}
 
-              {docs[contextMenu.index]?.isExternal ? (
-                <Button
-                  appearance="subtle"
-                  icon={<DismissRegular />}
-                  className={mergeClasses(styles.contextMenuItem, styles.contextMenuDanger)}
-                  onClick={() => { onCloseNote(contextMenu.index); closeContextMenu(); }}
-                  size="small"
-                >
-                  {i("sidebar.close")}
-                </Button>
-              ) : (
-                <Button
-                  appearance="subtle"
-                  icon={<DeleteRegular />}
-                  className={mergeClasses(styles.contextMenuItem, styles.contextMenuDanger)}
-                  onClick={() => { onDeleteNote(contextMenu.index); closeContextMenu(); }}
-                  size="small"
-                >
-                  {i("sidebar.delete")}
-                </Button>
-              )}
+              <Button
+                appearance="subtle"
+                icon={<DeleteRegular />}
+                className={mergeClasses(styles.contextMenuItem, styles.contextMenuDanger)}
+                onClick={() => { onDeleteNote(contextMenu.index); closeContextMenu(); }}
+                size="small"
+              >
+                {i("sidebar.delete")}
+              </Button>
             </>
           )}
 
@@ -1648,9 +1654,13 @@ export function Sidebar({
               </Button>
               <Button
                 appearance="subtle"
-                icon={<SubtractSquareMultipleRegular />}
+                icon={<FolderSubtractRegular />}
                 className={styles.contextMenuItem}
-                onClick={() => { onUngroupGroup(contextMenu.groupId!); closeContextMenu(); }}
+                onClick={() => {
+                  const gid = contextMenu.groupId!;
+                  closeContextMenu();
+                  animateGroupRemoval(gid, [], () => onUngroupGroup(gid));
+                }}
                 size="small"
               >
                 {i("sidebar.ungroupGroup")}
@@ -1660,16 +1670,19 @@ export function Sidebar({
                 icon={<DeleteRegular />}
                 className={mergeClasses(styles.contextMenuItem, styles.contextMenuDanger)}
                 onClick={() => {
-                  const group = groups.find((g) => g.id === contextMenu.groupId);
-                  if (group) {
-                    // Delete notes in the group
-                    const indices = group.noteIds
-                      .map((nid) => docs.findIndex((d) => d.id === nid))
-                      .filter((idx) => idx >= 0);
-                    onDeleteNotes(indices);
-                  }
-                  onDeleteGroup(contextMenu.groupId!);
+                  const gid = contextMenu.groupId!;
+                  const group = groups.find((g) => g.id === gid);
+                  const noteIds = group?.noteIds ?? [];
                   closeContextMenu();
+                  animateGroupRemoval(gid, noteIds, () => {
+                    if (group) {
+                      const indices = noteIds
+                        .map((nid) => docs.findIndex((d) => d.id === nid))
+                        .filter((idx) => idx >= 0);
+                      onDeleteNotes(indices);
+                    }
+                    onDeleteGroup(gid);
+                  });
                 }}
                 size="small"
               >

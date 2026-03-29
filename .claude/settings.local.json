@@ -17,7 +17,10 @@
       "Bash(npm install:*)",
       "Bash(npm uninstall:*)",
       "Bash(cargo check:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(node:*)"
     ]
   }
 }

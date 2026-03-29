@@ -10,7 +10,7 @@ import {
   Tooltip,
 } from "@fluentui/react-components";
 import {
-  AddSquareMultipleRegular,
+  FolderAddRegular,
   CheckboxCheckedRegular,
   PanelLeftFilled,
   PanelLeftRegular,
@@ -160,7 +160,7 @@ const useStyles = makeStyles({
   sidebarNewGroupBtn: {
     position: "absolute",
     top: "15px",
-    right: "36px",
+    right: "64px",
     zIndex: 10,
     borderRadius: "6px",
     border: "none",
@@ -172,7 +172,7 @@ const useStyles = makeStyles({
   sidebarSelectBtn: {
     position: "absolute",
     top: "15px",
-    right: "64px",
+    right: "36px",
     zIndex: 10,
     borderRadius: "6px",
     border: "none",
@@ -309,23 +309,20 @@ function App() {
     settings.notesSortOrder,
   );
 
-  // URL 쿼리 파라미터로 전달된 파일 열기 (새 창에서 열기)
+  // URL 쿼리 파라미터로 전달된 노트 열기 (새 창에서 열기)
   const fileParamHandled = useRef(false);
   useEffect(() => {
     if (fileParamHandled.current || isLoading || docs.length === 0) return;
     const params = new URLSearchParams(window.location.search);
-    const filePath = params.get("file");
-    if (filePath) {
+    const noteId = params.get("noteId");
+    if (noteId) {
       fileParamHandled.current = true;
-      // docs 로딩 완료 후 중복 체크하여 열기
-      const existing = docs.findIndex((d) => d.filePath === filePath);
+      const existing = docs.findIndex((d) => d.id === noteId);
       if (existing >= 0) {
         fs.switchDocument(existing);
-      } else {
-        fs.openFileByPath(filePath).catch(() => {});
       }
     }
-  }, [isLoading, docs, fs.openFileByPath, fs.switchDocument]);
+  }, [isLoading, docs, fs.switchDocument]);
 
   // 창 간 동기화 (Tauri 이벤트)
   useWindowSync(setDocs, activeIndex, tiptapRef, setActiveIndex, setGroups);
@@ -437,7 +434,7 @@ function App() {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.ctrlKey && e.key === "e") { e.preventDefault(); state.toggleEditing(); }
       if (e.ctrlKey && e.key === "/" && state.isEditing) { e.preventDefault(); handleSwitchEditorMode(); }
-      if (e.ctrlKey && e.key === "o") { e.preventDefault(); fs.openFile(); }
+      if (e.ctrlKey && e.key === "o") { e.preventDefault(); fs.importFile(); }
       if (e.ctrlKey && !e.shiftKey && e.key === "s") { e.preventDefault(); fs.saveFile(); }
       if (e.ctrlKey && e.shiftKey && e.key === "S") { e.preventDefault(); fs.saveFileAs(); }
       if (e.ctrlKey && !e.shiftKey && e.key === "n") { e.preventDefault(); fs.newNote(); }
@@ -447,7 +444,7 @@ function App() {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [state.toggleEditing, handleSwitchEditorMode, state.isEditing, fs.openFile, fs.saveFile, fs.saveFileAs, fs.newNote, docSearchOpen]);
+  }, [state.toggleEditing, handleSwitchEditorMode, state.isEditing, fs.importFile, fs.saveFile, fs.saveFileAs, fs.newNote, docSearchOpen]);
 
   // 마우스 클릭 후 버튼류 요소 자동 blur → Esc/Space 시 포커스 링 방지
   const settingsOpenRef = useRef(settingsOpen);
@@ -571,7 +568,7 @@ function App() {
           paragraphSpacing={settings.paragraphSpacing}
           onToggleEditing={state.toggleEditing}
           onNewNote={fs.newNote}
-          onOpenFile={fs.openFile}
+          onImportFile={fs.importFile}
           onToggleTheme={handleToggleTheme}
           onOpenSettings={() => setSettingsOpen(true)}
           onUpdateParagraphSpacing={(v) => updateSetting("paragraphSpacing", v)}
@@ -617,7 +614,7 @@ function App() {
                 <Tooltip content={locale === "ko" ? "새 그룹" : "New group"} relationship="label" positioning="below" appearance={isDarkMode ? "inverted" : undefined}>
                   <Button
                     appearance="subtle"
-                    icon={<AddSquareMultipleRegular />}
+                    icon={<span style={{ display: "flex", marginTop: "-1px" }}><FolderAddRegular /></span>}
                     className={styles.sidebarNewGroupBtn}
                     onClick={() => {
                       const defaultName = locale === "ko" ? "새 그룹" : "New group";
@@ -642,11 +639,11 @@ function App() {
               onSwitchDocument={fs.switchDocument}
               onNewNote={fs.newNote}
               onDeleteNote={fs.deleteNote}
-              onCloseNote={fs.closeNote}
+
               onDuplicateNote={fs.duplicateNote}
               onExportNote={fs.exportNote}
               onRenameNote={fs.renameNote}
-              onOpenFile={fs.openFile}
+              onImportFile={fs.importFile}
               notesSortOrder={settings.notesSortOrder}
               locale={locale}
               onOpenSettings={() => setSettingsOpen(true)}

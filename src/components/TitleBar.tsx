@@ -119,7 +119,7 @@ interface TitleBarProps {
   paragraphSpacing: ParagraphSpacing;
   onToggleEditing: () => void;
   onNewNote: () => void;
-  onOpenFile: () => void;
+  onImportFile: () => void;
   onToggleTheme: () => void;
   onOpenSettings: () => void;
   onUpdateParagraphSpacing: (v: ParagraphSpacing) => void;
@@ -136,7 +136,7 @@ export function TitleBar({
   paragraphSpacing,
   onToggleEditing,
   onNewNote,
-  onOpenFile,
+  onImportFile,
   onToggleTheme,
   onOpenSettings,
   onUpdateParagraphSpacing,
@@ -156,7 +156,7 @@ export function TitleBar({
           editor={editor}
           paragraphSpacing={paragraphSpacing}
           onNewNote={onNewNote}
-          onOpenFile={onOpenFile}
+          onImportFile={onImportFile}
           onToggleTheme={onToggleTheme}
           onOpenSettings={onOpenSettings}
           onUpdateParagraphSpacing={onUpdateParagraphSpacing}

@@ -2,10 +2,10 @@ import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 
 let windowCounter = 0;
 
-export function openNewWindow(filePath?: string) {
+export function openNewWindow(noteId?: string) {
   windowCounter++;
   const label = `win-${Date.now()}-${windowCounter}`;
-  const url = filePath ? `/?file=${encodeURIComponent(filePath)}` : "/";
+  const url = noteId ? `/?noteId=${encodeURIComponent(noteId)}` : "/";
 
   new WebviewWindow(label, {
     url,

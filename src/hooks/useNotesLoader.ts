@@ -8,7 +8,6 @@ export interface NoteDoc {
   id: string;
   filePath: string;
   fileName: string;
-  isExternal: boolean;
   isDirty: boolean;
   content: string;
   createdAt: number;
@@ -101,11 +100,10 @@ export async function saveManifest(
 ): Promise<void> {
   const manifest: Manifest = {
     version: 1,
-    notes: docs.map(({ id, filePath, fileName, isExternal, createdAt, updatedAt }) => ({
+    notes: docs.map(({ id, filePath, fileName, createdAt, updatedAt }) => ({
       id,
       filePath,
       fileName,
-      isExternal,
       createdAt,
       updatedAt,
     })),
@@ -173,7 +171,6 @@ export function useNotesLoader(
                   id,
                   filePath,
                   fileName: deriveTitle(content) || getDefaultDocumentTitle(locale),
-                  isExternal: false,
                   isDirty: false,
                   content,
                   createdAt: timestamp,
@@ -194,7 +191,6 @@ export function useNotesLoader(
               id,
               filePath,
               fileName: getDefaultDocumentTitle(locale),
-              isExternal: false,
               isDirty: false,
               content: "",
               createdAt: timestamp,
@@ -214,7 +210,6 @@ export function useNotesLoader(
           id: "local",
           filePath: "",
           fileName: getDefaultDocumentTitle(locale),
-          isExternal: false,
           isDirty: false,
           content: "",
           createdAt: timestamp,

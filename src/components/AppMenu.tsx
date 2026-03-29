@@ -4,7 +4,7 @@ import { Button, makeStyles, tokens } from "@fluentui/react-components";
 import {
   NavigationRegular,
   DocumentAddRegular,
-  FolderOpenRegular,
+  ArrowDownloadRegular,
   ArrowExportUpRegular,
   ArrowUndoRegular,
   ArrowRedoRegular,
@@ -129,7 +129,7 @@ interface AppMenuProps {
   editor: Editor | null;
   paragraphSpacing: ParagraphSpacing;
   onNewNote: () => void;
-  onOpenFile: () => void;
+  onImportFile: () => void;
   onToggleTheme: () => void;
   onOpenSettings: () => void;
   onUpdateParagraphSpacing: (v: ParagraphSpacing) => void;
@@ -146,7 +146,7 @@ export function AppMenu({
   editor,
   paragraphSpacing,
   onNewNote,
-  onOpenFile,
+  onImportFile,
   onToggleTheme,
   onOpenSettings,
   onUpdateParagraphSpacing,
@@ -219,8 +219,8 @@ export function AppMenu({
             <Button appearance="subtle" icon={<DocumentAddRegular />} className={styles.menuItem} onClick={() => act(onNewNote)} size="small">
               <span>{i("menu.newDoc")}</span><span className={styles.shortcut}>Ctrl+N</span>
             </Button>
-            <Button appearance="subtle" icon={<FolderOpenRegular />} className={styles.menuItem} onClick={() => act(onOpenFile)} size="small">
-              <span>{i("menu.open")}</span><span className={styles.shortcut}>Ctrl+O</span>
+            <Button appearance="subtle" icon={<ArrowDownloadRegular />} className={styles.menuItem} onClick={() => act(onImportFile)} size="small">
+              <span>{i("menu.import")}</span><span className={styles.shortcut}>Ctrl+O</span>
             </Button>
             <Button appearance="subtle" icon={<WindowNewRegular />} className={styles.menuItem} onClick={() => act(() => openNewWindow())} size="small">
               <span>{i("menu.newWindow")}</span><span className={styles.shortcut}>Ctrl+Shift+N</span>

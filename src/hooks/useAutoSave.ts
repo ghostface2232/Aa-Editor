@@ -29,7 +29,7 @@ export function useAutoSave(
     if (!state.isDirty) return;
 
     const doc = docs[activeIndex];
-    if (!doc?.filePath || doc.isExternal) return;
+    if (!doc?.filePath) return;
 
     if (timerRef.current) clearTimeout(timerRef.current);
     timerRef.current = setTimeout(async () => {
@@ -41,7 +41,7 @@ export function useAutoSave(
       } = stateRef.current;
 
       const target = latestDocs[latestActiveIndex];
-      if (!target?.filePath || target.isExternal) return;
+      if (!target?.filePath) return;
 
       const content = getCurrentMarkdown(latestState, latestEditorRef);
 
@@ -59,7 +59,7 @@ export function useAutoSave(
             content,
             isDirty: false,
             updatedAt: Date.now(),
-            fileName: docEntry.isExternal ? docEntry.fileName : autoTitle,
+            fileName: autoTitle,
           };
         });
 

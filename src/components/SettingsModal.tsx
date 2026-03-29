@@ -376,14 +376,6 @@ export function SettingsModal({ open, onClose, settings, onUpdate }: SettingsMod
                 </div>
 
                 <div className={mergeClasses(styles.row, settingItemClass(styles))}>
-                  <Label className={styles.label}>{i("settings.keepFormat")}</Label>
-                  <Switch
-                    checked={settings.keepFormatOnPaste}
-                    onChange={(_, data) => onUpdate("keepFormatOnPaste", data.checked)}
-                  />
-                </div>
-
-                <div className={mergeClasses(styles.row, settingItemClass(styles))}>
                   <Label className={styles.label}>{i("settings.spellcheck")}</Label>
                   <Switch
                     checked={settings.spellcheck}
@@ -432,6 +424,14 @@ export function SettingsModal({ open, onClose, settings, onUpdate }: SettingsMod
                     onChange={(_, data) => onUpdate("paragraphSpacing", data.value as ParagraphSpacing)}
                   />
                 </div>
+
+                <div className={mergeClasses(styles.row, settingItemClass(styles))}>
+                  <Label className={styles.label}>{i("settings.keepFormat")}</Label>
+                  <Switch
+                    checked={settings.keepFormatOnPaste}
+                    onChange={(_, data) => onUpdate("keepFormatOnPaste", data.checked)}
+                  />
+                </div>
               </div>
             )}
 
@@ -443,7 +443,7 @@ export function SettingsModal({ open, onClose, settings, onUpdate }: SettingsMod
                 <span>{i("settings.shortcut.switchEditor")}</span>
                 <span className={styles.shortcutKey}>Ctrl+/</span>
 
-                <span>{i("settings.shortcut.open")}</span>
+                <span>{i("settings.shortcut.import")}</span>
                 <span className={styles.shortcutKey}>Ctrl+O</span>
 
                 <span>{i("settings.shortcut.save")}</span>
