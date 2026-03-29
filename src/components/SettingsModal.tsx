@@ -15,6 +15,7 @@ import {
 } from "@fluentui/react-components";
 import { t } from "../i18n";
 import type {
+  FontFamily,
   GroupLayout,
   Locale,
   NotesSortOrder,
@@ -395,6 +396,18 @@ export function SettingsModal({ open, onClose, settings, onUpdate }: SettingsMod
             {tab === "formatting" && (
               <div className={styles.section}>
                 <div className={mergeClasses(styles.row, settingItemClass(styles, true))}>
+                  <Label className={styles.label}>{i("settings.fontFamily")}</Label>
+                  <RadioGroup
+                    layout="horizontal"
+                    value={settings.fontFamily}
+                    onChange={(_, data) => onUpdate("fontFamily", data.value as FontFamily)}
+                  >
+                    <Radio value="sans" label={i("settings.fontFamily.sans")} />
+                    <Radio value="serif" label={i("settings.fontFamily.serif")} />
+                  </RadioGroup>
+                </div>
+
+                <div className={mergeClasses(styles.row, settingItemClass(styles))}>
                   <Label className={styles.label}>{i("settings.wordWrap")}</Label>
                   <RadioGroup
                     layout="horizontal"

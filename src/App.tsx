@@ -98,7 +98,7 @@ const useStyles = makeStyles({
     top: 0,
     bottom: 0,
     width: "8px",
-    cursor: "col-resize",
+    cursor: "ew-resize",
     zIndex: 100,
     display: "flex",
     alignItems: "center",
@@ -119,7 +119,7 @@ const useStyles = makeStyles({
     },
   },
   sidebarResizing: {
-    cursor: "col-resize",
+    cursor: "ew-resize",
     "::after": {
       opacity: "1 !important",
     },
@@ -543,7 +543,10 @@ function App() {
       style={{ background: "transparent" }}
       data-theme={isDarkMode ? "dark" : "light"}
     >
-      <div className={mergeClasses(styles.root, settingsOpen && styles.rootBlurred)}>
+      <div
+        className={mergeClasses(styles.root, settingsOpen && styles.rootBlurred)}
+        style={{ "--editor-font-family": `var(--editor-font-family-${settings.fontFamily})` } as React.CSSProperties}
+      >
         <div
           className={mergeClasses(
             styles.micaOverlay,
@@ -675,7 +678,7 @@ function App() {
               onMouseDown={(e) => {
                 e.preventDefault();
                 setSidebarResizing(true);
-                document.body.style.cursor = "col-resize";
+                document.body.style.cursor = "ew-resize";
                 const startX = e.clientX;
                 const startW = sidebarWidth;
                 const onMove = (ev: MouseEvent) => {

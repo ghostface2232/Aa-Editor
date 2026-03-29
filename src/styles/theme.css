@@ -32,6 +32,30 @@
 }
 
 @font-face {
+  font-family: "Noto Serif";
+  src: url("/fonts/NotoSerif-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Noto Serif";
+  src: url("/fonts/NotoSerif-Medium.woff2") format("woff2");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Noto Serif";
+  src: url("/fonts/NotoSerif-SemiBold.woff2") format("woff2");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
   font-family: "SF Mono";
   src: url("/fonts/SF-Mono-Regular.woff2") format("woff2");
   font-weight: 400;
@@ -68,7 +92,7 @@
   /* ─── 폰트 ─── */
   --editor-font-family-sans: "SF Pro KR", system-ui, sans-serif;
   --editor-font-family-mono: "SF Mono", "SF Pro KR", ui-monospace, monospace;
-  --editor-font-family-serif: "SF Pro KR", Georgia, serif;
+  --editor-font-family-serif: "Noto Serif", Georgia, serif;
   --editor-font-family: var(--editor-font-family-sans);
 
   /* ─── 레이아웃 (테마와 무관, 독립 정의) ─── */
