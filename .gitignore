@@ -22,6 +22,10 @@ dist-ssr
 *.sln
 *.sw?
 
+# Signing keys
+~/
+.env
+
 # Claude Code
 .claude/
 AGENTS.md
