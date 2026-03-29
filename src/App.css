@@ -12,11 +12,12 @@ body,
 #root {
   height: 100%;
   overflow: hidden;
-  background: transparent !important;
+  background: transparent;
 }
 
 body {
-  background: transparent !important;
+  background: transparent;
+  transition: background 0.2s ease;
   font-family: var(--editor-font-family);
   font-size: var(--editor-font-size);
   line-height: var(--editor-line-height);

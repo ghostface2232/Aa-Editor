@@ -197,6 +197,7 @@ function App() {
   const state = useMarkdownState();
   const styles = useStyles();
   const tiptapRef = useRef<TiptapEditorHandle>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
   const [tiptapEditor, setTiptapEditor] = useState<import("@tiptap/react").Editor | null>(null);
   const startupModeApplied = useRef(false);
 
@@ -329,11 +330,29 @@ function App() {
     exportAsRtf(html, name);
   }, [activeDoc?.fileName, tiptapEditor]);
 
+  // 에디터 모드 전환 시 스크롤 위치 보존
+  const handleSwitchEditorMode = useCallback(() => {
+    const el = contentRef.current;
+    const scrollRatio = el && el.scrollHeight > el.clientHeight
+      ? el.scrollTop / (el.scrollHeight - el.clientHeight)
+      : 0;
+
+    state.switchEditorMode();
+
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (el && el.scrollHeight > el.clientHeight) {
+          el.scrollTop = scrollRatio * (el.scrollHeight - el.clientHeight);
+        }
+      });
+    });
+  }, [state.switchEditorMode]);
+
   // 단축키
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.ctrlKey && e.key === "e") { e.preventDefault(); state.toggleEditing(); }
-      if (e.ctrlKey && e.key === "/" && state.isEditing) { e.preventDefault(); state.switchEditorMode(); }
+      if (e.ctrlKey && e.key === "/" && state.isEditing) { e.preventDefault(); handleSwitchEditorMode(); }
       if (e.ctrlKey && e.key === "o") { e.preventDefault(); fs.openFile(); }
       if (e.ctrlKey && !e.shiftKey && e.key === "s") { e.preventDefault(); fs.saveFile(); }
       if (e.ctrlKey && e.shiftKey && e.key === "S") { e.preventDefault(); fs.saveFileAs(); }
@@ -343,7 +362,7 @@ function App() {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [state.toggleEditing, state.switchEditorMode, state.isEditing, fs.openFile, fs.saveFile, fs.saveFileAs, fs.newNote, docSearchOpen]);
+  }, [state.toggleEditing, handleSwitchEditorMode, state.isEditing, fs.openFile, fs.saveFile, fs.saveFileAs, fs.newNote, docSearchOpen]);
 
   // 마우스 클릭 후 버튼류 요소 자동 blur → Esc/Space 시 포커스 링 방지
   useEffect(() => {
@@ -384,6 +403,20 @@ function App() {
     window.addEventListener("contextmenu", handleContextMenu);
     return () => window.removeEventListener("contextmenu", handleContextMenu);
   }, []);
+
+  // 설정 모달 열릴 때 body 배경색 설정 (blur 가장자리 흰색 방지)
+  useEffect(() => {
+    if (settingsOpen) {
+      document.body.style.transition = "none";
+      document.body.style.background = isDarkMode ? "#1a1a1a" : "#f3f3f3";
+    } else {
+      document.body.style.transition = "background 0.2s ease";
+      const timer = setTimeout(() => {
+        document.body.style.background = "transparent";
+      }, 100);
+      return () => clearTimeout(timer);
+    }
+  }, [settingsOpen, isDarkMode]);
 
   // 검색 닫힐 때 하이라이트 정리
   useEffect(() => {
@@ -536,14 +569,14 @@ function App() {
           <div className={styles.floatingCard}>
             <EditorToolbar
               editorMode={state.editorMode}
-              onSwitchMode={state.switchEditorMode}
+              onSwitchMode={handleSwitchEditorMode}
               editor={tiptapEditor}
               sidebarOpen={sidebarOpen}
               visible={state.isEditing}
               locale={locale}
             />
 
-            <div className={styles.content}>
+            <div ref={contentRef} className={styles.content}>
               {docSearchOpen && (
                 <div className={styles.searchBarAnchor}>
                   <SearchBar

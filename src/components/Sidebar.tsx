@@ -119,43 +119,19 @@ const useStyles = makeStyles({
     flex: 1,
     textAlign: "left",
   },
-  /* WinUI3-style TextBox — replaces the entire Button row when renaming */
-  renameBox: {
-    display: "flex",
-    alignItems: "center",
-    width: "100%",
-    minHeight: "32px",
-    borderRadius: "4px",
-    backgroundColor: tokens.colorNeutralBackground1,
-    border: `1px solid ${tokens.colorNeutralStroke1}`,
-    borderBottomWidth: "2px",
-    borderBottomStyle: "solid",
-    borderBottomColor: tokens.colorBrandStroke1,
-    position: "relative",
-    boxSizing: "border-box",
-  },
   renameInput: {
-    flex: 1,
     border: "none",
     outline: "none",
     fontSize: "13px",
     fontFamily: "inherit",
     lineHeight: "20px",
-    padding: "4px 8px 4px 34px",
-    backgroundColor: "transparent",
+    padding: "2px 6px",
+    backgroundColor: tokens.colorNeutralBackground1,
     color: tokens.colorNeutralForeground1,
     minWidth: 0,
-    caretColor: tokens.colorBrandForeground1,
-  },
-  renameIcon: {
-    position: "absolute",
-    left: "8px",
-    top: "50%",
-    transform: "translateY(-50%)",
-    display: "flex",
-    alignItems: "center",
-    color: tokens.colorNeutralForeground3,
-    pointerEvents: "none",
+    flex: 1,
+    borderRadius: "3px",
+    marginLeft: "-6px",
   },
   moreBtn: {
     position: "absolute",
@@ -589,22 +565,28 @@ export function Sidebar({
               onContextMenu={(e) => handleContextMenu(originalIndex, e)}
             >
               {editingIndex === originalIndex ? (
-                <div className={styles.renameBox}>
-                  <span className={styles.renameIcon}>
-                    <DocumentRegular fontSize={16} />
-                  </span>
-                  <input
-                    ref={inputRef}
-                    className={styles.renameInput}
-                    value={editingValue}
-                    onChange={(e) => setEditingValue(e.target.value)}
-                    onBlur={commitRename}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") { e.preventDefault(); commitRename(); }
-                      if (e.key === "Escape") { e.preventDefault(); setEditingIndex(null); }
-                    }}
-                  />
-                </div>
+                <>
+                  <Button
+                    appearance="subtle"
+                    icon={doc.isExternal ? <Folder16Regular /> : <DocumentRegular />}
+                    className={originalIndex === activeIndex ? styles.docItemActive : styles.docItem}
+                    size="small"
+                    style={{ pointerEvents: "none" }}
+                  >
+                    <input
+                      ref={inputRef}
+                      className={styles.renameInput}
+                      value={editingValue}
+                      onChange={(e) => setEditingValue(e.target.value)}
+                      onBlur={commitRename}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") { e.preventDefault(); commitRename(); }
+                        if (e.key === "Escape") { e.preventDefault(); setEditingIndex(null); }
+                      }}
+                      style={{ pointerEvents: "auto" }}
+                    />
+                  </Button>
+                </>
               ) : (
                 <>
                   <Button
@@ -612,7 +594,6 @@ export function Sidebar({
                     icon={doc.isExternal ? <Folder16Regular /> : <DocumentRegular />}
                     className={originalIndex === activeIndex ? styles.docItemActive : styles.docItem}
                     onClick={() => onSwitchDocument(originalIndex)}
-                    onDoubleClick={() => handleDoubleClick(originalIndex)}
                     size="small"
                   >
                     <span className={styles.docName}>{doc.fileName}</span>
