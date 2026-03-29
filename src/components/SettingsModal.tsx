@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import {
   Dialog,
   DialogSurface,
@@ -15,6 +15,7 @@ import {
 } from "@fluentui/react-components";
 import { t } from "../i18n";
 import type {
+  GroupLayout,
   Locale,
   NotesSortOrder,
   ParagraphSpacing,
@@ -214,6 +215,8 @@ function sortOrderLabelKey(order: NotesSortOrder): Parameters<typeof t>[0] {
   return SORT_ORDER_LABELS[order];
 }
 
+const NOISE_SVG = `url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")`;
+
 function settingItemClass(
   styles: ReturnType<typeof useStyles>,
   isFirst = false,
@@ -228,11 +231,22 @@ export function SettingsModal({ open, onClose, settings, onUpdate }: SettingsMod
   const i = (key: Parameters<typeof t>[0]) => t(key, locale);
   const [tab, setTab] = useState<TabId>("system");
 
-  const micaBg = isDarkMode ? "rgba(44, 44, 44, 0.92)" : "rgba(243, 243, 243, 0.90)";
-  const panelBg = isDarkMode ? "rgba(56, 56, 56, 0.70)" : "rgba(255, 255, 255, 0.70)";
-  const borderColor = isDarkMode ? "rgba(255, 255, 255, 0.06)" : "rgba(0, 0, 0, 0.06)";
-  const noiseOpacity = isDarkMode ? 0.035 : 0.025;
-  const noiseSvg = `url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")`;
+  const themeStyles = useMemo(() => {
+    const dark = isDarkMode;
+    return {
+      micaBg: dark ? "rgba(44, 44, 44, 0.92)" : "rgba(243, 243, 243, 0.90)",
+      panelBg: dark ? "rgba(56, 56, 56, 0.70)" : "rgba(255, 255, 255, 0.70)",
+      borderColor: dark ? "rgba(255, 255, 255, 0.06)" : "rgba(0, 0, 0, 0.06)",
+      noiseOpacity: dark ? 0.035 : 0.025,
+      backdropBg: dark ? "rgba(0, 0, 0, 0.30)" : "rgba(0, 0, 0, 0.14)",
+      navHover: dark ? "rgba(255, 255, 255, 0.08)" : "rgba(0, 0, 0, 0.04)",
+      navActiveBg: dark ? "rgba(255, 255, 255, 0.10)" : "rgba(0, 0, 0, 0.06)",
+      surfaceShadow: dark
+        ? "0 12px 48px rgba(0,0,0,0.5), 0 4px 12px rgba(0,0,0,0.3)"
+        : "0 8px 32px rgba(0,0,0,0.12), 0 2px 8px rgba(0,0,0,0.06)",
+      dropdownBg: dark ? "rgba(0,0,0,0.25)" : "rgba(0,0,0,0.08)",
+    };
+  }, [isDarkMode]);
 
   const navItems: { id: TabId; labelKey: Parameters<typeof t>[0] }[] = [
     { id: "system", labelKey: "settings.tab.system" },
@@ -245,31 +259,28 @@ export function SettingsModal({ open, onClose, settings, onUpdate }: SettingsMod
       <DialogSurface
         className={styles.surface}
         style={{
-          background: micaBg,
+          background: themeStyles.micaBg,
           backdropFilter: "saturate(120%) blur(60px)",
           WebkitBackdropFilter: "saturate(120%) blur(60px)",
-          border: `1px solid ${borderColor}`,
-          boxShadow: isDarkMode
-            ? "0 12px 48px rgba(0,0,0,0.5), 0 4px 12px rgba(0,0,0,0.3)"
-            : "0 8px 32px rgba(0,0,0,0.12), 0 2px 8px rgba(0,0,0,0.06)",
+          border: `1px solid ${themeStyles.borderColor}`,
+          boxShadow: themeStyles.surfaceShadow,
+          willChange: "transform, opacity",
         }}
         backdrop={{
           style: {
-            backgroundColor: isDarkMode ? "rgba(0, 0, 0, 0.30)" : "rgba(0, 0, 0, 0.14)",
+            backgroundColor: themeStyles.backdropBg,
           },
         }}
       >
         <div className={styles.layout}>
           <div
             className={styles.noiseOverlay}
-            style={{ backgroundImage: noiseSvg, opacity: noiseOpacity }}
+            style={{ backgroundImage: NOISE_SVG, opacity: themeStyles.noiseOpacity }}
           />
           <nav
             className={styles.nav}
             style={{
-              "--settings-nav-hover": isDarkMode
-                ? "rgba(255, 255, 255, 0.08)"
-                : "rgba(0, 0, 0, 0.04)",
+              "--settings-nav-hover": themeStyles.navHover,
             } as React.CSSProperties}
           >
             <span className={styles.navTitle}>{i("settings.title")}</span>
@@ -279,11 +290,7 @@ export function SettingsModal({ open, onClose, settings, onUpdate }: SettingsMod
                 <button
                   key={item.id}
                   className={active ? styles.navItemActive : styles.navItem}
-                  style={active ? {
-                    backgroundColor: isDarkMode
-                      ? "rgba(255, 255, 255, 0.10)"
-                      : "rgba(0, 0, 0, 0.06)",
-                  } : undefined}
+                  style={active ? { backgroundColor: themeStyles.navActiveBg } : undefined}
                   onClick={() => setTab(item.id)}
                 >
                   {i(item.labelKey)}
@@ -292,7 +299,7 @@ export function SettingsModal({ open, onClose, settings, onUpdate }: SettingsMod
             })}
           </nav>
 
-          <div className={styles.content} style={{ backgroundColor: panelBg }}>
+          <div className={styles.content} style={{ backgroundColor: themeStyles.panelBg }}>
             {tab === "system" && (
               <div className={styles.section}>
                 <div className={mergeClasses(styles.row, settingItemClass(styles, true))}>
@@ -335,7 +342,7 @@ export function SettingsModal({ open, onClose, settings, onUpdate }: SettingsMod
                   <Label className={styles.label}>{i("settings.noteOrder")}</Label>
                   <Dropdown
                     className={styles.dropdown}
-                    style={{ backgroundColor: isDarkMode ? "rgba(0,0,0,0.25)" : "rgba(0,0,0,0.08)" }}
+                    style={{ backgroundColor: themeStyles.dropdownBg }}
                     value={i(sortOrderLabelKey(settings.notesSortOrder))}
                     selectedOptions={[settings.notesSortOrder]}
                     onOptionSelect={(_, data) => {
@@ -347,6 +354,23 @@ export function SettingsModal({ open, onClose, settings, onUpdate }: SettingsMod
                     <Option value="updated-asc">{i("settings.noteOrder.updatedAsc")}</Option>
                     <Option value="created-desc">{i("settings.noteOrder.createdDesc")}</Option>
                     <Option value="created-asc">{i("settings.noteOrder.createdAsc")}</Option>
+                  </Dropdown>
+                </div>
+
+                <div className={mergeClasses(styles.row, settingItemClass(styles))}>
+                  <Label className={styles.label}>{i("settings.groupLayout")}</Label>
+                  <Dropdown
+                    className={styles.dropdown}
+                    style={{ backgroundColor: themeStyles.dropdownBg }}
+                    value={i(settings.groupLayout === "groups-first" ? "settings.groupsFirst" : "settings.mixed")}
+                    selectedOptions={[settings.groupLayout]}
+                    onOptionSelect={(_, data) => {
+                      if (data.optionValue) onUpdate("groupLayout", data.optionValue as GroupLayout);
+                    }}
+                    appearance="outline"
+                  >
+                    <Option value="groups-first">{i("settings.groupsFirst")}</Option>
+                    <Option value="mixed">{i("settings.mixed")}</Option>
                   </Dropdown>
                 </div>
 

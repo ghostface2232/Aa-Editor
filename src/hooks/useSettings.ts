@@ -8,6 +8,7 @@ export type StartupMode = "read" | "edit";
 export type NotesSortOrder = "updated-desc" | "updated-asc" | "created-desc" | "created-asc";
 export type WordWrap = "word" | "char";
 export type ParagraphSpacing = 0 | 10 | 20 | 30 | 40 | 50;
+export type GroupLayout = "groups-first" | "mixed";
 
 export interface Settings {
   locale: Locale;
@@ -18,6 +19,7 @@ export interface Settings {
   paragraphSpacing: ParagraphSpacing;
   keepFormatOnPaste: boolean;
   spellcheck: boolean;
+  groupLayout: GroupLayout;
 }
 
 const DEFAULTS: Settings = {
@@ -29,6 +31,7 @@ const DEFAULTS: Settings = {
   paragraphSpacing: 30,
   keepFormatOnPaste: true,
   spellcheck: false,
+  groupLayout: "groups-first",
 };
 
 let settingsPathPromise: Promise<string> | null = null;

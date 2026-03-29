@@ -71,6 +71,19 @@ const dict = {
   "sidebar.export": { en: "Export", ko: "내보내기" },
   "sidebar.copyContent": { en: "Copy content", ko: "내용 전체 복사" },
   "sidebar.deleteConfirm": { en: "Are you sure you want to delete this document?", ko: "이 문서를 삭제하시겠습니까?" },
+  "sidebar.newGroup": { en: "New group", ko: "새 그룹" },
+  "sidebar.addToGroup": { en: "Add to group...", ko: "그룹에 추가..." },
+  "sidebar.removeFromGroup": { en: "Remove from group", ko: "그룹에서 제거" },
+  "sidebar.renameGroup": { en: "Rename", ko: "이름 바꾸기" },
+  "sidebar.ungroupGroup": { en: "Ungroup", ko: "그룹 해제" },
+  "sidebar.deleteGroupAndNotes": { en: "Delete group and notes", ko: "그룹과 노트 삭제" },
+  "sidebar.newGroupFromSelection": { en: "New group from selection", ko: "선택으로 새 그룹" },
+  "sidebar.moveToGroup": { en: "Move to group...", ko: "그룹으로 이동..." },
+  "sidebar.deleteSelected": { en: "Delete selected", ko: "선택 항목 삭제" },
+  "sidebar.select": { en: "Select", ko: "선택" },
+  "sidebar.cancelSelect": { en: "Cancel", ko: "취소" },
+  "sidebar.nSelected": { en: " selected", ko: "개 선택됨" },
+  "sidebar.groupNamePlaceholder": { en: "Group name", ko: "그룹 이름" },
 
   /* ─── StatusBar ─── */
   "status.chars": { en: " chars", ko: " 자" },
@@ -107,6 +120,9 @@ const dict = {
   "settings.tab.formatting": { en: "Formatting", ko: "서식" },
   "settings.tab.shortcuts": { en: "Shortcuts", ko: "단축키" },
   "settings.spellcheck": { en: "Spelling & grammar indicators", ko: "맞춤법 및 문법 표시" },
+  "settings.groupLayout": { en: "Group layout", ko: "그룹 배치" },
+  "settings.groupsFirst": { en: "Groups first", ko: "그룹 우선" },
+  "settings.mixed": { en: "Mixed", ko: "혼합" },
 
   /* ─── Search ─── */
   "search.placeholder": { en: "Find in document", ko: "문서에서 찾기" },

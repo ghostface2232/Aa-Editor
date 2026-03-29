@@ -16,10 +16,19 @@ export interface NoteDoc {
   customName?: boolean;
 }
 
+export interface NoteGroup {
+  id: string;
+  name: string;
+  noteIds: string[];
+  collapsed: boolean;
+  createdAt: number;
+}
+
 interface Manifest {
   version: 1;
   notes: Omit<NoteDoc, "isDirty" | "content">[];
   activeNoteId: string | null;
+  groups?: NoteGroup[];
 }
 
 const UI_STATE_STORAGE_KEY = "markdown-studio-ui-state";
@@ -88,6 +97,7 @@ async function readFileContent(path: string): Promise<string> {
 export async function saveManifest(
   docs: NoteDoc[],
   activeId: string | null,
+  groups?: NoteGroup[],
 ): Promise<void> {
   const manifest: Manifest = {
     version: 1,
@@ -100,6 +110,7 @@ export async function saveManifest(
       updatedAt,
     })),
     activeNoteId: activeId,
+    groups: groups && groups.length > 0 ? groups : undefined,
   };
 
   try {
@@ -116,6 +127,7 @@ export function useNotesLoader(
 ) {
   const [docs, setDocs] = useState<NoteDoc[]>([]);
   const [activeIndex, setActiveIndex] = useState(0);
+  const [groups, setGroups] = useState<NoteGroup[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const initialized = useRef(false);
 
@@ -138,6 +150,7 @@ export function useNotesLoader(
 
           const sorted = sortNotes(loaded, notesSortOrder);
           setDocs(sorted);
+          setGroups(manifest.groups ?? []);
 
           const activeId = manifest.activeNoteId ?? sorted[0]?.id ?? null;
           const nextActiveIndex = activeId
@@ -214,7 +227,7 @@ export function useNotesLoader(
     })();
   }, [enabled, locale, notesSortOrder]);
 
-  return { docs, setDocs, activeIndex, setActiveIndex, isLoading };
+  return { docs, setDocs, activeIndex, setActiveIndex, groups, setGroups, isLoading };
 }
 
 export function deriveTitle(content: string): string {

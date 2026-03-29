@@ -7,13 +7,21 @@ import {
   mergeClasses,
   tokens,
   Button,
+  Tooltip,
 } from "@fluentui/react-components";
-import { PanelLeftRegular, PanelLeftFilled, SearchRegular } from "@fluentui/react-icons";
+import {
+  AddSquareMultipleRegular,
+  CheckboxCheckedRegular,
+  PanelLeftFilled,
+  PanelLeftRegular,
+  SearchRegular,
+} from "@fluentui/react-icons";
 import { getCurrentWindow, Effect } from "@tauri-apps/api/window";
 import { useMarkdownState } from "./hooks/useMarkdownState";
 import { useFileSystem } from "./hooks/useFileSystem";
 import { saveManifest, sortNotes, useNotesLoader } from "./hooks/useNotesLoader";
 import { useAutoSave } from "./hooks/useAutoSave";
+import { useNoteGroups } from "./hooks/useNoteGroups";
 import { useSettings } from "./hooks/useSettings";
 
 import {
@@ -47,6 +55,7 @@ const useStyles = makeStyles({
   },
   rootBlurred: {
     filter: "blur(4px)",
+    willChange: "filter",
   },
   micaOverlay: {
     position: "absolute",
@@ -89,7 +98,7 @@ const useStyles = makeStyles({
     top: 0,
     bottom: 0,
     width: "8px",
-    cursor: "grab",
+    cursor: "col-resize",
     zIndex: 100,
     display: "flex",
     alignItems: "center",
@@ -110,7 +119,7 @@ const useStyles = makeStyles({
     },
   },
   sidebarResizing: {
-    cursor: "grabbing",
+    cursor: "col-resize",
     "::after": {
       opacity: "1 !important",
     },
@@ -140,6 +149,30 @@ const useStyles = makeStyles({
     position: "absolute",
     top: "15px",
     right: "8px",
+    zIndex: 10,
+    borderRadius: "6px",
+    border: "none",
+    minWidth: "auto",
+    height: "28px",
+    width: "28px",
+    padding: "0",
+  },
+  sidebarNewGroupBtn: {
+    position: "absolute",
+    top: "15px",
+    right: "36px",
+    zIndex: 10,
+    borderRadius: "6px",
+    border: "none",
+    minWidth: "auto",
+    height: "28px",
+    width: "28px",
+    padding: "0",
+  },
+  sidebarSelectBtn: {
+    position: "absolute",
+    top: "15px",
+    right: "64px",
     zIndex: 10,
     borderRadius: "6px",
     border: "none",
@@ -213,11 +246,18 @@ function App() {
   const startupModeApplied = useRef(false);
 
   // 노트 로더
-  const { docs, setDocs, activeIndex, setActiveIndex, isLoading } = useNotesLoader(
+  const { docs, setDocs, activeIndex, setActiveIndex, groups, setGroups, isLoading } = useNotesLoader(
     locale,
     settings.notesSortOrder,
     settingsLoaded,
   );
+
+  // 그룹 관리
+  const noteGroups = useNoteGroups(groups, setGroups, docs, activeIndex);
+
+  // Select 모드 & 그룹 생성 상태
+  const [selectMode, setSelectMode] = useState(false);
+  const [creatingGroup, setCreatingGroup] = useState(false);
 
   // 초기 로드 완료 시 에디터에 첫 문서 로드
   useEffect(() => {
@@ -253,6 +293,8 @@ function App() {
     setActiveIndex,
     locale,
     settings.notesSortOrder,
+    groups,
+    noteGroups.cleanupDeletedNote,
   );
 
   // 자동 저장
@@ -286,7 +328,7 @@ function App() {
   }, [isLoading, docs, fs.openFileByPath, fs.switchDocument]);
 
   // 창 간 동기화 (Tauri 이벤트)
-  useWindowSync(setDocs, activeIndex, tiptapRef, setActiveIndex);
+  useWindowSync(setDocs, activeIndex, tiptapRef, setActiveIndex, setGroups);
 
   // OS Mica 효과
   const [micaSupported, setMicaSupported] = useState(true);
@@ -321,10 +363,11 @@ function App() {
       ? Math.max(sortedDocs.findIndex((doc) => doc.id === activeId), 0)
       : 0;
     setActiveIndex(nextActiveIndex);
-    void saveManifest(sortedDocs, activeId).catch(() => {});
+    void saveManifest(sortedDocs, activeId, groups).catch(() => {});
   }, [
     activeIndex,
     docs,
+    groups,
     settings.notesSortOrder,
     settingsLoaded,
     setActiveIndex,
@@ -365,6 +408,11 @@ function App() {
     const html = tiptapEditor?.getHTML() ?? "";
     exportAsRtf(html, name);
   }, [activeDoc?.fileName, tiptapEditor]);
+
+  const handleDeleteNotes = useCallback((indices: number[]) => {
+    const sorted = [...indices].sort((a, b) => b - a);
+    for (const idx of sorted) fs.deleteNote(idx);
+  }, [fs.deleteNote]);
 
   // 에디터 모드 전환 시 스크롤 위치 보존
   const handleSwitchEditorMode = useCallback(() => {
@@ -553,12 +601,33 @@ function App() {
             style={sidebarOpen ? { "--shell-sidebar-width": `${sidebarWidth}px` } as React.CSSProperties : undefined}
           >
             {sidebarOpen && (
-              <Button
-                appearance="subtle"
-                icon={<SearchRegular />}
-                className={styles.sidebarSearchBtn}
-                onClick={() => setSidebarSearchOpen((o) => !o)}
-              />
+              <>
+                <Tooltip content={locale === "ko" ? "선택" : "Select"} relationship="label" positioning="below" appearance="inverted">
+                  <Button
+                    appearance="subtle"
+                    icon={<CheckboxCheckedRegular />}
+                    className={styles.sidebarSelectBtn}
+                    onClick={() => setSelectMode((o) => !o)}
+                    style={selectMode ? { backgroundColor: "var(--ui-active-bg)" } : undefined}
+                  />
+                </Tooltip>
+                <Tooltip content={locale === "ko" ? "새 그룹" : "New group"} relationship="label" positioning="below" appearance="inverted">
+                  <Button
+                    appearance="subtle"
+                    icon={<AddSquareMultipleRegular />}
+                    className={styles.sidebarNewGroupBtn}
+                    onClick={() => setCreatingGroup(true)}
+                  />
+                </Tooltip>
+                <Tooltip content={locale === "ko" ? "검색" : "Search"} relationship="label" positioning="below" appearance="inverted">
+                  <Button
+                    appearance="subtle"
+                    icon={<SearchRegular />}
+                    className={styles.sidebarSearchBtn}
+                    onClick={() => setSidebarSearchOpen((o) => !o)}
+                  />
+                </Tooltip>
+              </>
             )}
             <Sidebar
               docs={docs}
@@ -578,6 +647,21 @@ function App() {
               sidebarSearchQuery={sidebarSearchQuery}
               onSidebarSearchQueryChange={setSidebarSearchQuery}
               onSidebarSearchClose={() => { setSidebarSearchOpen(false); setSidebarSearchQuery(""); }}
+              groups={groups}
+              groupLayout={settings.groupLayout}
+              onCreateGroup={noteGroups.createGroup}
+              onRenameGroup={noteGroups.renameGroup}
+              onDeleteGroup={noteGroups.deleteGroup}
+              onUngroupGroup={noteGroups.ungroupGroup}
+              onAddNoteToGroup={noteGroups.addNoteToGroup}
+              onRemoveNoteFromGroup={noteGroups.removeNoteFromGroup}
+              onMoveNotesToGroup={noteGroups.moveNotesToGroup}
+              onToggleGroupCollapsed={noteGroups.toggleGroupCollapsed}
+              onDeleteNotes={handleDeleteNotes}
+              selectMode={selectMode}
+              onSelectModeChange={setSelectMode}
+              creatingGroup={creatingGroup}
+              onCreatingGroupChange={setCreatingGroup}
             />
             <div
               className={mergeClasses(
@@ -587,7 +671,7 @@ function App() {
               onMouseDown={(e) => {
                 e.preventDefault();
                 setSidebarResizing(true);
-                document.body.style.cursor = "grabbing";
+                document.body.style.cursor = "col-resize";
                 const startX = e.clientX;
                 const startW = sidebarWidth;
                 const onMove = (ev: MouseEvent) => {

@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { emit, listen } from "@tauri-apps/api/event";
-import type { NoteDoc } from "./useNotesLoader";
+import type { NoteDoc, NoteGroup } from "./useNotesLoader";
 
 interface DocUpdatedPayload {
   sourceWindow: string;
@@ -27,6 +27,11 @@ interface DocDeletedPayload {
 interface DocCreatedPayload {
   sourceWindow: string;
   doc: Omit<NoteDoc, "isDirty">;
+}
+
+interface GroupsUpdatedPayload {
+  sourceWindow: string;
+  groups: NoteGroup[];
 }
 
 const WINDOW_LABEL = getCurrentWindow().label;
@@ -58,6 +63,12 @@ export function emitDocCreated(doc: NoteDoc) {
   } satisfies DocCreatedPayload).catch(() => {});
 }
 
+export function emitGroupsUpdated(groups: NoteGroup[]) {
+  emit("groups-updated", {
+    sourceWindow: WINDOW_LABEL, groups,
+  } satisfies GroupsUpdatedPayload).catch(() => {});
+}
+
 /* ── Listener hook ── */
 
 export function useWindowSync(
@@ -65,70 +76,82 @@ export function useWindowSync(
   activeIndex: number,
   tiptapRef: React.RefObject<{ setContent: (md: string) => void } | null>,
   setActiveIndex: React.Dispatch<React.SetStateAction<number>>,
+  setGroups?: React.Dispatch<React.SetStateAction<NoteGroup[]>>,
 ) {
   // Refs to avoid stale closures in event listeners
   const activeIndexRef = useRef(activeIndex);
   activeIndexRef.current = activeIndex;
 
   useEffect(() => {
-    const unlisteners: (() => void)[] = [];
+    let mounted = true;
+    let unlisteners: (() => void)[] = [];
 
-    listen<DocUpdatedPayload>("doc-updated", (event) => {
-      const { sourceWindow, docId, content, fileName, updatedAt } = event.payload;
-      if (sourceWindow === WINDOW_LABEL) return;
+    Promise.all([
+      listen<DocUpdatedPayload>("doc-updated", (event) => {
+        const { sourceWindow, docId, content, fileName, updatedAt } = event.payload;
+        if (sourceWindow === WINDOW_LABEL) return;
 
-      setDocs((prev) => {
-        const idx = prev.findIndex((d) => d.id === docId);
-        if (idx < 0) return prev;
-        const updated = [...prev];
-        updated[idx] = { ...updated[idx], content, fileName, updatedAt, isDirty: false };
+        setDocs((prev) => {
+          const idx = prev.findIndex((d) => d.id === docId);
+          if (idx < 0) return prev;
+          const updated = [...prev];
+          updated[idx] = { ...updated[idx], content, fileName, updatedAt, isDirty: false };
 
-        if (idx === activeIndexRef.current && tiptapRef.current) {
-          tiptapRef.current.setContent(content);
-        }
-        return updated;
-      });
-    }).then((fn) => unlisteners.push(fn));
+          if (idx === activeIndexRef.current && tiptapRef.current) {
+            tiptapRef.current.setContent(content);
+          }
+          return updated;
+        });
+      }),
 
-    listen<DocRenamedPayload>("doc-renamed", (event) => {
-      const { sourceWindow, docId, newFilePath, newFileName } = event.payload;
-      if (sourceWindow === WINDOW_LABEL) return;
+      listen<DocRenamedPayload>("doc-renamed", (event) => {
+        const { sourceWindow, docId, newFilePath, newFileName } = event.payload;
+        if (sourceWindow === WINDOW_LABEL) return;
 
-      setDocs((prev) => {
-        const idx = prev.findIndex((d) => d.id === docId);
-        if (idx < 0) return prev;
-        const updated = [...prev];
-        updated[idx] = { ...updated[idx], filePath: newFilePath, fileName: newFileName };
-        return updated;
-      });
-    }).then((fn) => unlisteners.push(fn));
+        setDocs((prev) => {
+          const idx = prev.findIndex((d) => d.id === docId);
+          if (idx < 0) return prev;
+          const updated = [...prev];
+          updated[idx] = { ...updated[idx], filePath: newFilePath, fileName: newFileName };
+          return updated;
+        });
+      }),
 
-    listen<DocDeletedPayload>("doc-deleted", (event) => {
-      const { sourceWindow, docId } = event.payload;
-      if (sourceWindow === WINDOW_LABEL) return;
+      listen<DocDeletedPayload>("doc-deleted", (event) => {
+        const { sourceWindow, docId } = event.payload;
+        if (sourceWindow === WINDOW_LABEL) return;
 
-      setDocs((prev) => {
-        const idx = prev.findIndex((d) => d.id === docId);
-        if (idx < 0) return prev;
-        const filtered = prev.filter((d) => d.id !== docId);
-        // Adjust activeIndex if needed
-        if (activeIndexRef.current >= filtered.length) {
-          setActiveIndex(Math.max(0, filtered.length - 1));
-        }
-        return filtered;
-      });
-    }).then((fn) => unlisteners.push(fn));
+        setDocs((prev) => {
+          const idx = prev.findIndex((d) => d.id === docId);
+          if (idx < 0) return prev;
+          const filtered = prev.filter((d) => d.id !== docId);
+          if (activeIndexRef.current >= filtered.length) {
+            setActiveIndex(Math.max(0, filtered.length - 1));
+          }
+          return filtered;
+        });
+      }),
 
-    listen<DocCreatedPayload>("doc-created", (event) => {
-      const { sourceWindow, doc } = event.payload;
-      if (sourceWindow === WINDOW_LABEL) return;
+      listen<DocCreatedPayload>("doc-created", (event) => {
+        const { sourceWindow, doc } = event.payload;
+        if (sourceWindow === WINDOW_LABEL) return;
 
-      setDocs((prev) => {
-        if (prev.some((d) => d.id === doc.id || d.filePath === doc.filePath)) return prev;
-        return [...prev, { ...doc, isDirty: false }];
-      });
-    }).then((fn) => unlisteners.push(fn));
+        setDocs((prev) => {
+          if (prev.some((d) => d.id === doc.id || d.filePath === doc.filePath)) return prev;
+          return [...prev, { ...doc, isDirty: false }];
+        });
+      }),
 
-    return () => { unlisteners.forEach((fn) => fn()); };
-  }, [setDocs, setActiveIndex, tiptapRef]);
+      listen<GroupsUpdatedPayload>("groups-updated", (event) => {
+        const { sourceWindow, groups } = event.payload;
+        if (sourceWindow === WINDOW_LABEL) return;
+        setGroups?.(groups);
+      }),
+    ]).then((fns) => {
+      if (!mounted) { fns.forEach((fn) => fn()); return; }
+      unlisteners = fns;
+    });
+
+    return () => { mounted = false; unlisteners.forEach((fn) => fn()); };
+  }, [setDocs, setActiveIndex, tiptapRef, setGroups]);
 }

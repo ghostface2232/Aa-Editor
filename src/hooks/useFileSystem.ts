@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { mkdir, readTextFile, writeTextFile, remove, rename } from "@tauri-apps/plugin-fs";
 import {
@@ -7,6 +7,7 @@ import {
   deriveTitle,
   sortNotes,
   type NoteDoc,
+  type NoteGroup,
 } from "./useNotesLoader";
 import type { MarkdownState } from "./useMarkdownState";
 import type { TiptapEditorHandle } from "../components/TiptapEditor";
@@ -28,6 +29,7 @@ function sortAndPersistDocs(
   notesSortOrder: NotesSortOrder,
   setDocs: React.Dispatch<React.SetStateAction<NoteDoc[]>>,
   setActiveIndex: React.Dispatch<React.SetStateAction<number>>,
+  groups?: NoteGroup[],
 ) {
   const sortedDocs = sortNotes(nextDocs, notesSortOrder);
   const nextActiveIndex = activeId
@@ -36,7 +38,7 @@ function sortAndPersistDocs(
 
   setDocs(sortedDocs);
   setActiveIndex(nextActiveIndex);
-  void saveManifest(sortedDocs, activeId).catch(() => {});
+  void saveManifest(sortedDocs, activeId, groups).catch(() => {});
 }
 
 export function getCurrentMarkdown(
@@ -92,7 +94,12 @@ export function useFileSystem(
   setActiveIndex: React.Dispatch<React.SetStateAction<number>>,
   locale: Locale,
   notesSortOrder: NotesSortOrder,
+  groups?: NoteGroup[],
+  cleanupDeletedNote?: (noteId: string) => void,
 ): FileSystemActions {
+  const groupsRef = useRef(groups);
+  groupsRef.current = groups;
+
   const cacheCurrentContent = useCallback(() => {
     const markdown = getCurrentMarkdown(state, tiptapRef);
     setDocs((prev) => {
@@ -135,7 +142,7 @@ export function useFileSystem(
       };
     });
 
-    sortAndPersistDocs(nextDocs, doc.id, notesSortOrder, setDocs, setActiveIndex);
+    sortAndPersistDocs(nextDocs, doc.id, notesSortOrder, setDocs, setActiveIndex, groupsRef.current);
     state.setIsDirty(false);
     state.setTiptapDirty(false);
   }, [activeIndex, docs, locale, notesSortOrder, setActiveIndex, setDocs, state, tiptapRef]);
@@ -188,7 +195,7 @@ export function useFileSystem(
     };
 
     const nextDocs = [...docs, newDoc];
-    sortAndPersistDocs(nextDocs, newDoc.id, notesSortOrder, setDocs, setActiveIndex);
+    sortAndPersistDocs(nextDocs, newDoc.id, notesSortOrder, setDocs, setActiveIndex, groupsRef.current);
 
     loadIntoEditor(tiptapRef, content);
     resetDocState(state, path, content);
@@ -227,7 +234,7 @@ export function useFileSystem(
     };
 
     const nextDocs = [...docs, newDoc];
-    sortAndPersistDocs(nextDocs, newDoc.id, notesSortOrder, setDocs, setActiveIndex);
+    sortAndPersistDocs(nextDocs, newDoc.id, notesSortOrder, setDocs, setActiveIndex, groupsRef.current);
 
     loadIntoEditor(tiptapRef, content);
     resetDocState(state, path, content);
@@ -259,7 +266,7 @@ export function useFileSystem(
     };
 
     const nextDocs = [...docs, newDoc];
-    sortAndPersistDocs(nextDocs, newDoc.id, notesSortOrder, setDocs, setActiveIndex);
+    sortAndPersistDocs(nextDocs, newDoc.id, notesSortOrder, setDocs, setActiveIndex, groupsRef.current);
     emitDocCreated(newDoc);
 
     loadIntoEditor(tiptapRef, "");
@@ -284,7 +291,7 @@ export function useFileSystem(
     loadIntoEditor(tiptapRef, target.content);
     resetDocState(state, target.filePath, target.content);
     setActiveIndex(index);
-    void saveManifest(docs, target.id).catch(() => {});
+    void saveManifest(docs, target.id, groupsRef.current).catch(() => {});
   }, [activeIndex, cacheCurrentContent, docs, setActiveIndex, state, tiptapRef]);
 
   const deleteNote = useCallback(async (index: number) => {
@@ -302,6 +309,7 @@ export function useFileSystem(
 
     const nextDocs = docs.filter((_, i) => i !== index);
     emitDocDeleted(doc.id);
+    cleanupDeletedNote?.(doc.id);
 
     // If we deleted the last doc, create a fresh one
     if (nextDocs.length === 0) {
@@ -329,7 +337,7 @@ export function useFileSystem(
       setActiveIndex(0);
       loadIntoEditor(tiptapRef, "");
       resetDocState(state, filePath, "");
-      void saveManifest([newDoc], newDoc.id).catch(() => {});
+      void saveManifest([newDoc], newDoc.id, groupsRef.current).catch(() => {});
       return;
     }
 
@@ -346,8 +354,8 @@ export function useFileSystem(
       nextActiveId = docs[activeIndex].id;
     }
 
-    sortAndPersistDocs(nextDocs, nextActiveId, notesSortOrder, setDocs, setActiveIndex);
-  }, [activeIndex, docs, locale, notesSortOrder, setActiveIndex, setDocs, state, tiptapRef]);
+    sortAndPersistDocs(nextDocs, nextActiveId, notesSortOrder, setDocs, setActiveIndex, groupsRef.current);
+  }, [activeIndex, docs, locale, notesSortOrder, setActiveIndex, setDocs, state, tiptapRef, cleanupDeletedNote]);
 
   const closeNote = useCallback((index: number) => {
     const doc = docs[index];
@@ -379,7 +387,7 @@ export function useFileSystem(
         setActiveIndex(0);
         loadIntoEditor(tiptapRef, "");
         resetDocState(state, filePath, "");
-        void saveManifest([newDoc], newDoc.id).catch(() => {});
+        void saveManifest([newDoc], newDoc.id, groupsRef.current).catch(() => {});
       })();
       return;
     }
@@ -396,7 +404,7 @@ export function useFileSystem(
       nextActiveId = docs[activeIndex].id;
     }
 
-    sortAndPersistDocs(nextDocs, nextActiveId, notesSortOrder, setDocs, setActiveIndex);
+    sortAndPersistDocs(nextDocs, nextActiveId, notesSortOrder, setDocs, setActiveIndex, groupsRef.current);
   }, [activeIndex, docs, locale, notesSortOrder, setActiveIndex, setDocs, state, tiptapRef]);
 
   const duplicateNote = useCallback(async (index: number) => {
@@ -435,7 +443,7 @@ export function useFileSystem(
     }
 
     const nextDocs = [...docs, newDoc];
-    sortAndPersistDocs(nextDocs, newDoc.id, notesSortOrder, setDocs, setActiveIndex);
+    sortAndPersistDocs(nextDocs, newDoc.id, notesSortOrder, setDocs, setActiveIndex, groupsRef.current);
     loadIntoEditor(tiptapRef, content);
     resetDocState(state, filePath, content);
   }, [cacheCurrentContent, docs, notesSortOrder, setActiveIndex, setDocs, state, tiptapRef]);
@@ -488,7 +496,7 @@ export function useFileSystem(
       state.setFilePath(newFilePath);
     }
 
-    sortAndPersistDocs(nextDocs, doc.id, notesSortOrder, setDocs, setActiveIndex);
+    sortAndPersistDocs(nextDocs, doc.id, notesSortOrder, setDocs, setActiveIndex, groupsRef.current);
     emitDocRenamed(doc.id, doc.filePath, newFilePath, trimmed);
   }, [activeIndex, docs, notesSortOrder, setActiveIndex, setDocs, state]);
 
