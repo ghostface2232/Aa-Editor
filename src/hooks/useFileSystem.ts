@@ -14,6 +14,7 @@ import type { TiptapEditorHandle } from "../components/TiptapEditor";
 import type { Locale, NotesSortOrder } from "./useSettings";
 import { getDefaultDocumentTitle } from "../utils/documentTitle";
 import { emitDocCreated, emitDocDeleted, emitDocRenamed } from "./useWindowSync";
+import { markOwnWrite } from "./useFileWatcher";
 
 export type { NoteDoc } from "./useNotesLoader";
 
@@ -38,6 +39,7 @@ function sortAndPersistDocs(
 
   setDocs(sortedDocs);
   setActiveIndex(nextActiveIndex);
+  markOwnWrite();
   void saveManifest(sortedDocs, activeId, groups).catch(() => {});
 }
 
@@ -122,6 +124,7 @@ export function useFileSystem(
       targetPath = selected;
     }
 
+    markOwnWrite();
     await writeTextFile(targetPath, markdown);
 
     const nextDocs = docs.map((entry, index) => {
@@ -151,6 +154,7 @@ export function useFileSystem(
     const defaultName = doc?.filePath ? getFileName(doc.filePath) : "untitled.md";
     const selected = await save({ filters: MD_FILTERS, defaultPath: defaultName });
     if (!selected) return;
+    markOwnWrite();
     await writeTextFile(selected, markdown);
   }, [activeIndex, docs, state, tiptapRef]);
 
@@ -183,6 +187,7 @@ export function useFileSystem(
       const notesDir = await getNotesDir();
       await mkdir(notesDir, { recursive: true }).catch(() => {});
       filePath = `${notesDir}/${id}.md`;
+      markOwnWrite();
       await writeTextFile(filePath, content);
     } catch (error) {
       console.warn("Failed to write imported note file:", error);
@@ -241,6 +246,7 @@ export function useFileSystem(
     if (!filePath) return;
 
     try {
+      markOwnWrite();
       await writeTextFile(filePath, "");
     } catch (error) {
       console.warn("Failed to create new note file:", error);
@@ -257,6 +263,7 @@ export function useFileSystem(
     loadIntoEditor(tiptapRef, target.content);
     resetDocState(state, target.filePath, target.content);
     setActiveIndex(index);
+    markOwnWrite();
     void saveManifest(docs, target.id, groupsRef.current).catch(() => {});
   }, [activeIndex, cacheCurrentContent, docs, setActiveIndex, state, tiptapRef]);
 
@@ -267,6 +274,7 @@ export function useFileSystem(
     // Remove the file from disk
     if (doc.filePath) {
       try {
+        markOwnWrite();
         await remove(doc.filePath);
       } catch {
         console.warn("Failed to delete note file:", doc.filePath);
@@ -285,6 +293,7 @@ export function useFileSystem(
       try {
         const notesDir = await getNotesDir();
         filePath = `${notesDir}/${id}.md`;
+        markOwnWrite();
         await writeTextFile(filePath, "");
       } catch { /* ignore */ }
 
@@ -302,6 +311,7 @@ export function useFileSystem(
       setActiveIndex(0);
       loadIntoEditor(tiptapRef, "");
       resetDocState(state, filePath, "");
+      markOwnWrite();
       void saveManifest([newDoc], newDoc.id, groupsRef.current).catch(() => {});
       return;
     }
@@ -350,6 +360,7 @@ export function useFileSystem(
 
     if (filePath) {
       try {
+        markOwnWrite();
         await writeTextFile(filePath, content);
       } catch {
         console.warn("Failed to write duplicated note file.");

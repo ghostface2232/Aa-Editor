@@ -22,6 +22,7 @@ export interface Settings {
   spellcheck: boolean;
   groupLayout: GroupLayout;
   fontFamily: FontFamily;
+  notesDirectory: string;
 }
 
 const DEFAULTS: Settings = {
@@ -35,6 +36,7 @@ const DEFAULTS: Settings = {
   spellcheck: false,
   groupLayout: "groups-first",
   fontFamily: "sans",
+  notesDirectory: "",
 };
 
 let settingsPathPromise: Promise<string> | null = null;

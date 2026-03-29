@@ -34,6 +34,10 @@ const UI_STATE_STORAGE_KEY = "markdown-studio-ui-state";
 
 let notesDirCache: string | null = null;
 
+/** Migration in progress — blocks saveManifest writes */
+export let migrationInProgress = false;
+export function setMigrationInProgress(v: boolean) { migrationInProgress = v; }
+
 export function sortNotes(docs: NoteDoc[], order: NotesSortOrder): NoteDoc[] {
   const sorted = [...docs];
   const desc = order.endsWith("-desc");
@@ -65,11 +69,40 @@ export async function getNotesDir(): Promise<string> {
   return notesDirCache;
 }
 
+/** Set the notes directory to a custom path */
+export function setNotesDir(dir: string) {
+  notesDirCache = dir;
+}
+
+/** Reset notes directory cache so getNotesDir() recomputes the default */
+export function resetNotesDir() {
+  notesDirCache = null;
+}
+
 async function ensureNotesDir(): Promise<string> {
   const dir = await getNotesDir();
   await mkdir(dir, { recursive: true }).catch(() => {});
   return dir;
 }
+
+// --- File-based manifest ---
+
+async function readManifestFromFile(dir: string): Promise<Manifest | null> {
+  try {
+    const sep = dir.endsWith("/") || dir.endsWith("\\") ? "" : "/";
+    const raw = await readTextFile(`${dir}${sep}manifest.json`);
+    return JSON.parse(raw) as Manifest;
+  } catch {
+    return null;
+  }
+}
+
+async function writeManifestToFile(dir: string, manifest: Manifest): Promise<void> {
+  const sep = dir.endsWith("/") || dir.endsWith("\\") ? "" : "/";
+  await writeTextFile(`${dir}${sep}manifest.json`, JSON.stringify(manifest, null, 2));
+}
+
+// --- localStorage fallback (backup / migration source) ---
 
 function readStoredManifest(): Manifest | null {
   try {
@@ -85,6 +118,34 @@ function writeStoredManifest(manifest: Manifest) {
   localStorage.setItem(UI_STATE_STORAGE_KEY, JSON.stringify(manifest));
 }
 
+// --- Unified manifest read/write ---
+
+async function readManifest(dir: string): Promise<Manifest | null> {
+  // Primary: file-based manifest
+  const fileManifest = await readManifestFromFile(dir);
+  if (fileManifest) return fileManifest;
+
+  // Fallback: localStorage (one-time migration)
+  const lsManifest = readStoredManifest();
+  if (lsManifest) {
+    // Migrate to file-based
+    try {
+      await writeManifestToFile(dir, lsManifest);
+    } catch {
+      console.warn("Failed to migrate manifest from localStorage to file.");
+    }
+    return lsManifest;
+  }
+
+  return null;
+}
+
+async function writeManifest(dir: string, manifest: Manifest): Promise<void> {
+  await writeManifestToFile(dir, manifest);
+  // Also write to localStorage as backup
+  writeStoredManifest(manifest);
+}
+
 async function readFileContent(path: string): Promise<string> {
   try {
     return await readTextFile(path);
@@ -93,11 +154,84 @@ async function readFileContent(path: string): Promise<string> {
   }
 }
 
+// --- Startup reconciliation: folder ↔ manifest ---
+
+function getFileBaseName(filePath: string): string {
+  return filePath.replace(/\\/g, "/").split("/").pop() ?? "";
+}
+
+async function reconcileWithFolder(
+  dir: string,
+  docs: NoteDoc[],
+  groups: NoteGroup[],
+  locale: Locale,
+): Promise<{ docs: NoteDoc[]; groups: NoteGroup[]; changed: boolean }> {
+  let entries: { name?: string }[];
+  try {
+    entries = await readDir(dir);
+  } catch {
+    return { docs, groups, changed: false };
+  }
+
+  const mdFiles = entries.filter((e) => e.name?.endsWith(".md"));
+  const folderFileNames = new Set(mdFiles.map((e) => e.name!));
+  const docFileNames = new Set(docs.map((d) => getFileBaseName(d.filePath)));
+
+  let changed = false;
+  let nextDocs = [...docs];
+  let nextGroups = [...groups];
+
+  // Add files in folder but missing from manifest
+  for (const entry of mdFiles) {
+    const name = entry.name!;
+    if (docFileNames.has(name)) continue;
+
+    const filePath = `${dir}/${name}`;
+    let content = "";
+    try { content = await readTextFile(filePath); } catch { continue; }
+
+    const id = name.replace(/\.md$/, "");
+    const timestamp = Date.now();
+    nextDocs.push({
+      id,
+      filePath,
+      fileName: deriveTitle(content) || getDefaultDocumentTitle(locale),
+      isDirty: false,
+      content,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    });
+    changed = true;
+  }
+
+  // Remove docs whose files no longer exist
+  const beforeLen = nextDocs.length;
+  const removedIds = new Set<string>();
+  nextDocs = nextDocs.filter((d) => {
+    if (!d.filePath) return true;
+    const name = getFileBaseName(d.filePath);
+    if (folderFileNames.has(name)) return true;
+    removedIds.add(d.id);
+    return false;
+  });
+  if (nextDocs.length !== beforeLen) {
+    changed = true;
+    nextGroups = nextGroups.map((g) => ({
+      ...g,
+      noteIds: g.noteIds.filter((id) => !removedIds.has(id)),
+    })).filter((g) => g.noteIds.length > 0);
+  }
+
+  return { docs: nextDocs, groups: nextGroups, changed };
+}
+
 export async function saveManifest(
   docs: NoteDoc[],
   activeId: string | null,
   groups?: NoteGroup[],
 ): Promise<void> {
+  if (migrationInProgress) return;
+
   const manifest: Manifest = {
     version: 1,
     notes: docs.map(({ id, filePath, fileName, createdAt, updatedAt }) => ({
@@ -112,7 +246,8 @@ export async function saveManifest(
   };
 
   try {
-    writeStoredManifest(manifest);
+    const dir = await getNotesDir();
+    await writeManifest(dir, manifest);
   } catch {
     console.warn("Failed to persist UI state manifest.");
   }
@@ -122,12 +257,21 @@ export function useNotesLoader(
   locale: Locale,
   notesSortOrder: NotesSortOrder,
   enabled = true,
+  reloadKey = 0,
 ) {
   const [docs, setDocs] = useState<NoteDoc[]>([]);
   const [activeIndex, setActiveIndex] = useState(0);
   const [groups, setGroups] = useState<NoteGroup[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const initialized = useRef(false);
+
+  // Reset initialized when reloadKey changes so the effect re-runs
+  useEffect(() => {
+    if (reloadKey > 0) {
+      initialized.current = false;
+      setIsLoading(true);
+    }
+  }, [reloadKey]);
 
   useEffect(() => {
     if (!enabled || initialized.current) return;
@@ -136,7 +280,7 @@ export function useNotesLoader(
     (async () => {
       try {
         const dir = await ensureNotesDir();
-        const manifest = readStoredManifest();
+        const manifest = await readManifest(dir);
 
         if (manifest && manifest.notes.length > 0) {
           const loaded = await Promise.all(
@@ -146,15 +290,28 @@ export function useNotesLoader(
             }),
           );
 
-          const sorted = sortNotes(loaded, notesSortOrder);
+          // Reconcile: pick up new .md files not in manifest, drop missing ones
+          const { docs: reconciled, groups: reconciledGroups, changed: reconcileChanged } =
+            await reconcileWithFolder(dir, loaded, manifest.groups ?? [], locale);
+
+          const finalDocs = reconcileChanged ? reconciled : loaded;
+          const finalGroups = reconcileChanged ? reconciledGroups : (manifest.groups ?? []);
+
+          const sorted = sortNotes(finalDocs, notesSortOrder);
           setDocs(sorted);
-          setGroups(manifest.groups ?? []);
+          setGroups(finalGroups);
 
           const activeId = manifest.activeNoteId ?? sorted[0]?.id ?? null;
           const nextActiveIndex = activeId
             ? sorted.findIndex((doc) => doc.id === activeId)
             : 0;
           setActiveIndex(nextActiveIndex >= 0 ? nextActiveIndex : 0);
+
+          // Persist if reconciliation made changes
+          if (reconcileChanged) {
+            const aid = sorted[nextActiveIndex >= 0 ? nextActiveIndex : 0]?.id ?? null;
+            await saveManifest(sorted, aid, finalGroups).catch(() => {});
+          }
         } else {
           let foundNotes: NoteDoc[] = [];
 
@@ -220,7 +377,7 @@ export function useNotesLoader(
         setIsLoading(false);
       }
     })();
-  }, [enabled, locale, notesSortOrder]);
+  }, [enabled, locale, notesSortOrder, reloadKey]);
 
   return { docs, setDocs, activeIndex, setActiveIndex, groups, setGroups, isLoading };
 }

@@ -19,7 +19,7 @@ import {
 import { getCurrentWindow, Effect } from "@tauri-apps/api/window";
 import { useMarkdownState } from "./hooks/useMarkdownState";
 import { useFileSystem } from "./hooks/useFileSystem";
-import { saveManifest, sortNotes, useNotesLoader } from "./hooks/useNotesLoader";
+import { saveManifest, sortNotes, useNotesLoader, getNotesDir, setNotesDir, resetNotesDir, setMigrationInProgress } from "./hooks/useNotesLoader";
 import { useAutoSave } from "./hooks/useAutoSave";
 import { useNoteGroups } from "./hooks/useNoteGroups";
 import { useSettings } from "./hooks/useSettings";
@@ -37,9 +37,13 @@ import { SettingsModal } from "./components/SettingsModal";
 import { SearchBar } from "./components/SearchBar";
 import { searchPluginKey, type SearchPluginState } from "./extensions/SearchHighlight";
 import { setCmSearch } from "./extensions/cmSearchHighlight";
+import { t } from "./i18n";
 import { exportAsMarkdown, exportAsPdf, exportAsRtf } from "./utils/exportHandlers";
+import { migrateNotesDir, hasManifest } from "./utils/migrateNotesDir";
+import { useFileWatcher } from "./hooks/useFileWatcher";
 import { useWindowSync } from "./hooks/useWindowSync";
 import { openNewWindow } from "./utils/newWindow";
+import { open as openDialog, confirm, ask, message } from "@tauri-apps/plugin-dialog";
 import "./App.css";
 
 const useStyles = makeStyles({
@@ -245,11 +249,31 @@ function App() {
   const [tiptapEditor, setTiptapEditor] = useState<import("@tiptap/react").Editor | null>(null);
   const startupModeApplied = useRef(false);
 
+  // 노트 디렉토리 초기화 (settings 로드 → 경로 설정 → 노트 로딩)
+  const [notesDirReady, setNotesDirReady] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
+  const [currentNotesDir, setCurrentNotesDir] = useState("");
+
+  useEffect(() => {
+    if (!settingsLoaded) return;
+    (async () => {
+      if (settings.notesDirectory) {
+        setNotesDir(settings.notesDirectory);
+      } else {
+        resetNotesDir();
+      }
+      const dir = await getNotesDir();
+      setCurrentNotesDir(dir);
+      setNotesDirReady(true);
+    })();
+  }, [settingsLoaded, settings.notesDirectory]);
+
   // 노트 로더
   const { docs, setDocs, activeIndex, setActiveIndex, groups, setGroups, isLoading } = useNotesLoader(
     locale,
     settings.notesSortOrder,
-    settingsLoaded,
+    notesDirReady,
+    reloadKey,
   );
 
   // 그룹 관리
@@ -326,6 +350,14 @@ function App() {
 
   // 창 간 동기화 (Tauri 이벤트)
   useWindowSync(setDocs, activeIndex, tiptapRef, setActiveIndex, setGroups);
+
+  // 파일 시스템 감시 (클라우드 동기화 등 외부 변경 감지)
+  useFileWatcher(
+    docs, setDocs, groups, setGroups,
+    activeIndex, setActiveIndex, tiptapRef,
+    locale, settings.notesSortOrder,
+    notesDirReady && !isLoading,
+  );
 
   // OS Mica 효과
   const [micaSupported, setMicaSupported] = useState(true);
@@ -410,6 +442,75 @@ function App() {
     const sorted = [...indices].sort((a, b) => b - a);
     for (const idx of sorted) fs.deleteNote(idx);
   }, [fs.deleteNote]);
+
+  // 노트 저장 위치 변경
+  const handleChangeNotesDir = useCallback(async () => {
+    const selected = await openDialog({ directory: true, multiple: false });
+    if (!selected) return;
+
+    const newDir = selected as string;
+    const oldDir = await getNotesDir();
+
+    // 같은 디렉토리 선택 시 무시
+    const normalize = (p: string) => p.replace(/[\\/]+$/, "").replace(/\\/g, "/");
+    if (normalize(newDir) === normalize(oldDir)) return;
+
+    const ok = await confirm(t("settings.notesDirectory.confirmMove", locale));
+    if (!ok) return;
+
+    let strategy: "merge" | "overwrite" = "overwrite";
+    const destHasManifest = await hasManifest(newDir);
+    if (destHasManifest) {
+      const merge = await ask(t("settings.notesDirectory.mergePrompt", locale), {
+        kind: "info",
+        okLabel: locale === "ko" ? "병합" : "Merge",
+        cancelLabel: locale === "ko" ? "덮어쓰기" : "Overwrite",
+      });
+      strategy = merge ? "merge" : "overwrite";
+    }
+
+    setMigrationInProgress(true);
+    const result = await migrateNotesDir(oldDir, newDir, strategy);
+    setMigrationInProgress(false);
+
+    if (!result.success) {
+      await message(t("settings.notesDirectory.migrationFailed", locale), { kind: "error" });
+      return;
+    }
+
+    updateSetting("notesDirectory", newDir);
+    setNotesDir(newDir);
+    setCurrentNotesDir(newDir);
+    setReloadKey((k) => k + 1);
+  }, [locale, updateSetting]);
+
+  const handleResetNotesDir = useCallback(async () => {
+    if (!settings.notesDirectory) return;
+
+    const ok = await confirm(t("settings.notesDirectory.confirmMove", locale));
+    if (!ok) return;
+
+    const oldDir = await getNotesDir();
+
+    // Compute default directory
+    resetNotesDir();
+    const defaultDir = await getNotesDir();
+
+    setMigrationInProgress(true);
+    const result = await migrateNotesDir(oldDir, defaultDir, "overwrite");
+    setMigrationInProgress(false);
+
+    if (!result.success) {
+      // Restore the custom dir on failure
+      setNotesDir(oldDir);
+      await message(t("settings.notesDirectory.migrationFailed", locale), { kind: "error" });
+      return;
+    }
+
+    updateSetting("notesDirectory", "");
+    setCurrentNotesDir(defaultDir);
+    setReloadKey((k) => k + 1);
+  }, [locale, settings.notesDirectory, updateSetting]);
 
   // 에디터 모드 전환 시 스크롤 위치 보존
   const handleSwitchEditorMode = useCallback(() => {
@@ -761,6 +862,9 @@ function App() {
         onClose={() => setSettingsOpen(false)}
         settings={settings}
         onUpdate={updateSetting}
+        currentNotesDir={currentNotesDir}
+        onChangeNotesDir={handleChangeNotesDir}
+        onResetNotesDir={handleResetNotesDir}
       />
       <div id="portal-root" />
     </FluentProvider>

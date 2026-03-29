@@ -114,8 +114,8 @@ const dict = {
   "settings.shortcut.save": { en: "Save", ko: "저장" },
   "settings.shortcut.saveAs": { en: "Save as", ko: "다른 이름으로 저장" },
   "settings.shortcut.newFile": { en: "New file", ko: "새 파일" },
-  "settings.tab.system": { en: "System", ko: "시스템" },
-  "settings.tab.formatting": { en: "Formatting", ko: "서식" },
+  "settings.tab.general": { en: "General", ko: "일반" },
+  "settings.tab.display": { en: "Display", ko: "화면" },
   "settings.tab.shortcuts": { en: "Shortcuts", ko: "단축키" },
   "settings.fontFamily": { en: "Font", ko: "서체" },
   "settings.fontFamily.sans": { en: "Sans-serif", ko: "산세리프" },
@@ -124,6 +124,24 @@ const dict = {
   "settings.groupLayout": { en: "Group layout", ko: "그룹 배치" },
   "settings.groupsFirst": { en: "Groups first", ko: "그룹 우선" },
   "settings.mixed": { en: "Mixed", ko: "혼합" },
+
+  /* ─── Notes Directory ─── */
+  "settings.notesDirectory": { en: "Notes folder", ko: "저장 위치" },
+  "settings.notesDirectory.change": { en: "Change", ko: "변경" },
+  "settings.notesDirectory.reset": { en: "Reset to default", ko: "기본값으로 초기화" },
+  "settings.notesDirectory.default": { en: "Default", ko: "기본 위치" },
+  "settings.notesDirectory.confirmMove": {
+    en: "Changing the storage location will copy existing notes to the new location. Continue?",
+    ko: "저장 위치를 변경하면 기존 노트를 새 위치로 복사합니다. 계속하시겠습니까?",
+  },
+  "settings.notesDirectory.mergePrompt": {
+    en: "The selected folder already contains notes. Would you like to merge with existing notes?",
+    ko: "선택한 폴더에 이미 노트가 있습니다. 기존 노트와 병합하시겠습니까?",
+  },
+  "settings.notesDirectory.migrationFailed": {
+    en: "Failed to migrate notes. The storage location was not changed.",
+    ko: "노트 이동에 실패했습니다. 저장 위치가 변경되지 않았습니다.",
+  },
 
   /* ─── Search ─── */
   "search.placeholder": { en: "Find in document", ko: "문서에서 찾기" },

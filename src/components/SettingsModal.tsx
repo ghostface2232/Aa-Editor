@@ -1,5 +1,6 @@
 import { useState, useMemo } from "react";
 import {
+  Button,
   Dialog,
   DialogSurface,
   Dropdown,
@@ -9,6 +10,7 @@ import {
   RadioGroup,
   Slider,
   Switch,
+  Tooltip,
   makeStyles,
   mergeClasses,
   tokens,
@@ -196,13 +198,16 @@ const useStyles = makeStyles({
   },
 });
 
-type TabId = "system" | "formatting" | "shortcuts";
+type TabId = "general" | "display" | "shortcuts";
 
 interface SettingsModalProps {
   open: boolean;
   onClose: () => void;
   settings: Settings;
   onUpdate: <K extends keyof Settings>(key: K, value: Settings[K]) => void;
+  currentNotesDir: string;
+  onChangeNotesDir: () => void;
+  onResetNotesDir: () => void;
 }
 
 const SORT_ORDER_LABELS: Record<NotesSortOrder, Parameters<typeof t>[0]> = {
@@ -225,12 +230,12 @@ function settingItemClass(
   return mergeClasses(styles.settingItem, isFirst && styles.settingItemFirst);
 }
 
-export function SettingsModal({ open, onClose, settings, onUpdate }: SettingsModalProps) {
+export function SettingsModal({ open, onClose, settings, onUpdate, currentNotesDir, onChangeNotesDir, onResetNotesDir }: SettingsModalProps) {
   const styles = useStyles();
   const locale = settings.locale;
   const isDarkMode = settings.themeMode === "dark";
   const i = (key: Parameters<typeof t>[0]) => t(key, locale);
-  const [tab, setTab] = useState<TabId>("system");
+  const [tab, setTab] = useState<TabId>("general");
 
   const themeStyles = useMemo(() => {
     const dark = isDarkMode;
@@ -250,8 +255,8 @@ export function SettingsModal({ open, onClose, settings, onUpdate }: SettingsMod
   }, [isDarkMode]);
 
   const navItems: { id: TabId; labelKey: Parameters<typeof t>[0] }[] = [
-    { id: "system", labelKey: "settings.tab.system" },
-    { id: "formatting", labelKey: "settings.tab.formatting" },
+    { id: "general", labelKey: "settings.tab.general" },
+    { id: "display", labelKey: "settings.tab.display" },
     { id: "shortcuts", labelKey: "settings.tab.shortcuts" },
   ];
 
@@ -301,7 +306,7 @@ export function SettingsModal({ open, onClose, settings, onUpdate }: SettingsMod
           </nav>
 
           <div className={styles.content} style={{ backgroundColor: themeStyles.panelBg }}>
-            {tab === "system" && (
+            {tab === "general" && (
               <div className={styles.section}>
                 <div className={mergeClasses(styles.row, settingItemClass(styles, true))}>
                   <Label className={styles.label}>{i("settings.language")}</Label>
@@ -312,18 +317,6 @@ export function SettingsModal({ open, onClose, settings, onUpdate }: SettingsMod
                   >
                     <Radio value="en" label="English" />
                     <Radio value="ko" label="한국어" />
-                  </RadioGroup>
-                </div>
-
-                <div className={mergeClasses(styles.row, settingItemClass(styles))}>
-                  <Label className={styles.label}>{i("settings.theme")}</Label>
-                  <RadioGroup
-                    layout="horizontal"
-                    value={settings.themeMode}
-                    onChange={(_, data) => onUpdate("themeMode", data.value as ThemeMode)}
-                  >
-                    <Radio value="light" label={i("theme.light")} />
-                    <Radio value="dark" label={i("theme.dark")} />
                   </RadioGroup>
                 </div>
 
@@ -376,18 +369,58 @@ export function SettingsModal({ open, onClose, settings, onUpdate }: SettingsMod
                 </div>
 
                 <div className={mergeClasses(styles.row, settingItemClass(styles))}>
-                  <Label className={styles.label}>{i("settings.spellcheck")}</Label>
+                  <Label className={styles.label}>{i("settings.keepFormat")}</Label>
                   <Switch
-                    checked={settings.spellcheck}
-                    onChange={(_, data) => onUpdate("spellcheck", data.checked)}
+                    checked={settings.keepFormatOnPaste}
+                    onChange={(_, data) => onUpdate("keepFormatOnPaste", data.checked)}
                   />
+                </div>
+
+                <div className={mergeClasses(styles.row, settingItemClass(styles))}>
+                  <Label className={styles.label}>{i("settings.notesDirectory")}</Label>
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0 }}>
+                    <Tooltip content={currentNotesDir} relationship="description" positioning="above">
+                      <span style={{
+                        fontSize: "12px",
+                        opacity: 0.7,
+                        maxWidth: "160px",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                        direction: "rtl",
+                        textAlign: "left",
+                      }}>
+                        {settings.notesDirectory || i("settings.notesDirectory.default")}
+                      </span>
+                    </Tooltip>
+                    <Button size="small" appearance="subtle" onClick={onChangeNotesDir}>
+                      {i("settings.notesDirectory.change")}
+                    </Button>
+                    {settings.notesDirectory && (
+                      <Button size="small" appearance="subtle" onClick={onResetNotesDir}>
+                        {i("settings.notesDirectory.reset")}
+                      </Button>
+                    )}
+                  </div>
                 </div>
               </div>
             )}
 
-            {tab === "formatting" && (
+            {tab === "display" && (
               <div className={styles.section}>
                 <div className={mergeClasses(styles.row, settingItemClass(styles, true))}>
+                  <Label className={styles.label}>{i("settings.theme")}</Label>
+                  <RadioGroup
+                    layout="horizontal"
+                    value={settings.themeMode}
+                    onChange={(_, data) => onUpdate("themeMode", data.value as ThemeMode)}
+                  >
+                    <Radio value="light" label={i("theme.light")} />
+                    <Radio value="dark" label={i("theme.dark")} />
+                  </RadioGroup>
+                </div>
+
+                <div className={mergeClasses(styles.row, settingItemClass(styles))}>
                   <Label className={styles.label}>{i("settings.fontFamily")}</Label>
                   <RadioGroup
                     layout="horizontal"
@@ -426,10 +459,10 @@ export function SettingsModal({ open, onClose, settings, onUpdate }: SettingsMod
                 </div>
 
                 <div className={mergeClasses(styles.row, settingItemClass(styles))}>
-                  <Label className={styles.label}>{i("settings.keepFormat")}</Label>
+                  <Label className={styles.label}>{i("settings.spellcheck")}</Label>
                   <Switch
-                    checked={settings.keepFormatOnPaste}
-                    onChange={(_, data) => onUpdate("keepFormatOnPaste", data.checked)}
+                    checked={settings.spellcheck}
+                    onChange={(_, data) => onUpdate("spellcheck", data.checked)}
                   />
                 </div>
               </div>
