@@ -42,7 +42,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "bmg0920!",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQ1RDI2REE0NUNBMDZBMzEKUldReGFxQmNwRzNTUmNDK3V3cWtQSlRJY0Z1S29pS0dwSm5iSytZY0FXejc1cldLcXRYcVhFOFIK",
       "endpoints": [
         "https://github.com/ghostface2232/Aa-Editor/releases/latest/download/latest.json"
       ]
