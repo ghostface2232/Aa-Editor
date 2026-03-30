@@ -11,6 +11,9 @@ permissions:
 jobs:
   release:
     runs-on: windows-latest
+    env:
+      CODE_SIGN_PFX: ${{ secrets.CODE_SIGN_PFX }}
+      CODE_SIGN_PFX_PASSWORD: ${{ secrets.CODE_SIGN_PFX_PASSWORD }}
 
     steps:
       - name: Checkout
@@ -58,11 +61,8 @@ jobs:
         run: cargo build --release
 
       - name: Code sign bootstrapper
-        if: ${{ secrets.CODE_SIGN_PFX != '' }}
+        if: ${{ env.CODE_SIGN_PFX != '' }}
         shell: pwsh
-        env:
-          CODE_SIGN_PFX: ${{ secrets.CODE_SIGN_PFX }}
-          CODE_SIGN_PFX_PASSWORD: ${{ secrets.CODE_SIGN_PFX_PASSWORD }}
         run: |
           $ErrorActionPreference = "Stop"
           Write-Host "[1/3] Writing code signing certificate..."
