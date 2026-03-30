@@ -104,7 +104,6 @@ export function useFileSystem(
   getGroupForNote?: (noteId: string) => NoteGroup | null,
   trashedNotes?: TrashedNote[],
   setTrashedNotes?: (updater: TrashedNote[] | ((prev: TrashedNote[]) => TrashedNote[])) => void,
-  addNoteToGroup?: (noteId: string, groupId: string) => void,
 ): FileSystemActions {
   const groupsRef = useRef(groups);
   groupsRef.current = groups;
@@ -489,21 +488,30 @@ export function useFileSystem(
       emitTrashUpdated((trashedNotesRef.current ?? []).filter((n) => n.id !== trashedNoteId));
     }
 
+    // Compute groups with restored note added back atomically
+    // (avoids addNoteToGroup's stale-docs saveManifest overwrite)
+    let restoredGroups = groupsRef.current ?? [];
+    if (trashed.groupId) {
+      const groupExists = restoredGroups.some((g) => g.id === trashed.groupId);
+      if (groupExists) {
+        restoredGroups = restoredGroups.map((g) => {
+          if (g.id === trashed.groupId && !g.noteIds.includes(trashed.id)) {
+            return { ...g, noteIds: [...g.noteIds, trashed.id] };
+          }
+          return g;
+        });
+        setGroups?.(restoredGroups);
+        emitGroupsUpdated(restoredGroups);
+      }
+    }
+
     const nextDocs = [...docs, restoredDoc];
-    sortAndPersistDocs(nextDocs, restoredDoc.id, notesSortOrder, setDocs, setActiveIndex, groupsRef.current);
+    sortAndPersistDocs(nextDocs, restoredDoc.id, notesSortOrder, setDocs, setActiveIndex, restoredGroups);
     emitDocCreated(restoredDoc);
 
     loadIntoEditor(tiptapRef, content);
     resetDocState(state, restoredPath, content);
-
-    // Restore to original group if it still exists
-    if (trashed.groupId && addNoteToGroup) {
-      const groupExists = groupsRef.current?.some((g) => g.id === trashed.groupId);
-      if (groupExists) {
-        addNoteToGroup(trashed.id, trashed.groupId);
-      }
-    }
-  }, [cacheCurrentContent, docs, notesSortOrder, setActiveIndex, setDocs, state, tiptapRef, setTrashedNotes, addNoteToGroup]);
+  }, [cacheCurrentContent, docs, notesSortOrder, setActiveIndex, setDocs, setGroups, state, tiptapRef, setTrashedNotes]);
 
   const permanentlyDeleteNote = useCallback(async (trashedNoteId: string) => {
     const trashed = trashedNotesRef.current?.find((n) => n.id === trashedNoteId);

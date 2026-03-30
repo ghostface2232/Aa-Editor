@@ -328,7 +328,6 @@ function App() {
     noteGroups.getGroupForNote,
     trashedNotes,
     setTrashedNotes,
-    noteGroups.addNoteToGroup,
   );
 
   // 자동 저장
