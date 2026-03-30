@@ -720,7 +720,7 @@ export function SettingsModal({ open, onClose, settings, onUpdate, currentNotesD
           boxShadow: themeStyles.surfaceShadow,
         }}
       >
-        <div style={{ fontSize: "14px", color: tokens.colorNeutralForeground1, lineHeight: "1.5", textAlign: "center" }}>
+        <div style={{ fontSize: "14px", color: tokens.colorNeutralForeground1, lineHeight: "1.5", textAlign: "center", userSelect: "none" }}>
           {i("trash.emptyAllConfirm")}
         </div>
         <div style={{ display: "flex", justifyContent: "center", gap: "8px", marginTop: "20px" }}>
