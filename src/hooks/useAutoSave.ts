@@ -44,8 +44,6 @@ export function useAutoSave(
     setActiveIndex,
   };
 
-  const prevActiveIndexRef = useRef(activeIndex);
-
   const doSave = useCallback(async () => {
     const {
       state: latestState,
@@ -118,14 +116,6 @@ export function useAutoSave(
     }, DEBOUNCE_MS);
   }, [doSave]);
 
-  // Flush pending save when switching documents
-  useEffect(() => {
-    if (prevActiveIndexRef.current !== activeIndex) {
-      flushAutoSave();
-      prevActiveIndexRef.current = activeIndex;
-    }
-  }, [activeIndex, flushAutoSave]);
-
   // Flush pending save on unmount
   useEffect(() => {
     return () => {
@@ -138,5 +128,5 @@ export function useAutoSave(
     };
   }, [doSave]);
 
-  return { scheduleAutoSave };
+  return { scheduleAutoSave, flushAutoSave };
 }

@@ -105,6 +105,7 @@ export function useFileSystem(
   getGroupForNote?: (noteId: string) => NoteGroup | null,
   trashedNotes?: TrashedNote[],
   setTrashedNotes?: (updater: TrashedNote[] | ((prev: TrashedNote[]) => TrashedNote[])) => void,
+  flushAutoSaveRef?: React.RefObject<(() => void) | null>,
 ): FileSystemActions {
   const groupsRef = useRef(groups);
   groupsRef.current = groups;
@@ -174,6 +175,7 @@ export function useFileSystem(
   }, [activeIndex, docs, state, tiptapRef]);
 
   const importFile = useCallback(async () => {
+    flushAutoSaveRef?.current?.();
     cacheCurrentContent();
 
     const selected = await open({ filters: MD_FILTERS, multiple: false });
@@ -228,6 +230,7 @@ export function useFileSystem(
   }, [cacheCurrentContent, docs, notesSortOrder, setActiveIndex, setDocs, state, tiptapRef]);
 
   const newNote = useCallback(async () => {
+    flushAutoSaveRef?.current?.();
     cacheCurrentContent();
 
     const id = crypto.randomUUID();
@@ -272,6 +275,7 @@ export function useFileSystem(
     if (index === activeIndex) return;
     if (index < 0 || index >= docs.length) return;
 
+    flushAutoSaveRef?.current?.();
     cacheCurrentContent();
 
     const target = docs[index];
@@ -384,6 +388,7 @@ export function useFileSystem(
     const doc = docs[index];
     if (!doc) return;
 
+    flushAutoSaveRef?.current?.();
     cacheCurrentContent();
 
     const id = crypto.randomUUID();
@@ -480,6 +485,7 @@ export function useFileSystem(
       updatedAt: trashed.updatedAt,
     };
 
+    flushAutoSaveRef?.current?.();
     cacheCurrentContent();
 
     // Remove from trashed list BEFORE sortAndPersistDocs so saveManifest

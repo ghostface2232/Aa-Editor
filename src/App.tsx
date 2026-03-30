@@ -314,6 +314,8 @@ function App() {
     }
   }, [isLoading, docs, activeIndex]);
 
+  const flushAutoSaveRef = useRef<(() => void) | null>(null);
+
   const fs = useFileSystem(
     state,
     tiptapRef,
@@ -328,10 +330,11 @@ function App() {
     noteGroups.getGroupForNote,
     trashedNotes,
     setTrashedNotes,
+    flushAutoSaveRef,
   );
 
   // 자동 저장
-  const { scheduleAutoSave } = useAutoSave(
+  const { scheduleAutoSave, flushAutoSave } = useAutoSave(
     state,
     tiptapRef,
     docs,
@@ -341,6 +344,7 @@ function App() {
     locale,
     settings.notesSortOrder,
   );
+  flushAutoSaveRef.current = flushAutoSave;
 
   // URL 쿼리 파라미터로 전달된 노트 열기 (새 창에서 열기)
   const fileParamHandled = useRef(false);
