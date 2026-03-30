@@ -1,0 +1,98 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: v__VERSION__
+          releaseName: Noten v__VERSION__
+          releaseDraft: true
+
+      - name: Copy NSIS payload into bootstrapper assets
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Write-Host "[1/1] Copying NSIS bundle to bootstrapper assets..."
+          $source = Join-Path $PWD "src-tauri\target\release\bundle\nsis\Noten_0.1.0_x64-setup.exe"
+          $destination = Join-Path $PWD "bootstrapper\assets\nsis-payload.exe"
+
+          if (-not (Test-Path -LiteralPath $source)) {
+            throw "NSIS bundle not found: $source"
+          }
+
+          Copy-Item -LiteralPath $source -Destination $destination -Force
+
+      - name: Build bootstrapper
+        working-directory: bootstrapper
+        run: cargo build --release
+
+      - name: Code sign bootstrapper
+        if: ${{ secrets.CODE_SIGN_PFX != '' }}
+        shell: pwsh
+        env:
+          CODE_SIGN_PFX: ${{ secrets.CODE_SIGN_PFX }}
+          CODE_SIGN_PFX_PASSWORD: ${{ secrets.CODE_SIGN_PFX_PASSWORD }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          Write-Host "[1/3] Writing code signing certificate..."
+          $certPath = Join-Path $PWD "cert.pfx"
+          [IO.File]::WriteAllBytes($certPath, [Convert]::FromBase64String($env:CODE_SIGN_PFX))
+
+          try {
+            Write-Host "[2/3] Locating signtool..."
+            $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" |
+              Sort-Object FullName -Descending |
+              Select-Object -First 1 -ExpandProperty FullName
+
+            if (-not $signtool) {
+              throw "signtool.exe not found"
+            }
+
+            Write-Host "[3/3] Signing bootstrapper executable..."
+            & $signtool sign /f $certPath /p $env:CODE_SIGN_PFX_PASSWORD /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 "bootstrapper\target\release\noten-setup.exe"
+
+            if ($LASTEXITCODE -ne 0) {
+              throw "signtool failed with exit code $LASTEXITCODE"
+            }
+          }
+          finally {
+            Remove-Item -LiteralPath $certPath -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Upload bootstrapper to GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          tag_name: ${{ github.ref_name }}
+          files: bootstrapper/target/release/noten-setup.exe

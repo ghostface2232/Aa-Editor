@@ -38,3 +38,7 @@ src-tauri/gen/
 public/tauri.svg
 public/vite.svg
 src/assets/react.svg
+
+# Bootstrapper
+bootstrapper/target/
+bootstrapper/assets/nsis-payload.exe
