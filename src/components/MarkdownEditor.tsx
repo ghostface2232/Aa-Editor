@@ -1,4 +1,4 @@
-import { useMemo, useCallback } from "react";
+import { useMemo, useCallback, useRef } from "react";
 import CodeMirror from "@uiw/react-codemirror";
 import { markdown as cmMarkdown } from "@codemirror/lang-markdown";
 import { languages } from "@codemirror/language-data";
@@ -10,7 +10,8 @@ import {
   syntaxHighlighting,
 } from "@codemirror/language";
 import { tags } from "@lezer/highlight";
-import type { WordWrap } from "../hooks/useSettings";
+import { showGenericContextMenu, type TextContextMenuContext } from "../extensions/TextContextMenu";
+import type { Locale, WordWrap } from "../hooks/useSettings";
 import "../styles/markdown-editor.css";
 
 /* ─── 라이트 / 다크 팔레트 ─── */
@@ -104,6 +105,7 @@ interface MarkdownEditorProps {
   value: string;
   onChange: (value: string) => void;
   isDarkMode: boolean;
+  locale: Locale;
   wordWrap: WordWrap;
   onViewReady?: (view: EditorView) => void;
 }
@@ -112,18 +114,52 @@ export function MarkdownEditor({
   value,
   onChange,
   isDarkMode,
+  locale,
   wordWrap,
   onViewReady,
 }: MarkdownEditorProps) {
+  const localeRef = useRef(locale);
+  localeRef.current = locale;
+
   const extensions = useMemo(() => {
     const hl = buildHighlightStyle(isDarkMode);
     const theme = buildEditorTheme(isDarkMode);
+
+    const cmContextMenu = EditorView.domEventHandlers({
+      contextmenu(event, view) {
+        event.preventDefault();
+        const { from, to } = view.state.selection.main;
+        const ctx: TextContextMenuContext = {
+          hasSelection: from !== to,
+          isEditable: true,
+          locale: localeRef.current,
+          cut: () => document.execCommand("cut"),
+          copy: () => document.execCommand("copy"),
+          paste: async () => {
+            try {
+              const text = await navigator.clipboard.readText();
+              view.dispatch(view.state.replaceSelection(text));
+            } catch { document.execCommand("paste"); }
+            view.focus();
+          },
+          selectAll: () => {
+            view.dispatch({ selection: { anchor: 0, head: view.state.doc.length } });
+            view.focus();
+          },
+          focus: () => view.focus(),
+        };
+        showGenericContextMenu({ x: event.clientX, y: event.clientY }, ctx);
+        return true;
+      },
+    });
+
     return [
       cmMarkdown({ codeLanguages: languages }),
       syntaxHighlighting(hl),
       EditorView.lineWrapping,
       theme,
       cmSearchField,
+      cmContextMenu,
     ];
   }, [isDarkMode]);
 

@@ -22,6 +22,7 @@ import { t } from "../i18n";
 import type { NoteDoc, NoteGroup } from "../hooks/useNotesLoader";
 import type { GroupLayout, Locale, NotesSortOrder } from "../hooks/useSettings";
 import { openNewWindow } from "../utils/newWindow";
+import { clampMenuToViewport } from "../utils/clampMenuPosition";
 
 /* FolderAddRegular의 + 를 − 로 바꾼 커스텀 아이콘 */
 const FolderSubtractRegular = () => (
@@ -821,6 +822,13 @@ export function Sidebar({
     return () => window.removeEventListener("mousedown", handleOutside);
   }, [contextMenu, closeContextMenu]);
 
+  // Clamp context menu to viewport
+  useEffect(() => {
+    if (contextMenu && contextMenuRef.current) {
+      clampMenuToViewport(contextMenuRef.current);
+    }
+  }, [contextMenu]);
+
   const handleCopyContent = useCallback((index: number) => {
     const doc = docs[index];
     if (doc) {
@@ -1404,6 +1412,7 @@ export function Sidebar({
                     <div
                       className={styles.submenu}
                       style={{ left: submenuPos.x, top: submenuPos.y }}
+                      ref={(el) => { if (el) clampMenuToViewport(el); }}
                       onMouseEnter={keepSubmenu}
                       onMouseLeave={hideSubmenu}
                     >
@@ -1542,6 +1551,7 @@ export function Sidebar({
                     <div
                       className={styles.submenu}
                       style={{ left: submenuPos.x, top: submenuPos.y }}
+                      ref={(el) => { if (el) clampMenuToViewport(el); }}
                       onMouseEnter={keepSubmenu}
                       onMouseLeave={hideSubmenu}
                     >

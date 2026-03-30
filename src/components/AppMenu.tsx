@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { Button, makeStyles, tokens } from "@fluentui/react-components";
+import { clampMenuToViewport } from "../utils/clampMenuPosition";
 import {
   NavigationRegular,
   DocumentAddRegular,
@@ -212,7 +213,7 @@ export function AppMenu({
       {open && createPortal(
         <>
           <div className={styles.overlay} onClick={close} />
-          <div ref={menuRef} className={styles.menu} style={{ left: menuPos.x, top: menuPos.y }}>
+          <div ref={(el) => { (menuRef as React.MutableRefObject<HTMLDivElement | null>).current = el; if (el) clampMenuToViewport(el); }} className={styles.menu} style={{ left: menuPos.x, top: menuPos.y }}>
             {/* ── File ── */}
             <div className={styles.groupLabel}>{i("menu.file")}</div>
             <Button appearance="subtle" icon={<DocumentAddRegular />} className={styles.menuItem} onClick={() => act(onNewNote)} size="small">

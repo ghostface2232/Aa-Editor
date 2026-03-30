@@ -37,18 +37,6 @@ export function useMarkdownState(): MarkdownState {
     setIsDirty(true);
   }, []);
 
-  /** Tiptap dirty 시 마크다운 추출하여 state 동기화 */
-  const flushTiptapIfDirty = useCallback(() => {
-    const editor = editorRef.current;
-    if (editor && tiptapDirty) {
-      const md = editor.getMarkdown();
-      setMarkdown(md);
-      setTiptapDirty(false);
-      return md;
-    }
-    return null;
-  }, [tiptapDirty]);
-
   /** CodeMirror → Tiptap 동기화 (ReadonlyGuard bypass 포함) */
   const syncCmToTiptap = useCallback(() => {
     const editor = editorRef.current;
@@ -64,13 +52,23 @@ export function useMarkdownState(): MarkdownState {
     editor.storage.readonlyGuard.readonly = wasReadonly;
   }, []);
 
+  /** Tiptap에서 현재 마크다운을 읽어 state에 반영 (항상 직접 읽음) */
+  const flushTiptap = useCallback(() => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    const md = editor.getMarkdown();
+    setMarkdown(md);
+    codemirrorValueRef.current = md;
+    setTiptapDirty(false);
+  }, []);
+
   const toggleEditing = useCallback(() => {
     const editor = editorRef.current;
     if (!editor) return;
 
     if (isEditing) {
       if (editorMode === "richtext") {
-        flushTiptapIfDirty();
+        flushTiptap();
       } else {
         syncCmToTiptap();
         setEditorMode("richtext");
@@ -80,26 +78,21 @@ export function useMarkdownState(): MarkdownState {
       setEditorMode("richtext");
       setIsEditing(true);
     }
-  }, [isEditing, editorMode, flushTiptapIfDirty, syncCmToTiptap]);
+  }, [isEditing, editorMode, flushTiptap, syncCmToTiptap]);
 
   const switchEditorMode = useCallback(() => {
     const editor = editorRef.current;
     if (!editor || !isEditing) return;
 
     if (editorMode === "richtext") {
-      const flushed = flushTiptapIfDirty();
-      if (!flushed) {
-        // tiptapDirty가 아니면 현재 markdown을 CM ref에 동기화
-        codemirrorValueRef.current = markdown;
-      } else {
-        codemirrorValueRef.current = flushed;
-      }
+      // 항상 Tiptap에서 직접 현재 콘텐츠를 읽어 동기화
+      flushTiptap();
       setEditorMode("markdown");
     } else {
       syncCmToTiptap();
       setEditorMode("richtext");
     }
-  }, [isEditing, editorMode, markdown, flushTiptapIfDirty, syncCmToTiptap]);
+  }, [isEditing, editorMode, flushTiptap, syncCmToTiptap]);
 
   const setEditing = useCallback((editing: boolean) => {
     setEditorMode("richtext");

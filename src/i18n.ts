@@ -54,6 +54,20 @@ const dict = {
   "slash.image": { en: "Image", ko: "이미지" },
   "slash.image.desc": { en: "Insert local image", ko: "로컬 이미지 파일 삽입" },
 
+  /* ─── Image context menu ─── */
+  "image.save": { en: "Save image", ko: "이미지 저장" },
+  "image.copy": { en: "Copy image", ko: "이미지 복사" },
+  "image.replace": { en: "Replace image", ko: "이미지 대체" },
+  "image.delete": { en: "Delete image", ko: "이미지 삭제" },
+
+  /* ─── Text context menu ─── */
+  "ctx.cut": { en: "Cut", ko: "잘라내기" },
+  "ctx.copy": { en: "Copy", ko: "복사" },
+  "ctx.paste": { en: "Paste", ko: "붙여넣기" },
+  "ctx.pasteNoFormat": { en: "Paste without formatting", ko: "서식 없이 붙여넣기" },
+  "ctx.selectAll": { en: "Select all", ko: "모두 선택" },
+  "ctx.emoji": { en: "Emoji", ko: "이모지" },
+
   /* ─── Sidebar ─── */
   "sidebar.empty": {
     en: "Import a file with Ctrl+O or create a new document with Ctrl+N.",

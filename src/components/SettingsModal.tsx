@@ -281,6 +281,7 @@ export function SettingsModal({ open, onClose, settings, onUpdate, currentNotesD
   ];
 
   return (
+    <>
     <Dialog open={open} onOpenChange={(_, data) => { if (!data.open) onClose(); }}>
       <DialogSurface
         className={styles.surface}
@@ -702,47 +703,48 @@ export function SettingsModal({ open, onClose, settings, onUpdate, currentNotesD
           </div>
         </div>
       </DialogSurface>
-
-      {/* Empty All confirm dialog */}
-      <Dialog open={confirmOpen} onOpenChange={(_, data) => { if (!data.open) setConfirmOpen(false); }}>
-        <DialogSurface
-          style={{
-            maxWidth: "340px",
-            padding: "24px 20px 16px",
-            borderRadius: "12px",
-            background: themeStyles.micaBg,
-            backdropFilter: "saturate(120%) blur(60px)",
-            WebkitBackdropFilter: "saturate(120%) blur(60px)",
-            border: `1px solid ${themeStyles.borderColor}`,
-            boxShadow: themeStyles.surfaceShadow,
-          }}
-        >
-          <div style={{ fontSize: "14px", color: tokens.colorNeutralForeground1, lineHeight: "1.5", textAlign: "center" }}>
-            {i("trash.emptyAllConfirm")}
-          </div>
-          <div style={{ display: "flex", justifyContent: "center", gap: "8px", marginTop: "20px" }}>
-            <Button
-              size="medium"
-              appearance="subtle"
-              onClick={() => setConfirmOpen(false)}
-              style={{ fontSize: "13px", fontWeight: 400, borderRadius: CONTROL_RADIUS, backgroundColor: isDarkMode ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.04)" }}
-            >
-              {i("trash.cancel")}
-            </Button>
-            <Button
-              size="medium"
-              appearance="subtle"
-              onClick={async () => {
-                setConfirmOpen(false);
-                await onEmptyTrash();
-              }}
-              style={{ fontSize: "13px", fontWeight: 400, color: tokens.colorPaletteRedForeground1, borderRadius: CONTROL_RADIUS, backgroundColor: isDarkMode ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.04)" }}
-            >
-              {i("trash.confirmDelete")}
-            </Button>
-          </div>
-        </DialogSurface>
-      </Dialog>
     </Dialog>
+
+    {/* Empty All confirm dialog — must be outside settings Dialog to avoid event interference */}
+    <Dialog open={confirmOpen} onOpenChange={(_, data) => { if (!data.open) setConfirmOpen(false); }}>
+      <DialogSurface
+        style={{
+          maxWidth: "340px",
+          padding: "24px 20px 16px",
+          borderRadius: "12px",
+          background: themeStyles.micaBg,
+          backdropFilter: "saturate(120%) blur(60px)",
+          WebkitBackdropFilter: "saturate(120%) blur(60px)",
+          border: `1px solid ${themeStyles.borderColor}`,
+          boxShadow: themeStyles.surfaceShadow,
+        }}
+      >
+        <div style={{ fontSize: "14px", color: tokens.colorNeutralForeground1, lineHeight: "1.5", textAlign: "center" }}>
+          {i("trash.emptyAllConfirm")}
+        </div>
+        <div style={{ display: "flex", justifyContent: "center", gap: "8px", marginTop: "20px" }}>
+          <Button
+            size="medium"
+            appearance="subtle"
+            onClick={() => setConfirmOpen(false)}
+            style={{ fontSize: "13px", fontWeight: 400, borderRadius: CONTROL_RADIUS, backgroundColor: isDarkMode ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.04)" }}
+          >
+            {i("trash.cancel")}
+          </Button>
+          <Button
+            size="medium"
+            appearance="subtle"
+            onClick={async () => {
+              setConfirmOpen(false);
+              await onEmptyTrash();
+            }}
+            style={{ fontSize: "13px", fontWeight: 400, color: tokens.colorPaletteRedForeground1, borderRadius: CONTROL_RADIUS, backgroundColor: isDarkMode ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.04)" }}
+          >
+            {i("trash.confirmDelete")}
+          </Button>
+        </div>
+      </DialogSurface>
+    </Dialog>
+    </>
   );
 }

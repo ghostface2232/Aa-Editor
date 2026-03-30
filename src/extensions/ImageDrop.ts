@@ -5,6 +5,16 @@ import { readFile } from "@tauri-apps/plugin-fs";
 
 const IMAGE_MIME = ["image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml"];
 const IMAGE_EXTENSIONS = ["png", "jpg", "jpeg", "gif", "webp", "svg"];
+const MAX_IMAGE_WIDTH = 560;
+
+function loadImageSize(src: string): Promise<{ width: number; height: number }> {
+  return new Promise((resolve) => {
+    const img = new window.Image();
+    img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight });
+    img.onerror = () => resolve({ width: 0, height: 0 });
+    img.src = src;
+  });
+}
 
 function bytesToDataUrl(bytes: Uint8Array, mimeType: string): string {
   const chunkSize = 8192;
@@ -41,7 +51,10 @@ export async function pickAndInsertImage(editor: Editor): Promise<void> {
   const ext = path.split(".").pop() ?? "png";
   const bytes = await readFile(path);
   const dataUrl = bytesToDataUrl(bytes, mimeFromExt(ext));
-  editor.chain().focus().setImage({ src: dataUrl }).run();
+  const { width: natW, height: natH } = await loadImageSize(dataUrl);
+  const w = natW > MAX_IMAGE_WIDTH ? MAX_IMAGE_WIDTH : natW;
+  const h = natW > MAX_IMAGE_WIDTH ? Math.round(natH * (MAX_IMAGE_WIDTH / natW)) : natH;
+  editor.chain().focus().setImage({ src: dataUrl, width: w, height: h }).run();
 }
 
 const ImageDrop = Extension.create({
@@ -69,21 +82,24 @@ const ImageDrop = Extension.create({
               top: event.clientY,
             });
 
-            images.forEach(async (file) => {
+            images.forEach((file) => {
               const reader = new FileReader();
-              reader.onload = () => {
+              reader.onload = async () => {
                 const src = reader.result as string;
+                const { width: natW, height: natH } = await loadImageSize(src);
+                const w = natW > MAX_IMAGE_WIDTH ? MAX_IMAGE_WIDTH : natW;
+                const h = natW > MAX_IMAGE_WIDTH ? Math.round(natH * (MAX_IMAGE_WIDTH / natW)) : natH;
                 if (pos) {
                   editor
                     .chain()
                     .focus()
                     .insertContentAt(pos.pos, {
                       type: "image",
-                      attrs: { src },
+                      attrs: { src, width: w, height: h },
                     })
                     .run();
                 } else {
-                  editor.chain().focus().setImage({ src }).run();
+                  editor.chain().focus().setImage({ src, width: w, height: h }).run();
                 }
               };
               reader.readAsDataURL(file);
@@ -108,8 +124,12 @@ const ImageDrop = Extension.create({
               if (!file) return;
 
               const reader = new FileReader();
-              reader.onload = () => {
-                editor.chain().focus().setImage({ src: reader.result as string }).run();
+              reader.onload = async () => {
+                const src = reader.result as string;
+                const { width: natW, height: natH } = await loadImageSize(src);
+                const w = natW > MAX_IMAGE_WIDTH ? MAX_IMAGE_WIDTH : natW;
+                const h = natW > MAX_IMAGE_WIDTH ? Math.round(natH * (MAX_IMAGE_WIDTH / natW)) : natH;
+                editor.chain().focus().setImage({ src, width: w, height: h }).run();
               };
               reader.readAsDataURL(file);
             });

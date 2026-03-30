@@ -27,6 +27,8 @@ import { TableHeader } from "@tiptap/extension-table-header";
 import { common, createLowlight } from "lowlight";
 import SlashCommands from "../extensions/SlashCommands";
 import ImageDrop from "../extensions/ImageDrop";
+import { createImageNodeView } from "../extensions/ImageView";
+import TextContextMenu from "../extensions/TextContextMenu";
 import { SearchHighlight } from "../extensions/SearchHighlight";
 import { t } from "../i18n";
 import type { Locale, WordWrap } from "../hooks/useSettings";
@@ -381,7 +383,26 @@ export const TiptapEditor = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
             ];
           },
         }).configure({ lowlight }),
-        Image,
+        Image.configure({ allowBase64: true }).extend({
+          renderMarkdown(node) {
+            const src = node.attrs?.src ?? "";
+            const alt = node.attrs?.alt ?? "";
+            const title = node.attrs?.title ?? "";
+            const width = node.attrs?.width;
+            const height = node.attrs?.height;
+            if (width || height) {
+              const parts = [`src="${src}"`, `alt="${alt}"`];
+              if (title) parts.push(`title="${title}"`);
+              if (width) parts.push(`width="${width}"`);
+              if (height) parts.push(`height="${height}"`);
+              return `<img ${parts.join(" ")} />`;
+            }
+            return title ? `![${alt}](${src} "${title}")` : `![${alt}](${src})`;
+          },
+          addNodeView() {
+            return createImageNodeView(this.editor);
+          },
+        }),
         Placeholder.configure({ placeholder: () => t("placeholder", localeRef.current) }),
         Typography,
         TextAlign.configure({ types: ["heading", "paragraph"] }),
@@ -397,6 +418,7 @@ export const TiptapEditor = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
         ReadonlyGuard,
         SlashCommands,
         ImageDrop,
+        TextContextMenu,
         SearchHighlight,
       ],
       content: initialMarkdown,

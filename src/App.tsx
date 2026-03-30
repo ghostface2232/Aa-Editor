@@ -592,14 +592,11 @@ function App() {
   useEffect(() => {
     const handleContextMenu = (e: MouseEvent) => {
       const target = e.target as HTMLElement;
-      const isTextField =
+      const isNativeTextField =
         target.tagName === "INPUT" ||
         target.tagName === "TEXTAREA" ||
-        target.isContentEditable ||
-        target.closest(".ProseMirror") !== null ||
-        target.closest(".cm-content") !== null ||
         target.closest("[data-sidebar-body]") !== null;
-      if (!isTextField) {
+      if (!isNativeTextField) {
         e.preventDefault();
       }
     };
@@ -863,6 +860,7 @@ function App() {
                     value={state.markdown}
                     onChange={handleCodemirrorChange}
                     isDarkMode={isDarkMode}
+                    locale={locale}
                     wordWrap={settings.wordWrap}
                     onViewReady={setCmView}
                   />
