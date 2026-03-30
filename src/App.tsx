@@ -269,7 +269,7 @@ function App() {
   }, [settingsLoaded, settings.notesDirectory]);
 
   // 노트 로더
-  const { docs, setDocs, activeIndex, setActiveIndex, groups, setGroups, isLoading } = useNotesLoader(
+  const { docs, setDocs, activeIndex, setActiveIndex, groups, setGroups, trashedNotes, setTrashedNotes, isLoading } = useNotesLoader(
     locale,
     settings.notesSortOrder,
     notesDirReady,
@@ -324,7 +324,10 @@ function App() {
     locale,
     settings.notesSortOrder,
     groups,
-    noteGroups.cleanupDeletedNote,
+    setGroups,
+    noteGroups.getGroupForNote,
+    trashedNotes,
+    setTrashedNotes,
   );
 
   // 자동 저장
@@ -355,7 +358,13 @@ function App() {
   }, [isLoading, docs, fs.switchDocument]);
 
   // 창 간 동기화 (Tauri 이벤트)
-  useWindowSync(setDocs, activeIndex, tiptapRef, setActiveIndex, setGroups);
+  const handleActiveDocChanged = useCallback((doc: { filePath: string; content: string }) => {
+    state.setMarkdownRaw(doc.content);
+    state.setFilePath(doc.filePath);
+    state.setIsDirty(false);
+    state.setTiptapDirty(false);
+  }, [state]);
+  useWindowSync(setDocs, activeIndex, tiptapRef, setActiveIndex, setGroups, setTrashedNotes, handleActiveDocChanged);
 
   // 파일 시스템 감시 (클라우드 동기화 등 외부 변경 감지)
   useFileWatcher(
@@ -870,6 +879,10 @@ function App() {
         currentNotesDir={currentNotesDir}
         onChangeNotesDir={handleChangeNotesDir}
         onResetNotesDir={handleResetNotesDir}
+        trashedNotes={trashedNotes}
+        onRestoreNote={fs.restoreNote}
+        onPermanentlyDeleteNote={fs.permanentlyDeleteNote}
+        onEmptyTrash={fs.emptyTrash}
       />
       <div id="portal-root" />
     </FluentProvider>

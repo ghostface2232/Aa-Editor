@@ -8,11 +8,23 @@ interface ManifestNote {
   updatedAt: number;
 }
 
+interface TrashedNoteEntry {
+  id: string;
+  fileName: string;
+  originalFilePath: string;
+  trashFilePath: string;
+  trashedAt: number;
+  groupId: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
 interface Manifest {
   version: 1;
   notes: ManifestNote[];
   activeNoteId: string | null;
   groups?: unknown[];
+  trashedNotes?: TrashedNoteEntry[];
 }
 
 export interface MigrationResult {
@@ -30,11 +42,17 @@ function getFileName(filePath: string): string {
 
 function rewriteFilePaths(manifest: Manifest, toDir: string): Manifest {
   const base = normalizeSep(toDir);
+  const trashBase = `${base}.trash/`;
   return {
     ...manifest,
     notes: manifest.notes.map((n) => ({
       ...n,
       filePath: `${base}${getFileName(n.filePath)}`,
+    })),
+    trashedNotes: manifest.trashedNotes?.map((n) => ({
+      ...n,
+      originalFilePath: `${base}${getFileName(n.originalFilePath)}`,
+      trashFilePath: `${trashBase}${getFileName(n.trashFilePath)}`,
     })),
   };
 }
@@ -51,6 +69,7 @@ async function readManifestFile(dir: string): Promise<Manifest | null> {
 
 function mergeManifests(source: Manifest, dest: Manifest, toDir: string): Manifest {
   const base = normalizeSep(toDir);
+  const trashBase = `${base}.trash/`;
 
   // Merge notes: destination first, source overwrites by ID
   const noteMap = new Map<string, ManifestNote>();
@@ -72,11 +91,21 @@ function mergeManifests(source: Manifest, dest: Manifest, toDir: string): Manife
     groupMap.set(gObj.id, g);
   }
 
+  // Merge trashedNotes: destination first, source overwrites by ID
+  const trashMap = new Map<string, TrashedNoteEntry>();
+  for (const n of dest.trashedNotes ?? []) {
+    trashMap.set(n.id, { ...n, originalFilePath: `${base}${getFileName(n.originalFilePath)}`, trashFilePath: `${trashBase}${getFileName(n.trashFilePath)}` });
+  }
+  for (const n of source.trashedNotes ?? []) {
+    trashMap.set(n.id, { ...n, originalFilePath: `${base}${getFileName(n.originalFilePath)}`, trashFilePath: `${trashBase}${getFileName(n.trashFilePath)}` });
+  }
+
   return {
     version: 1,
     notes: Array.from(noteMap.values()),
     activeNoteId: source.activeNoteId,
     groups: groupMap.size > 0 ? Array.from(groupMap.values()) : undefined,
+    trashedNotes: trashMap.size > 0 ? Array.from(trashMap.values()) : undefined,
   };
 }
 
@@ -101,6 +130,22 @@ export async function migrateNotesDir(
       const destPath = `${normalizeSep(toDir)}${entry.name}`;
       await copyFile(srcPath, destPath);
     }
+
+    // Copy .trash directory contents
+    const fromTrash = `${normalizeSep(fromDir)}.trash`;
+    try {
+      const trashEntries = await readDir(fromTrash);
+      const trashMdFiles = trashEntries.filter((e) => e.name?.endsWith(".md"));
+      if (trashMdFiles.length > 0) {
+        const toTrash = `${normalizeSep(toDir)}.trash`;
+        await mkdir(toTrash, { recursive: true });
+        for (const entry of trashMdFiles) {
+          const srcPath = `${normalizeSep(fromTrash)}${entry.name}`;
+          const destPath = `${normalizeSep(toTrash)}${entry.name}`;
+          await copyFile(srcPath, destPath);
+        }
+      }
+    } catch { /* .trash directory may not exist — skip */ }
 
     // Handle manifest
     const sourceManifest = await readManifestFile(fromDir);
