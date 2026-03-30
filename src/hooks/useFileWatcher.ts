@@ -3,20 +3,12 @@ import { watch, readTextFile, readDir } from "@tauri-apps/plugin-fs";
 import type { WatchEvent } from "@tauri-apps/plugin-fs";
 import { getNotesDir, deriveTitle, saveManifest, migrationInProgress } from "./useNotesLoader";
 import type { NoteDoc, NoteGroup } from "./useNotesLoader";
+import { isOwnWrite, pruneOwnWrites } from "./ownWriteTracker";
 import { getDefaultDocumentTitle } from "../utils/documentTitle";
 import type { Locale, NotesSortOrder } from "./useSettings";
 
-/** Timestamp of our own writes — used to ignore self-triggered watch events */
-let lastOwnWriteTs = 0;
-const OWN_WRITE_GRACE_MS = 2000;
-
-export function markOwnWrite() {
-  lastOwnWriteTs = Date.now();
-}
-
-function isOwnWrite(): boolean {
-  return Date.now() - lastOwnWriteTs < OWN_WRITE_GRACE_MS;
-}
+// Re-export markOwnWrite for existing consumers
+export { markOwnWrite } from "./ownWriteTracker";
 
 function normalizePath(p: string): string {
   return p.replace(/\\/g, "/").toLowerCase();
@@ -134,14 +126,20 @@ export function useFileWatcher(
 
   const handleWatchEvent = useCallback(async (event: WatchEvent) => {
     if (migrationInProgress) return;
-    if (isOwnWrite()) return;
+    pruneOwnWrites();
 
     const dir = await getNotesDir();
     const dirNorm = normalizePath(dir);
 
     const affectedPaths = event.paths.map(normalizePath);
-    const isManifestChange = affectedPaths.some((p) => p.endsWith("/manifest.json") && p.startsWith(dirNorm));
-    const mdChanges = affectedPaths.filter((p) => p.endsWith(".md") && p.startsWith(dirNorm));
+    const isManifestChange = affectedPaths.some(
+      (p) => p.endsWith("/manifest.json") && p.startsWith(dirNorm) && !isOwnWrite(p),
+    );
+    const mdChanges = affectedPaths.filter(
+      (p) => p.endsWith(".md") && p.startsWith(dirNorm) && !isOwnWrite(p),
+    );
+
+    if (!isManifestChange && mdChanges.length === 0) return;
 
     // ── Handle manifest.json changes (groups, note metadata from other device) ──
     if (isManifestChange) {
