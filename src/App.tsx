@@ -44,6 +44,7 @@ import { useFileWatcher } from "./hooks/useFileWatcher";
 import { useWindowSync } from "./hooks/useWindowSync";
 import { openNewWindow } from "./utils/newWindow";
 import { open as openDialog, confirm, ask, message } from "@tauri-apps/plugin-dialog";
+import { buildImageMarkdownFromPaths, insertImagesAtPosition, isImagePath } from "./extensions/ImageDrop";
 import "./App.css";
 
 const useStyles = makeStyles({
@@ -229,6 +230,7 @@ const useStyles = makeStyles({
 const SIDEBAR_MIN = 200;
 const SIDEBAR_MAX = 400;
 const SIDEBAR_DEFAULT = 260;
+const MARKDOWN_FILE_PATTERN = /\.(md|markdown|mdx|txt)$/i;
 
 function App() {
   const [sidebarOpen, setSidebarOpen] = useState(() => {
@@ -662,6 +664,62 @@ function App() {
     },
     [state.updateMarkdown, scheduleAutoSave],
   );
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+
+    void getCurrentWindow().onDragDropEvent(async ({ payload }) => {
+      if (disposed || payload.type !== "drop") return;
+
+      const markdownPaths = payload.paths.filter((path) => MARKDOWN_FILE_PATTERN.test(path));
+      const imagePaths = payload.paths.filter((path) => isImagePath(path));
+
+      if (markdownPaths.length > 0) {
+        await fs.importFiles(markdownPaths);
+      }
+
+      if (imagePaths.length === 0 || !state.isEditing) {
+        return;
+      }
+
+      const scale = window.devicePixelRatio || 1;
+      const clientX = payload.position.x / scale;
+      const clientY = payload.position.y / scale;
+
+      if (state.editorMode === "markdown" && cmView) {
+        const pos = cmView.posAtCoords({ x: clientX, y: clientY }) ?? cmView.state.doc.length;
+        const markdown = await buildImageMarkdownFromPaths(imagePaths);
+        const insert = pos > 0 ? `\n\n${markdown}\n\n` : `${markdown}\n\n`;
+        cmView.dispatch({
+          changes: { from: pos, to: pos, insert },
+          selection: { anchor: pos + insert.length },
+          scrollIntoView: true,
+        });
+        return;
+      }
+
+      if (state.editorMode === "richtext") {
+        const editor = tiptapRef.current?.getEditor();
+        if (!editor) return;
+        const pos = editor.view.posAtCoords({ left: clientX, top: clientY })?.pos;
+        await insertImagesAtPosition(editor, imagePaths, pos);
+        state.setIsDirty(true);
+        scheduleAutoSave();
+      }
+    }).then((fn) => {
+      if (disposed) {
+        fn();
+        return;
+      }
+      unlisten = fn;
+    }).catch(() => {});
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [cmView, fs.importFiles, scheduleAutoSave, state.editorMode, state.isEditing, state.setIsDirty]);
 
   const showCodeMirror = state.isEditing && state.editorMode === "markdown";
 

@@ -78,6 +78,7 @@ function resetDocState(
 
 export interface FileSystemActions {
   importFile: () => Promise<void>;
+  importFiles: (paths: string[]) => Promise<void>;
   saveFile: () => Promise<void>;
   saveFileAs: () => Promise<void>;
   newNote: () => Promise<void>;
@@ -168,59 +169,70 @@ export function useFileSystem(
     await writeTextFile(selected, markdown);
   }, [activeIndex, docs, state, tiptapRef]);
 
-  const importFile = useCallback(async () => {
+  const importFiles = useCallback(async (paths: string[]) => {
+    const sourcePaths = paths.filter(Boolean);
+    if (sourcePaths.length === 0) return;
+
     await leaveCurrentDoc();
 
+    const existingNames = new Set(docs.map((d) => d.fileName));
+    const importedDocs: NoteDoc[] = [];
+
+    for (const sourcePath of sourcePaths) {
+      const content = await readTextFile(sourcePath);
+      const rawName = getFileName(sourcePath).replace(/\.(md|markdown|mdx|txt)$/i, "");
+      const baseName = rawName || "Imported";
+
+      let finalName = baseName;
+      if (existingNames.has(finalName)) {
+        let counter = 1;
+        while (existingNames.has(`${baseName} (${counter})`)) counter++;
+        finalName = `${baseName} (${counter})`;
+      }
+      existingNames.add(finalName);
+
+      const id = crypto.randomUUID();
+      const timestamp = Date.now();
+      let filePath = "";
+
+      try {
+        const notesDir = await getNotesDir();
+        await mkdir(notesDir, { recursive: true }).catch(() => {});
+        filePath = `${notesDir}/${id}.md`;
+        markOwnWrite(filePath);
+        await writeTextFile(filePath, content);
+      } catch (error) {
+        console.warn("Failed to write imported note file:", error);
+      }
+
+      importedDocs.push({
+        id,
+        filePath,
+        fileName: finalName,
+        isDirty: false,
+        content,
+        customName: true,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      });
+    }
+
+    if (importedDocs.length === 0) return;
+
+    const lastImported = importedDocs[importedDocs.length - 1];
+    const nextDocs = [...docs, ...importedDocs];
+    sortAndPersistDocs(nextDocs, lastImported.id, notesSortOrder, setDocs, setActiveIndex, groupsRef.current);
+    importedDocs.forEach((doc) => emitDocCreated(doc));
+
+    loadIntoEditor(tiptapRef, lastImported.content);
+    resetDocState(state, lastImported.filePath, lastImported.content);
+  }, [docs, leaveCurrentDoc, notesSortOrder, setActiveIndex, setDocs, state, tiptapRef]);
+
+  const importFile = useCallback(async () => {
     const selected = await open({ filters: MD_FILTERS, multiple: false });
     if (!selected) return;
-
-    const sourcePath = selected as string;
-    const content = await readTextFile(sourcePath);
-
-    // Derive note name from source file name (without extension)
-    const rawName = getFileName(sourcePath).replace(/\.(md|markdown|mdx|txt)$/i, "");
-    const baseName = rawName || "Imported";
-
-    // Check for duplicate names and add number suffix if needed
-    const existingNames = docs.map((d) => d.fileName);
-    let finalName = baseName;
-    if (existingNames.includes(finalName)) {
-      let counter = 1;
-      while (existingNames.includes(`${baseName} (${counter})`)) counter++;
-      finalName = `${baseName} (${counter})`;
-    }
-
-    const id = crypto.randomUUID();
-    const timestamp = Date.now();
-    let filePath = "";
-    try {
-      const notesDir = await getNotesDir();
-      await mkdir(notesDir, { recursive: true }).catch(() => {});
-      filePath = `${notesDir}/${id}.md`;
-      markOwnWrite(filePath);
-      await writeTextFile(filePath, content);
-    } catch (error) {
-      console.warn("Failed to write imported note file:", error);
-    }
-
-    const newDoc: NoteDoc = {
-      id,
-      filePath,
-      fileName: finalName,
-      isDirty: false,
-      content,
-      customName: true,
-      createdAt: timestamp,
-      updatedAt: timestamp,
-    };
-
-    const nextDocs = [...docs, newDoc];
-    sortAndPersistDocs(nextDocs, newDoc.id, notesSortOrder, setDocs, setActiveIndex, groupsRef.current);
-    emitDocCreated(newDoc);
-
-    loadIntoEditor(tiptapRef, content);
-    resetDocState(state, filePath, content);
-  }, [leaveCurrentDoc, docs, notesSortOrder, setActiveIndex, setDocs, state, tiptapRef]);
+    await importFiles([selected as string]);
+  }, [importFiles]);
 
   const newNote = useCallback(async () => {
     await leaveCurrentDoc();
@@ -541,5 +553,5 @@ export function useFileSystem(
     void saveManifest(docsRef.current, docsRef.current[activeIndexRef.current]?.id ?? null, groupsRef.current).catch(() => {});
   }, [setTrashedNotes]);
 
-  return { importFile, saveFile, saveFileAs, newNote, switchDocument, deleteNote, duplicateNote, exportNote, renameNote, restoreNote, permanentlyDeleteNote, emptyTrash };
+  return { importFile, importFiles, saveFile, saveFileAs, newNote, switchDocument, deleteNote, duplicateNote, exportNote, renameNote, restoreNote, permanentlyDeleteNote, emptyTrash };
 }

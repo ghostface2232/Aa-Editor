@@ -1,5 +1,5 @@
-import { Extension, type Editor } from "@tiptap/core";
-import { Plugin, PluginKey } from "@tiptap/pm/state";
+import { Extension, type Content, type Editor } from "@tiptap/core";
+import { Plugin, PluginKey, NodeSelection } from "@tiptap/pm/state";
 import { open } from "@tauri-apps/plugin-dialog";
 import { readFile } from "@tauri-apps/plugin-fs";
 import { bytesToDataUrl, mimeFromExt } from "../utils/imageUtils";
@@ -7,6 +7,15 @@ import { bytesToDataUrl, mimeFromExt } from "../utils/imageUtils";
 const IMAGE_MIME = ["image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml"];
 const IMAGE_EXTENSIONS = ["png", "jpg", "jpeg", "gif", "webp", "svg"];
 const MAX_IMAGE_WIDTH = 560;
+
+type DraggedImageNode = {
+  editor: Editor;
+  from: number;
+  nodeSize: number;
+  attrs: Record<string, unknown>;
+};
+
+let draggedImageNode: DraggedImageNode | null = null;
 
 function loadImageSize(src: string): Promise<{ width: number; height: number }> {
   return new Promise((resolve) => {
@@ -17,6 +26,64 @@ function loadImageSize(src: string): Promise<{ width: number; height: number }> 
   });
 }
 
+export function isImagePath(path: string): boolean {
+  const ext = path.split(".").pop();
+  return ext ? IMAGE_EXTENSIONS.includes(ext.toLowerCase()) : false;
+}
+
+export function startImageNodeDrag(payload: DraggedImageNode) {
+  draggedImageNode = payload;
+}
+
+export function clearImageNodeDrag() {
+  draggedImageNode = null;
+}
+
+async function loadImageAttrsFromPath(path: string): Promise<{
+  src: string;
+  width: number;
+  height: number;
+}> {
+  const ext = path.split(".").pop() ?? "png";
+  const bytes = await readFile(path);
+  const dataUrl = bytesToDataUrl(bytes, mimeFromExt(ext));
+  const { width: natW, height: natH } = await loadImageSize(dataUrl);
+  const width = natW > MAX_IMAGE_WIDTH ? MAX_IMAGE_WIDTH : natW;
+  const height = natW > MAX_IMAGE_WIDTH ? Math.round(natH * (MAX_IMAGE_WIDTH / natW)) : natH;
+
+  return { src: dataUrl, width, height };
+}
+
+export async function buildImageContentFromPaths(paths: string[]): Promise<Content[]> {
+  const images = await Promise.all(paths.map((path) => loadImageAttrsFromPath(path)));
+  return images.map(({ src, width, height }) => ({
+    type: "image",
+    attrs: { src, width, height },
+  }));
+}
+
+export async function buildImageMarkdownFromPaths(paths: string[]): Promise<string> {
+  const images = await Promise.all(paths.map((path) => loadImageAttrsFromPath(path)));
+  return images
+    .map(({ src, width, height }) => `<img src="${src}" alt="" width="${width}" height="${height}" />`)
+    .join("\n\n");
+}
+
+export async function insertImagesAtPosition(
+  editor: Editor,
+  paths: string[],
+  pos?: number,
+): Promise<void> {
+  const content = await buildImageContentFromPaths(paths);
+  if (content.length === 0) return;
+
+  const chain = editor.chain().focus();
+  if (typeof pos === "number") {
+    chain.setTextSelection(pos);
+  }
+  chain.insertContent(content).run();
+}
+
 export async function pickAndInsertImage(editor: Editor): Promise<void> {
   const selected = await open({
     filters: [{ name: "Images", extensions: IMAGE_EXTENSIONS }],
@@ -24,14 +91,7 @@ export async function pickAndInsertImage(editor: Editor): Promise<void> {
   });
   if (!selected) return;
 
-  const path = selected as string;
-  const ext = path.split(".").pop() ?? "png";
-  const bytes = await readFile(path);
-  const dataUrl = bytesToDataUrl(bytes, mimeFromExt(ext));
-  const { width: natW, height: natH } = await loadImageSize(dataUrl);
-  const w = natW > MAX_IMAGE_WIDTH ? MAX_IMAGE_WIDTH : natW;
-  const h = natW > MAX_IMAGE_WIDTH ? Math.round(natH * (MAX_IMAGE_WIDTH / natW)) : natH;
-  editor.chain().focus().setImage({ src: dataUrl, width: w, height: h }).run();
+  await insertImagesAtPosition(editor, [selected as string]);
 }
 
 const ImageDrop = Extension.create({
@@ -45,8 +105,48 @@ const ImageDrop = Extension.create({
       new Plugin({
         key: new PluginKey("imageDrop"),
         props: {
+          handleDOMEvents: {
+            dragover(_view, event) {
+              if (!draggedImageNode) return false;
+              event.preventDefault();
+              if (event.dataTransfer) {
+                event.dataTransfer.dropEffect = "move";
+              }
+              return true;
+            },
+            dragend() {
+              clearImageNodeDrag();
+              return false;
+            },
+          },
           handleDrop(view, event) {
             const files = event.dataTransfer?.files;
+            if (draggedImageNode && draggedImageNode.editor === editor && (!files || files.length === 0)) {
+              event.preventDefault();
+
+              const pos = view.posAtCoords({
+                left: event.clientX,
+                top: event.clientY,
+              });
+              const dragged = draggedImageNode;
+              clearImageNodeDrag();
+              if (!pos) return true;
+
+              const imageNode = editor.schema.nodes.image?.create(dragged.attrs);
+              if (!imageNode) return true;
+
+              let insertPos = pos.pos;
+              if (insertPos >= dragged.from) {
+                insertPos = Math.max(dragged.from, insertPos - dragged.nodeSize);
+              }
+
+              const tr = view.state.tr.delete(dragged.from, dragged.from + dragged.nodeSize);
+              tr.insert(insertPos, imageNode);
+              tr.setSelection(NodeSelection.create(tr.doc, insertPos));
+              view.dispatch(tr.scrollIntoView());
+              return true;
+            }
+
             if (!files || files.length === 0) return false;
 
             const images = Array.from(files).filter((file) => IMAGE_MIME.includes(file.type));
@@ -66,18 +166,12 @@ const ImageDrop = Extension.create({
                 const { width: natW, height: natH } = await loadImageSize(src);
                 const w = natW > MAX_IMAGE_WIDTH ? MAX_IMAGE_WIDTH : natW;
                 const h = natW > MAX_IMAGE_WIDTH ? Math.round(natH * (MAX_IMAGE_WIDTH / natW)) : natH;
-                if (pos) {
-                  editor
-                    .chain()
-                    .focus()
-                    .insertContentAt(pos.pos, {
-                      type: "image",
-                      attrs: { src, width: w, height: h },
-                    })
-                    .run();
-                } else {
-                  editor.chain().focus().setImage({ src, width: w, height: h }).run();
-                }
+                const chain = editor.chain().focus();
+                if (pos) chain.setTextSelection(pos.pos);
+                chain.insertContent({
+                  type: "image",
+                  attrs: { src, width: w, height: h },
+                }).run();
               };
               reader.readAsDataURL(file);
             });

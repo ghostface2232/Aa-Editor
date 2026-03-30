@@ -361,8 +361,8 @@ export const TiptapEditor = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
     const handleUpdate = useCallback((currentEditor: Editor, isPaste: boolean) => {
       if (!dirtyRef.current) {
         dirtyRef.current = true;
-        onDirtyChange(true);
       }
+      onDirtyChange(true);
 
       if (spellcheckRef.current && isPaste) {
         scheduleSpellcheckRefresh(currentEditor, true);

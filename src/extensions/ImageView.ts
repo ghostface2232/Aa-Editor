@@ -1,4 +1,5 @@
 import { type Editor } from "@tiptap/core";
+import { NodeSelection } from "@tiptap/pm/state";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { readFile, writeFile } from "@tauri-apps/plugin-fs";
 import { t } from "../i18n";
@@ -81,15 +82,19 @@ export function createImageNodeView(editor: Editor) {
     const { node, getPos, HTMLAttributes } = props;
 
     let currentSrc = node.attrs.src;
+    let currentNode = node;
     let activeDragCleanup: (() => void) | null = null;
+    let activeMoveCleanup: (() => void) | null = null;
 
     const dom = document.createElement("div");
     dom.style.cssText = "position:relative;display:inline-block;max-width:100%;line-height:0;";
+    dom.draggable = false;
 
     const img = document.createElement("img");
     img.src = HTMLAttributes.src;
     if (HTMLAttributes.alt) img.alt = HTMLAttributes.alt;
     if (HTMLAttributes.title) img.title = HTMLAttributes.title;
+    img.draggable = false;
     img.style.cssText = "display:block;max-width:100%;height:auto;border-radius:var(--editor-radius);cursor:default;";
     if (HTMLAttributes.width) img.style.width = `${HTMLAttributes.width}px`;
     if (HTMLAttributes.height) img.style.height = `${HTMLAttributes.height}px`;
@@ -125,6 +130,10 @@ export function createImageNodeView(editor: Editor) {
 
     const isReadonly = () => !!editor.storage.readonlyGuard?.readonly;
 
+    const syncDragState = () => {
+      img.style.cursor = isReadonly() ? "default" : "grab";
+    };
+
     const showHandles = () => {
       if (isReadonly()) return;
       handles.forEach((h) => { h.style.opacity = "1"; h.style.pointerEvents = "auto"; });
@@ -144,10 +153,76 @@ export function createImageNodeView(editor: Editor) {
       if (selected) showHandles();
     };
 
-    img.addEventListener("click", () => {
+    const selectImageNode = () => {
       if (isReadonly()) return;
       const pos = getPos();
       if (pos !== undefined) editor.commands.setNodeSelection(pos);
+    };
+
+    img.addEventListener("mousedown", (e) => {
+      if (e.button !== 0) return;
+      selectImageNode();
+
+      if (isReadonly()) return;
+
+      const startPos = getPos();
+      if (startPos === undefined) return;
+
+      const startX = e.clientX;
+      const startY = e.clientY;
+      let dragging = false;
+
+      const cleanup = () => {
+        document.removeEventListener("mousemove", onMouseMove);
+        document.removeEventListener("mouseup", onMouseUp);
+        document.body.style.cursor = "";
+        dom.style.opacity = "";
+        img.style.cursor = isReadonly() ? "default" : "grab";
+        activeMoveCleanup = null;
+      };
+
+      const onMouseMove = (ev: MouseEvent) => {
+        if (!dragging && Math.hypot(ev.clientX - startX, ev.clientY - startY) < 6) {
+          return;
+        }
+
+        dragging = true;
+        document.body.style.cursor = "grabbing";
+        dom.style.opacity = "0.72";
+        img.style.cursor = "grabbing";
+      };
+
+      const onMouseUp = (ev: MouseEvent) => {
+        const wasDragging = dragging;
+        cleanup();
+        if (!wasDragging) return;
+
+        const target = editor.view.posAtCoords({ left: ev.clientX, top: ev.clientY });
+        if (!target) return;
+
+        const imageNode = editor.schema.nodes.image?.create({ ...currentNode.attrs });
+        if (!imageNode) return;
+
+        let insertPos = target.pos;
+        if (insertPos >= startPos) {
+          insertPos = Math.max(startPos, insertPos - currentNode.nodeSize);
+        }
+
+        if (insertPos === startPos) return;
+
+        const tr = editor.view.state.tr.delete(startPos, startPos + currentNode.nodeSize);
+        tr.insert(insertPos, imageNode);
+        tr.setSelection(NodeSelection.create(tr.doc, insertPos));
+        editor.view.dispatch(tr.scrollIntoView());
+      };
+
+      document.addEventListener("mousemove", onMouseMove);
+      document.addEventListener("mouseup", onMouseUp);
+      activeMoveCleanup = cleanup;
+    });
+
+    img.addEventListener("click", () => {
+      selectImageNode();
     });
 
     handles.forEach((handle) => {
@@ -202,11 +277,13 @@ export function createImageNodeView(editor: Editor) {
     });
 
     editor.on("selectionUpdate", updateSelection);
+    syncDragState();
 
     return {
       dom,
       update: (updatedNode: any) => {
         if (updatedNode.type.name !== "image") return false;
+        currentNode = updatedNode;
         currentSrc = updatedNode.attrs.src;
         img.src = updatedNode.attrs.src;
         if (updatedNode.attrs.alt) img.alt = updatedNode.attrs.alt;
@@ -214,6 +291,7 @@ export function createImageNodeView(editor: Editor) {
           img.style.width = `${updatedNode.attrs.width}px`;
           img.style.height = `${updatedNode.attrs.height}px`;
         }
+        syncDragState();
         updateSelection();
         return true;
       },
@@ -223,7 +301,11 @@ export function createImageNodeView(editor: Editor) {
         showHandles();
       },
       deselectNode: () => { dom.style.outline = "none"; hideHandles(); },
-      destroy: () => { editor.off("selectionUpdate", updateSelection); activeDragCleanup?.(); },
+      destroy: () => {
+        editor.off("selectionUpdate", updateSelection);
+        activeDragCleanup?.();
+        activeMoveCleanup?.();
+      },
     };
   };
 }
