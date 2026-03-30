@@ -1,7 +1,8 @@
 import { useEffect, useRef } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { emit, listen } from "@tauri-apps/api/event";
-import type { NoteDoc, NoteGroup } from "./useNotesLoader";
+import type { NoteDoc, NoteGroup, TrashedNote } from "./useNotesLoader";
+import { setTrashedNotesCache } from "./useNotesLoader";
 
 interface DocUpdatedPayload {
   sourceWindow: string;
@@ -32,6 +33,11 @@ interface DocCreatedPayload {
 interface GroupsUpdatedPayload {
   sourceWindow: string;
   groups: NoteGroup[];
+}
+
+interface TrashUpdatedPayload {
+  sourceWindow: string;
+  trashedNotes: TrashedNote[];
 }
 
 const WINDOW_LABEL = getCurrentWindow().label;
@@ -69,6 +75,12 @@ export function emitGroupsUpdated(groups: NoteGroup[]) {
   } satisfies GroupsUpdatedPayload).catch(() => {});
 }
 
+export function emitTrashUpdated(trashedNotes: TrashedNote[]) {
+  emit("trash-updated", {
+    sourceWindow: WINDOW_LABEL, trashedNotes,
+  } satisfies TrashUpdatedPayload).catch(() => {});
+}
+
 /* ── Listener hook ── */
 
 export function useWindowSync(
@@ -77,6 +89,7 @@ export function useWindowSync(
   tiptapRef: React.RefObject<{ setContent: (md: string) => void } | null>,
   setActiveIndex: React.Dispatch<React.SetStateAction<number>>,
   setGroups?: React.Dispatch<React.SetStateAction<NoteGroup[]>>,
+  setTrashedNotes?: (updater: TrashedNote[] | ((prev: TrashedNote[]) => TrashedNote[])) => void,
 ) {
   // Refs to avoid stale closures in event listeners
   const activeIndexRef = useRef(activeIndex);
@@ -165,11 +178,18 @@ export function useWindowSync(
         if (sourceWindow === WINDOW_LABEL) return;
         setGroups?.(groups);
       }),
+
+      listen<TrashUpdatedPayload>("trash-updated", (event) => {
+        const { sourceWindow, trashedNotes } = event.payload;
+        if (sourceWindow === WINDOW_LABEL) return;
+        setTrashedNotesCache(trashedNotes);
+        setTrashedNotes?.(trashedNotes);
+      }),
     ]).then((fns) => {
       if (!mounted) { fns.forEach((fn) => fn()); return; }
       unlisteners = fns;
     });
 
     return () => { mounted = false; unlisteners.forEach((fn) => fn()); };
-  }, [setDocs, setActiveIndex, tiptapRef, setGroups]);
+  }, [setDocs, setActiveIndex, tiptapRef, setGroups, setTrashedNotes]);
 }

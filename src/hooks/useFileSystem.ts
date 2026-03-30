@@ -1,19 +1,23 @@
 import { useCallback, useRef } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { mkdir, readTextFile, writeTextFile, remove } from "@tauri-apps/plugin-fs";
+import { mkdir, readTextFile, writeTextFile, remove, copyFile } from "@tauri-apps/plugin-fs";
 import {
   getNotesDir,
   saveManifest,
   deriveTitle,
   sortNotes,
+  getFileBaseName,
+  ensureTrashDir,
+  setTrashedNotesCache,
   type NoteDoc,
   type NoteGroup,
+  type TrashedNote,
 } from "./useNotesLoader";
 import type { MarkdownState } from "./useMarkdownState";
 import type { TiptapEditorHandle } from "../components/TiptapEditor";
 import type { Locale, NotesSortOrder } from "./useSettings";
 import { getDefaultDocumentTitle } from "../utils/documentTitle";
-import { emitDocCreated, emitDocDeleted, emitDocRenamed } from "./useWindowSync";
+import { emitDocCreated, emitDocDeleted, emitDocRenamed, emitTrashUpdated } from "./useWindowSync";
 import { markOwnWrite } from "./ownWriteTracker";
 
 export type { NoteDoc } from "./useNotesLoader";
@@ -82,6 +86,9 @@ export interface FileSystemActions {
   duplicateNote: (index: number) => Promise<void>;
   exportNote: (index: number) => Promise<void>;
   renameNote: (index: number, newName: string) => void;
+  restoreNote: (trashedNoteId: string) => Promise<void>;
+  permanentlyDeleteNote: (trashedNoteId: string) => Promise<void>;
+  emptyTrash: () => Promise<void>;
 }
 
 export function useFileSystem(
@@ -95,9 +102,15 @@ export function useFileSystem(
   notesSortOrder: NotesSortOrder,
   groups?: NoteGroup[],
   cleanupDeletedNote?: (noteId: string) => void,
+  getGroupForNote?: (noteId: string) => NoteGroup | null,
+  trashedNotes?: TrashedNote[],
+  setTrashedNotes?: (updater: TrashedNote[] | ((prev: TrashedNote[]) => TrashedNote[])) => void,
+  addNoteToGroup?: (noteId: string, groupId: string) => void,
 ): FileSystemActions {
   const groupsRef = useRef(groups);
   groupsRef.current = groups;
+  const trashedNotesRef = useRef(trashedNotes);
+  trashedNotesRef.current = trashedNotes;
 
   const cacheCurrentContent = useCallback(() => {
     const markdown = getCurrentMarkdown(state, tiptapRef);
@@ -269,13 +282,41 @@ export function useFileSystem(
     const doc = docs[index];
     if (!doc) return;
 
-    // Remove the file from disk
+    // Capture group BEFORE cleanupDeletedNote removes it
+    const group = getGroupForNote?.(doc.id) ?? null;
+
+    // Move file to .trash instead of permanent delete
     if (doc.filePath) {
       try {
+        const trashDir = await ensureTrashDir();
+        const fileName = getFileBaseName(doc.filePath);
+        const trashPath = `${trashDir}/${fileName}`;
+
         markOwnWrite(doc.filePath);
+        await copyFile(doc.filePath, trashPath);
         await remove(doc.filePath);
+
+        const trashedNote: TrashedNote = {
+          id: doc.id,
+          fileName: doc.fileName,
+          originalFilePath: doc.filePath,
+          trashFilePath: trashPath,
+          trashedAt: Date.now(),
+          groupId: group?.id ?? null,
+          createdAt: doc.createdAt,
+          updatedAt: doc.updatedAt,
+        };
+
+        if (setTrashedNotes) {
+          setTrashedNotes((prev) => {
+            const next = [...prev, trashedNote];
+            setTrashedNotesCache(next);
+            return next;
+          });
+          emitTrashUpdated([...(trashedNotesRef.current ?? []), trashedNote]);
+        }
       } catch {
-        console.warn("Failed to delete note file:", doc.filePath);
+        console.warn("Failed to trash note file:", doc.filePath);
       }
     }
 
@@ -327,7 +368,7 @@ export function useFileSystem(
     }
 
     sortAndPersistDocs(nextDocs, nextActiveId, notesSortOrder, setDocs, setActiveIndex, groupsRef.current);
-  }, [activeIndex, docs, locale, notesSortOrder, setActiveIndex, setDocs, state, tiptapRef, cleanupDeletedNote]);
+  }, [activeIndex, docs, locale, notesSortOrder, setActiveIndex, setDocs, state, tiptapRef, cleanupDeletedNote, getGroupForNote, setTrashedNotes]);
 
   const duplicateNote = useCallback(async (index: number) => {
     const doc = docs[index];
@@ -398,5 +439,85 @@ export function useFileSystem(
     emitDocRenamed(doc.id, doc.filePath, doc.filePath, trimmed);
   }, [docs, notesSortOrder, setActiveIndex, setDocs]);
 
-  return { importFile, saveFile, saveFileAs, newNote, switchDocument, deleteNote, duplicateNote, exportNote, renameNote };
+  const restoreNote = useCallback(async (trashedNoteId: string) => {
+    const trashed = trashedNotesRef.current?.find((n) => n.id === trashedNoteId);
+    if (!trashed) return;
+
+    const notesDir = await getNotesDir();
+    const fileName = getFileBaseName(trashed.trashFilePath);
+    const restoredPath = `${notesDir}/${fileName}`;
+
+    markOwnWrite(restoredPath);
+    await copyFile(trashed.trashFilePath, restoredPath);
+    await remove(trashed.trashFilePath);
+
+    const content = await readTextFile(restoredPath);
+
+    const restoredDoc: NoteDoc = {
+      id: trashed.id,
+      filePath: restoredPath,
+      fileName: trashed.fileName,
+      isDirty: false,
+      content,
+      createdAt: trashed.createdAt,
+      updatedAt: trashed.updatedAt,
+    };
+
+    cacheCurrentContent();
+
+    const nextDocs = [...docs, restoredDoc];
+    sortAndPersistDocs(nextDocs, restoredDoc.id, notesSortOrder, setDocs, setActiveIndex, groupsRef.current);
+    emitDocCreated(restoredDoc);
+
+    loadIntoEditor(tiptapRef, content);
+    resetDocState(state, restoredPath, content);
+
+    // Restore to original group if it still exists
+    if (trashed.groupId && addNoteToGroup) {
+      const groupExists = groupsRef.current?.some((g) => g.id === trashed.groupId);
+      if (groupExists) {
+        addNoteToGroup(trashed.id, trashed.groupId);
+      }
+    }
+
+    // Remove from trashed list
+    if (setTrashedNotes) {
+      setTrashedNotes((prev) => {
+        const next = prev.filter((n) => n.id !== trashedNoteId);
+        setTrashedNotesCache(next);
+        return next;
+      });
+      emitTrashUpdated((trashedNotesRef.current ?? []).filter((n) => n.id !== trashedNoteId));
+    }
+  }, [cacheCurrentContent, docs, notesSortOrder, setActiveIndex, setDocs, state, tiptapRef, setTrashedNotes, addNoteToGroup]);
+
+  const permanentlyDeleteNote = useCallback(async (trashedNoteId: string) => {
+    const trashed = trashedNotesRef.current?.find((n) => n.id === trashedNoteId);
+    if (!trashed) return;
+
+    try { await remove(trashed.trashFilePath); } catch { /* already gone */ }
+
+    if (setTrashedNotes) {
+      setTrashedNotes((prev) => {
+        const next = prev.filter((n) => n.id !== trashedNoteId);
+        setTrashedNotesCache(next);
+        return next;
+      });
+      emitTrashUpdated((trashedNotesRef.current ?? []).filter((n) => n.id !== trashedNoteId));
+    }
+  }, [setTrashedNotes]);
+
+  const emptyTrash = useCallback(async () => {
+    for (const trashed of trashedNotesRef.current ?? []) {
+      try { await remove(trashed.trashFilePath); } catch { /* ignore */ }
+    }
+
+    if (setTrashedNotes) {
+      setTrashedNotes([]);
+      setTrashedNotesCache([]);
+      emitTrashUpdated([]);
+    }
+  }, [setTrashedNotes]);
+
+  return { importFile, saveFile, saveFileAs, newNote, switchDocument, deleteNote, duplicateNote, exportNote, renameNote, restoreNote, permanentlyDeleteNote, emptyTrash };
 }
