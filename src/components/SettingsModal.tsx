@@ -584,12 +584,12 @@ export function SettingsModal({ open, onClose, settings, onUpdate, currentNotesD
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "18px" }}>
                     <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
                       <img
-                        src="/Aa_icon_1024.png"
-                        alt="Aa"
+                        src="/Noten_icon.png"
+                        alt="Noten"
                         style={{ width: "40px", height: "40px", borderRadius: "8px" }}
                       />
                       <div>
-                        <div style={{ fontSize: "16px", color: tokens.colorNeutralForeground1 }}>Aa Editor</div>
+                        <div style={{ fontSize: "16px", color: tokens.colorNeutralForeground1 }}>Noten</div>
                         <div style={{ fontSize: "12px", color: tokens.colorNeutralForeground3 }}>v{appVersion}</div>
                       </div>
                     </div>

@@ -335,6 +335,8 @@ export const TiptapEditor = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
     onReady,
   }, ref) {
     const dirtyRef = useRef(false);
+    const localeRef = useRef(locale);
+    localeRef.current = locale;
     const spellcheckRef = useRef(spellcheck);
     const spellcheckRefreshFrameRef = useRef<number | null>(null);
     const editorStyle = {
@@ -380,7 +382,7 @@ export const TiptapEditor = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
           },
         }).configure({ lowlight }),
         Image,
-        Placeholder.configure({ placeholder: t("placeholder", locale) }),
+        Placeholder.configure({ placeholder: () => t("placeholder", localeRef.current) }),
         Typography,
         TextAlign.configure({ types: ["heading", "paragraph"] }),
         Underline,
@@ -421,6 +423,9 @@ export const TiptapEditor = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
     useEffect(() => {
       if (editor?.storage.slashCommands) {
         editor.storage.slashCommands.locale = locale;
+      }
+      if (editor) {
+        editor.view.dispatch(editor.state.tr);
       }
     }, [editor, locale]);
 

@@ -6,7 +6,7 @@ use tauri::{Listener, Manager};
 async fn print_to_pdf(html: String, output_path: String) -> Result<(), String> {
     // Write HTML to a temp file
     let temp_dir = std::env::temp_dir();
-    let temp_html = temp_dir.join("aa_print_preview.html");
+    let temp_html = temp_dir.join("noten_print_preview.html");
     fs::write(&temp_html, &html).map_err(|e| format!("Failed to write temp HTML: {e}"))?;
 
     // Find Edge executable

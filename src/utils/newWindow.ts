@@ -9,7 +9,7 @@ export function openNewWindow(noteId?: string) {
 
   new WebviewWindow(label, {
     url,
-    title: "Aa",
+    title: "Noten",
     width: 800,
     height: 600,
     minWidth: 800,

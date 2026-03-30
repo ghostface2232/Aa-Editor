@@ -1,8 +1,8 @@
 <p>
-  <img src="public/Aa_icon_1024.png" alt="Aa Editor" width="128" height="128" />
+  <img src="public/Noten_icon.png" alt="Noten" width="128" height="128" />
 </p>
 
-# Aa Editor
+# Noten
 <p>
   A minimal, Mica-styled Markdown editor for Windows built with Tauri + React.
 </p>

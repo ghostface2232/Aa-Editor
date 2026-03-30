@@ -2,7 +2,7 @@ import type { Locale } from "./hooks/useSettings";
 
 const dict = {
   /* ─── TitleBar ─── */
-  "app.name": { en: "Aa", ko: "Aa" },
+  "app.name": { en: "Noten", ko: "Noten" },
   "mode.read": { en: "Read", ko: "읽기" },
   "mode.edit": { en: "Edit", ko: "편집" },
   "theme.light": { en: "Light", ko: "라이트" },

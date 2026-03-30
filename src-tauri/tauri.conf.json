@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Aa",
+  "productName": "Noten",
   "version": "0.1.0",
-  "identifier": "com.aa.app",
+  "identifier": "com.noten.app",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Aa",
+        "title": "Noten",
         "width": 800,
         "height": 600,
         "minWidth": 800,
@@ -51,7 +51,7 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQ1RDI2REE0NUNBMDZBMzEKUldReGFxQmNwRzNTUmNDK3V3cWtQSlRJY0Z1S29pS0dwSm5iSytZY0FXejc1cldLcXRYcVhFOFIK",
       "endpoints": [
-        "https://github.com/ghostface2232/Aa-Editor/releases/latest/download/latest.json"
+        "https://github.com/ghostface2232/Noten/releases/latest/download/latest.json"
       ]
     }
   }
