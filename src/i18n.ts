@@ -161,6 +161,16 @@ const dict = {
     ko: "노트 이동에 실패했습니다. 저장 위치가 변경되지 않았습니다.",
   },
 
+  /* ─── Trash ─── */
+  "settings.tab.trash": { en: "Recently Deleted", ko: "최근 삭제" },
+  "trash.count": { en: "{n} deleted notes", ko: "삭제된 노트 {n}개" },
+  "trash.empty": { en: "No deleted notes", ko: "삭제된 노트가 없습니다" },
+  "trash.emptyAll": { en: "Empty trash", ko: "휴지통 비우기" },
+  "trash.emptyAllConfirm": { en: "Permanently delete all trashed notes?", ko: "삭제된 모든 노트를 영구 삭제하시겠습니까?" },
+  "trash.restore": { en: "Restore", ko: "복원" },
+  "trash.deletePermanently": { en: "Delete permanently", ko: "영구 삭제" },
+  "trash.daysLeft": { en: "{n} days left", ko: "{n}일 남음" },
+
   /* ─── Search ─── */
   "search.placeholder": { en: "Find in document", ko: "문서에서 찾기" },
   "search.sidebarPlaceholder": { en: "Search notes", ko: "노트 검색" },

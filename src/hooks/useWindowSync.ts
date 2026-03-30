@@ -1,7 +1,8 @@
 import { useEffect, useRef } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { emit, listen } from "@tauri-apps/api/event";
-import type { NoteDoc, NoteGroup } from "./useNotesLoader";
+import type { NoteDoc, NoteGroup, TrashedNote } from "./useNotesLoader";
+import { setTrashedNotesCache } from "./useNotesLoader";
 
 interface DocUpdatedPayload {
   sourceWindow: string;
@@ -32,6 +33,11 @@ interface DocCreatedPayload {
 interface GroupsUpdatedPayload {
   sourceWindow: string;
   groups: NoteGroup[];
+}
+
+interface TrashUpdatedPayload {
+  sourceWindow: string;
+  trashedNotes: TrashedNote[];
 }
 
 const WINDOW_LABEL = getCurrentWindow().label;
@@ -69,6 +75,12 @@ export function emitGroupsUpdated(groups: NoteGroup[]) {
   } satisfies GroupsUpdatedPayload).catch(() => {});
 }
 
+export function emitTrashUpdated(trashedNotes: TrashedNote[]) {
+  emit("trash-updated", {
+    sourceWindow: WINDOW_LABEL, trashedNotes,
+  } satisfies TrashUpdatedPayload).catch(() => {});
+}
+
 /* ── Listener hook ── */
 
 export function useWindowSync(
@@ -77,6 +89,8 @@ export function useWindowSync(
   tiptapRef: React.RefObject<{ setContent: (md: string) => void } | null>,
   setActiveIndex: React.Dispatch<React.SetStateAction<number>>,
   setGroups?: React.Dispatch<React.SetStateAction<NoteGroup[]>>,
+  setTrashedNotes?: (updater: TrashedNote[] | ((prev: TrashedNote[]) => TrashedNote[])) => void,
+  onActiveDocChanged?: (doc: { filePath: string; content: string }) => void,
 ) {
   // Refs to avoid stale closures in event listeners
   const activeIndexRef = useRef(activeIndex);
@@ -124,10 +138,32 @@ export function useWindowSync(
         setDocs((prev) => {
           const idx = prev.findIndex((d) => d.id === docId);
           if (idx < 0) return prev;
+
           const filtered = prev.filter((d) => d.id !== docId);
-          if (activeIndexRef.current >= filtered.length) {
-            setActiveIndex(Math.max(0, filtered.length - 1));
+          if (filtered.length === 0) {
+            setActiveIndex(0);
+            return filtered;
           }
+
+          const currentActive = activeIndexRef.current;
+
+          if (idx === currentActive) {
+            // Deleted doc is the active doc — load new active doc's content
+            const newIdx = Math.min(idx, filtered.length - 1);
+            setActiveIndex(newIdx);
+            const newDoc = filtered[newIdx];
+            if (tiptapRef.current && newDoc) {
+              tiptapRef.current.setContent(newDoc.content);
+            }
+            if (newDoc) {
+              onActiveDocChanged?.({ filePath: newDoc.filePath, content: newDoc.content });
+            }
+          } else if (idx < currentActive) {
+            // Deleted doc is before active doc — shift index down
+            setActiveIndex(currentActive - 1);
+          }
+          // idx > currentActive — no change needed
+
           return filtered;
         });
       }),
@@ -147,11 +183,18 @@ export function useWindowSync(
         if (sourceWindow === WINDOW_LABEL) return;
         setGroups?.(groups);
       }),
+
+      listen<TrashUpdatedPayload>("trash-updated", (event) => {
+        const { sourceWindow, trashedNotes } = event.payload;
+        if (sourceWindow === WINDOW_LABEL) return;
+        setTrashedNotesCache(trashedNotes);
+        setTrashedNotes?.(trashedNotes);
+      }),
     ]).then((fns) => {
       if (!mounted) { fns.forEach((fn) => fn()); return; }
       unlisteners = fns;
     });
 
     return () => { mounted = false; unlisteners.forEach((fn) => fn()); };
-  }, [setDocs, setActiveIndex, tiptapRef, setGroups]);
+  }, [setDocs, setActiveIndex, tiptapRef, setGroups, setTrashedNotes, onActiveDocChanged]);
 }

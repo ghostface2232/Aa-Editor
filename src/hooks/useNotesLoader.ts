@@ -1,8 +1,10 @@
 import { useState, useEffect, useRef } from "react";
 import { appDataDir } from "@tauri-apps/api/path";
-import { mkdir, readTextFile, writeTextFile, readDir } from "@tauri-apps/plugin-fs";
+import { mkdir, readTextFile, writeTextFile, readDir, remove } from "@tauri-apps/plugin-fs";
+import { markOwnWrite } from "./ownWriteTracker";
 import type { Locale, NotesSortOrder } from "./useSettings";
 import { getDefaultDocumentTitle } from "../utils/documentTitle";
+import { getFileTimestamps } from "../utils/fileTimestamps";
 
 export interface NoteDoc {
   id: string;
@@ -23,16 +25,34 @@ export interface NoteGroup {
   createdAt: number;
 }
 
+export interface TrashedNote {
+  id: string;
+  fileName: string;
+  originalFilePath: string;
+  trashFilePath: string;
+  trashedAt: number;
+  groupId: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
 interface Manifest {
   version: 1;
   notes: Omit<NoteDoc, "isDirty" | "content">[];
   activeNoteId: string | null;
   groups?: NoteGroup[];
+  trashedNotes?: TrashedNote[];
 }
 
 const UI_STATE_STORAGE_KEY = "markdown-studio-ui-state";
 
 let notesDirCache: string | null = null;
+
+// --- Module-level trashedNotes cache (avoids disk I/O in saveManifest) ---
+
+let trashedNotesCache: TrashedNote[] = [];
+export function getTrashedNotesCache(): TrashedNote[] { return trashedNotesCache; }
+export function setTrashedNotesCache(notes: TrashedNote[]) { trashedNotesCache = notes; }
 
 /** Migration in progress — blocks saveManifest writes */
 export let migrationInProgress = false;
@@ -85,6 +105,37 @@ async function ensureNotesDir(): Promise<string> {
   return dir;
 }
 
+// --- Trash directory ---
+
+export async function getTrashDir(): Promise<string> {
+  const notesDir = await getNotesDir();
+  const sep = notesDir.endsWith("/") || notesDir.endsWith("\\") ? "" : "/";
+  return `${notesDir}${sep}.trash`;
+}
+
+export async function ensureTrashDir(): Promise<string> {
+  const dir = await getTrashDir();
+  await mkdir(dir, { recursive: true }).catch(() => {});
+  return dir;
+}
+
+const TRASH_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
+
+export async function purgeExpiredTrash(trashedNotes: TrashedNote[]): Promise<TrashedNote[]> {
+  const now = Date.now();
+  const kept: TrashedNote[] = [];
+
+  for (const note of trashedNotes) {
+    if (now - note.trashedAt > TRASH_RETENTION_MS) {
+      try { await remove(note.trashFilePath); } catch { /* file may already be gone */ }
+    } else {
+      kept.push(note);
+    }
+  }
+
+  return kept;
+}
+
 // --- File-based manifest ---
 
 async function readManifestFromFile(dir: string): Promise<Manifest | null> {
@@ -99,7 +150,9 @@ async function readManifestFromFile(dir: string): Promise<Manifest | null> {
 
 async function writeManifestToFile(dir: string, manifest: Manifest): Promise<void> {
   const sep = dir.endsWith("/") || dir.endsWith("\\") ? "" : "/";
-  await writeTextFile(`${dir}${sep}manifest.json`, JSON.stringify(manifest, null, 2));
+  const manifestPath = `${dir}${sep}manifest.json`;
+  markOwnWrite(manifestPath);
+  await writeTextFile(manifestPath, JSON.stringify(manifest, null, 2));
 }
 
 // --- localStorage fallback (backup / migration source) ---
@@ -156,11 +209,11 @@ async function readFileContent(path: string): Promise<string> {
 
 // --- Startup reconciliation: folder ↔ manifest ---
 
-function getFileBaseName(filePath: string): string {
+export function getFileBaseName(filePath: string): string {
   return filePath.replace(/\\/g, "/").split("/").pop() ?? "";
 }
 
-async function reconcileWithFolder(
+export async function reconcileFolder(
   dir: string,
   docs: NoteDoc[],
   groups: NoteGroup[],
@@ -191,15 +244,15 @@ async function reconcileWithFolder(
     try { content = await readTextFile(filePath); } catch { continue; }
 
     const id = name.replace(/\.md$/, "");
-    const timestamp = Date.now();
+    const { createdAt, updatedAt } = await getFileTimestamps(filePath);
     nextDocs.push({
       id,
       filePath,
       fileName: deriveTitle(content) || getDefaultDocumentTitle(locale),
       isDirty: false,
       content,
-      createdAt: timestamp,
-      updatedAt: timestamp,
+      createdAt,
+      updatedAt,
     });
     changed = true;
   }
@@ -232,6 +285,7 @@ export async function saveManifest(
 ): Promise<void> {
   if (migrationInProgress) return;
 
+  const trashed = trashedNotesCache;
   const manifest: Manifest = {
     version: 1,
     notes: docs.map(({ id, filePath, fileName, createdAt, updatedAt }) => ({
@@ -243,6 +297,7 @@ export async function saveManifest(
     })),
     activeNoteId: activeId,
     groups: groups && groups.length > 0 ? groups : undefined,
+    trashedNotes: trashed.length > 0 ? trashed : undefined,
   };
 
   try {
@@ -262,8 +317,16 @@ export function useNotesLoader(
   const [docs, setDocs] = useState<NoteDoc[]>([]);
   const [activeIndex, setActiveIndex] = useState(0);
   const [groups, setGroups] = useState<NoteGroup[]>([]);
+  const [trashedNotes, setTrashedNotesState] = useState<TrashedNote[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const initialized = useRef(false);
+
+  // Keep module-level cache in sync — updated synchronously (not deferred by React batching)
+  const setTrashedNotes = (updater: TrashedNote[] | ((prev: TrashedNote[]) => TrashedNote[])) => {
+    const next = typeof updater === "function" ? updater(trashedNotesCache) : updater;
+    setTrashedNotesCache(next);
+    setTrashedNotesState(next);
+  };
 
   // Reset initialized when reloadKey changes so the effect re-runs
   useEffect(() => {
@@ -282,6 +345,12 @@ export function useNotesLoader(
         const dir = await ensureNotesDir();
         const manifest = await readManifest(dir);
 
+        // Auto-purge expired trash on startup
+        const rawTrashed = manifest?.trashedNotes ?? [];
+        const purgedTrashed = await purgeExpiredTrash(rawTrashed);
+        const trashChanged = purgedTrashed.length !== rawTrashed.length;
+        setTrashedNotes(purgedTrashed);
+
         if (manifest && manifest.notes.length > 0) {
           const loaded = await Promise.all(
             manifest.notes.map(async (entry) => {
@@ -292,7 +361,7 @@ export function useNotesLoader(
 
           // Reconcile: pick up new .md files not in manifest, drop missing ones
           const { docs: reconciled, groups: reconciledGroups, changed: reconcileChanged } =
-            await reconcileWithFolder(dir, loaded, manifest.groups ?? [], locale);
+            await reconcileFolder(dir, loaded, manifest.groups ?? [], locale);
 
           const finalDocs = reconcileChanged ? reconciled : loaded;
           const finalGroups = reconcileChanged ? reconciledGroups : (manifest.groups ?? []);
@@ -307,8 +376,8 @@ export function useNotesLoader(
             : 0;
           setActiveIndex(nextActiveIndex >= 0 ? nextActiveIndex : 0);
 
-          // Persist if reconciliation made changes
-          if (reconcileChanged) {
+          // Persist if reconciliation or trash purge made changes
+          if (reconcileChanged || trashChanged) {
             const aid = sorted[nextActiveIndex >= 0 ? nextActiveIndex : 0]?.id ?? null;
             await saveManifest(sorted, aid, finalGroups).catch(() => {});
           }
@@ -323,15 +392,15 @@ export function useNotesLoader(
                 const id = entry.name!.replace(/\.md$/, "");
                 const filePath = `${dir}/${entry.name}`;
                 const content = await readFileContent(filePath);
-                const timestamp = Date.now();
+                const { createdAt, updatedAt } = await getFileTimestamps(filePath);
                 return {
                   id,
                   filePath,
                   fileName: deriveTitle(content) || getDefaultDocumentTitle(locale),
                   isDirty: false,
                   content,
-                  createdAt: timestamp,
-                  updatedAt: timestamp,
+                  createdAt,
+                  updatedAt,
                 } as NoteDoc;
               }),
             );
@@ -379,7 +448,7 @@ export function useNotesLoader(
     })();
   }, [enabled, locale, notesSortOrder, reloadKey]);
 
-  return { docs, setDocs, activeIndex, setActiveIndex, groups, setGroups, isLoading };
+  return { docs, setDocs, activeIndex, setActiveIndex, groups, setGroups, trashedNotes, setTrashedNotes, isLoading };
 }
 
 export function deriveTitle(content: string): string {

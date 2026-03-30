@@ -32,6 +32,7 @@ import type {
   ThemeMode,
   WordWrap,
 } from "../hooks/useSettings";
+import type { TrashedNote } from "../hooks/useNotesLoader";
 
 const NAV_WIDTH = "160px";
 const CONTROL_RADIUS = "6px";
@@ -204,7 +205,7 @@ const useStyles = makeStyles({
   },
 });
 
-type TabId = "general" | "display" | "shortcuts" | "about";
+type TabId = "general" | "display" | "shortcuts" | "trash" | "about";
 
 interface SettingsModalProps {
   open: boolean;
@@ -214,6 +215,10 @@ interface SettingsModalProps {
   currentNotesDir: string;
   onChangeNotesDir: () => void;
   onResetNotesDir: () => void;
+  trashedNotes: TrashedNote[];
+  onRestoreNote: (id: string) => Promise<void>;
+  onPermanentlyDeleteNote: (id: string) => Promise<void>;
+  onEmptyTrash: () => Promise<void>;
 }
 
 const SORT_ORDER_LABELS: Record<NotesSortOrder, Parameters<typeof t>[0]> = {
@@ -236,7 +241,7 @@ function settingItemClass(
   return mergeClasses(styles.settingItem, isFirst && styles.settingItemFirst);
 }
 
-export function SettingsModal({ open, onClose, settings, onUpdate, currentNotesDir, onChangeNotesDir, onResetNotesDir }: SettingsModalProps) {
+export function SettingsModal({ open, onClose, settings, onUpdate, currentNotesDir, onChangeNotesDir, onResetNotesDir, trashedNotes, onRestoreNote, onPermanentlyDeleteNote, onEmptyTrash }: SettingsModalProps) {
   const styles = useStyles();
   const locale = settings.locale;
   const isDarkMode = settings.themeMode === "dark";
@@ -270,6 +275,7 @@ export function SettingsModal({ open, onClose, settings, onUpdate, currentNotesD
     { id: "general", labelKey: "settings.tab.general" },
     { id: "display", labelKey: "settings.tab.display" },
     { id: "shortcuts", labelKey: "settings.tab.shortcuts" },
+    { id: "trash", labelKey: "settings.tab.trash" },
     { id: "about", labelKey: "settings.tab.about" },
   ];
 
@@ -503,6 +509,71 @@ export function SettingsModal({ open, onClose, settings, onUpdate, currentNotesD
                     <span className={styles.shortcutKey}>{key}</span>
                   </div>
                 ))}
+              </div>
+            )}
+
+            {tab === "trash" && (
+              <div className={styles.section}>
+                <div className={mergeClasses(styles.row, settingItemClass(styles, true))}>
+                  <Label className={styles.label}>
+                    {i("trash.count").replace("{n}", String(trashedNotes.length))}
+                  </Label>
+                  {trashedNotes.length > 0 && (
+                    <Button
+                      size="small"
+                      appearance="subtle"
+                      onClick={async () => {
+                        if (confirm(i("trash.emptyAllConfirm"))) {
+                          await onEmptyTrash();
+                        }
+                      }}
+                      style={{ fontSize: "12px", color: tokens.colorPaletteRedForeground1, borderRadius: CONTROL_RADIUS }}
+                    >
+                      {i("trash.emptyAll")}
+                    </Button>
+                  )}
+                </div>
+                {trashedNotes.length === 0 ? (
+                  <div style={{ fontSize: "13px", color: tokens.colorNeutralForeground3, padding: "20px 0", textAlign: "center" }}>
+                    {i("trash.empty")}
+                  </div>
+                ) : (
+                  trashedNotes.map((note) => {
+                    const daysLeft = Math.max(0, 14 - Math.floor((Date.now() - note.trashedAt) / 86400000));
+                    return (
+                      <div key={note.id} className={settingItemClass(styles)}>
+                        <div className={styles.row}>
+                          <div style={{ minWidth: 0, flex: 1 }}>
+                            <div style={{ fontSize: "13px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                              {note.fileName}
+                            </div>
+                            <div style={{ fontSize: "12px", color: tokens.colorNeutralForeground3, marginTop: "2px" }}>
+                              {i("trash.daysLeft").replace("{n}", String(daysLeft))}
+                            </div>
+                          </div>
+                          <div style={{ display: "flex", gap: "4px", flexShrink: 0 }}>
+                            <Button
+                              size="small"
+                              appearance="subtle"
+                              onClick={() => onRestoreNote(note.id)}
+                              style={{ fontSize: "12px", borderRadius: CONTROL_RADIUS }}
+                            >
+                              {i("trash.restore")}
+                            </Button>
+                            <Button
+                              size="small"
+                              appearance="subtle"
+                              onClick={() => onPermanentlyDeleteNote(note.id)}
+                              style={{ fontSize: "12px", color: tokens.colorPaletteRedForeground1, borderRadius: CONTROL_RADIUS }}
+                            >
+                              {i("trash.deletePermanently")}
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
               </div>
             )}
 

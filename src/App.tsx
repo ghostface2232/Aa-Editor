@@ -269,12 +269,18 @@ function App() {
   }, [settingsLoaded, settings.notesDirectory]);
 
   // 노트 로더
-  const { docs, setDocs, activeIndex, setActiveIndex, groups, setGroups, isLoading } = useNotesLoader(
+  const { docs, setDocs, activeIndex, setActiveIndex, groups, setGroups, trashedNotes, setTrashedNotes, isLoading } = useNotesLoader(
     locale,
     settings.notesSortOrder,
     notesDirReady,
     reloadKey,
   );
+
+  // Refs for values read (but not triggering) in effects
+  const activeIndexRef = useRef(activeIndex);
+  activeIndexRef.current = activeIndex;
+  const groupsRef = useRef(groups);
+  groupsRef.current = groups;
 
   // 그룹 관리
   const noteGroups = useNoteGroups(groups, setGroups, docs, activeIndex);
@@ -318,7 +324,10 @@ function App() {
     locale,
     settings.notesSortOrder,
     groups,
-    noteGroups.cleanupDeletedNote,
+    setGroups,
+    noteGroups.getGroupForNote,
+    trashedNotes,
+    setTrashedNotes,
   );
 
   // 자동 저장
@@ -349,7 +358,13 @@ function App() {
   }, [isLoading, docs, fs.switchDocument]);
 
   // 창 간 동기화 (Tauri 이벤트)
-  useWindowSync(setDocs, activeIndex, tiptapRef, setActiveIndex, setGroups);
+  const handleActiveDocChanged = useCallback((doc: { filePath: string; content: string }) => {
+    state.setMarkdownRaw(doc.content);
+    state.setFilePath(doc.filePath);
+    state.setIsDirty(false);
+    state.setTiptapDirty(false);
+  }, [state]);
+  useWindowSync(setDocs, activeIndex, tiptapRef, setActiveIndex, setGroups, setTrashedNotes, handleActiveDocChanged);
 
   // 파일 시스템 감시 (클라우드 동기화 등 외부 변경 감지)
   useFileWatcher(
@@ -382,7 +397,7 @@ function App() {
   useEffect(() => {
     if (!settingsLoaded || docs.length < 2) return;
 
-    const activeId = docs[activeIndex]?.id ?? null;
+    const activeId = docs[activeIndexRef.current]?.id ?? null;
     const sortedDocs = sortNotes(docs, settings.notesSortOrder);
     const changed = sortedDocs.some((doc, index) => doc.id !== docs[index]?.id);
     if (!changed) return;
@@ -392,11 +407,9 @@ function App() {
       ? Math.max(sortedDocs.findIndex((doc) => doc.id === activeId), 0)
       : 0;
     setActiveIndex(nextActiveIndex);
-    void saveManifest(sortedDocs, activeId, groups).catch(() => {});
+    void saveManifest(sortedDocs, activeId, groupsRef.current).catch(() => {});
   }, [
-    activeIndex,
     docs,
-    groups,
     settings.notesSortOrder,
     settingsLoaded,
     setActiveIndex,
@@ -667,6 +680,7 @@ function App() {
           locale={locale}
           editor={tiptapEditor}
           paragraphSpacing={settings.paragraphSpacing}
+          documentTitle={activeDoc?.fileName}
           onToggleEditing={state.toggleEditing}
           onNewNote={fs.newNote}
           onImportFile={fs.importFile}
@@ -865,6 +879,10 @@ function App() {
         currentNotesDir={currentNotesDir}
         onChangeNotesDir={handleChangeNotesDir}
         onResetNotesDir={handleResetNotesDir}
+        trashedNotes={trashedNotes}
+        onRestoreNote={fs.restoreNote}
+        onPermanentlyDeleteNote={fs.permanentlyDeleteNote}
+        onEmptyTrash={fs.emptyTrash}
       />
       <div id="portal-root" />
     </FluentProvider>
