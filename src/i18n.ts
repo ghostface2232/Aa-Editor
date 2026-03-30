@@ -217,6 +217,7 @@ const dict = {
   "menu.darkMode": { en: "Dark mode", ko: "다크 모드" },
   "menu.lightMode": { en: "Light mode", ko: "라이트 모드" },
   "menu.paragraphSpacing": { en: "Paragraph spacing", ko: "문단 간격" },
+  "menu.spacingNone": { en: "None", ko: "없음" },
   "menu.settings": { en: "Settings", ko: "설정" },
 } as const;
 

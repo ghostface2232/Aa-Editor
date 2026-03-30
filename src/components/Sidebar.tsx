@@ -743,7 +743,7 @@ export function Sidebar({
 
   // Create group immediately with default name, then enter rename mode
   const handleCreateGroup = useCallback(() => {
-    const defaultName = locale === "ko" ? "새 그룹" : "New group";
+    const defaultName = i("sidebar.newGroup");
     const newId = onCreateGroup(defaultName);
     if (newId) {
       setEditingGroupId(newId);
@@ -1254,7 +1254,7 @@ export function Sidebar({
                 size="small"
                 onClick={() => {
                   const ids = Array.from(selectedNoteIds);
-                  onCreateGroup(locale === "ko" ? "새 그룹" : "New group", ids);
+                  onCreateGroup(i("sidebar.newGroup"), ids);
                   onSelectModeChange(false);
                 }}
               />
@@ -1440,7 +1440,7 @@ export function Sidebar({
                 icon={<FolderAddRegular />}
                 className={styles.contextMenuItem}
                 onClick={() => {
-                  onCreateGroup(locale === "ko" ? "새 그룹" : "New group", Array.from(selectedNoteIds));
+                  onCreateGroup(i("sidebar.newGroup"), Array.from(selectedNoteIds));
                   onSelectModeChange(false);
                   closeContextMenu();
                 }}
@@ -1578,7 +1578,7 @@ export function Sidebar({
                           const doc = docs[contextMenu.index];
                           if (doc) {
                             onCreateGroup(
-                              locale === "ko" ? "새 그룹" : "New group",
+                              i("sidebar.newGroup"),
                               [doc.id],
                             );
                           }
@@ -1603,7 +1603,7 @@ export function Sidebar({
                     const doc = docs[contextMenu.index];
                     if (doc) {
                       onCreateGroup(
-                        locale === "ko" ? "새 그룹" : "New group",
+                        i("sidebar.newGroup"),
                         [doc.id],
                       );
                     }

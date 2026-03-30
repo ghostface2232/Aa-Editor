@@ -280,7 +280,7 @@ export function AppMenu({
                       size="small"
                       style={v === paragraphSpacing ? { fontWeight: 700 } : undefined}
                     >
-                      {v === 0 ? (locale === "ko" ? "없음" : "None") : `${v}%`}
+                      {v === 0 ? i("menu.spacingNone") : `${v}%`}
                       {v === paragraphSpacing ? " ✓" : ""}
                     </Button>
                   ))}
