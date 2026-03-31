@@ -237,7 +237,7 @@ const useStyles = makeStyles({
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     boxShadow: tokens.shadow16,
     padding: "4px",
-    minWidth: "160px",
+    minWidth: "210px",
   },
   contextMenuItem: {
     display: "flex",
@@ -255,6 +255,13 @@ const useStyles = makeStyles({
   },
   contextMenuDanger: {
     color: tokens.colorPaletteRedForeground1,
+  },
+  shortcutHint: {
+    marginLeft: "auto",
+    paddingLeft: "24px",
+    fontSize: "12px",
+    opacity: 0.45,
+    whiteSpace: "nowrap" as const,
   },
   submenuParent: {
     position: "relative",
@@ -837,6 +844,43 @@ export function Sidebar({
     closeContextMenu();
   }, [docs, closeContextMenu]);
 
+  // Sidebar keyboard shortcuts — only when focus is inside the sidebar (not editor)
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      // Skip if editing a note name inline or a group name
+      if (editingIndex !== null || editingGroupId !== null) return;
+      // Skip if focus is inside an input/textarea/contenteditable
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      if ((e.target as HTMLElement)?.isContentEditable) return;
+      // Skip if no sidebar focus — check if the sidebar container contains focus
+      const sidebar = document.querySelector("[data-sidebar]");
+      if (!sidebar?.contains(document.activeElement) && !sidebar?.contains(e.target as Node)) return;
+
+      const ctrl = e.ctrlKey || e.metaKey;
+
+      if (ctrl && e.key === "d") {
+        e.preventDefault();
+        onDuplicateNote(activeIndex);
+      } else if (ctrl && e.shiftKey && e.key === "E") {
+        e.preventDefault();
+        onExportNote(activeIndex);
+      } else if (ctrl && e.key === "r") {
+        e.preventDefault();
+        handleDoubleClick(activeIndex);
+      } else if (ctrl && e.altKey && e.key === "c") {
+        e.preventDefault();
+        const doc = docs[activeIndex];
+        if (doc) navigator.clipboard.writeText(doc.content).catch(() => {});
+      } else if (e.key === "Delete" && !ctrl && !e.altKey && !e.shiftKey) {
+        e.preventDefault();
+        onDeleteNote(activeIndex);
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [activeIndex, docs, editingIndex, editingGroupId, onDuplicateNote, onExportNote, onDeleteNote, handleDoubleClick]);
+
   const toggleNoteSelection = useCallback((noteId: string) => {
     setSelectedNoteIds((prev) => {
       const next = new Set(prev);
@@ -1158,7 +1202,7 @@ export function Sidebar({
   };
 
   return (
-    <div className={styles.sidebar}>
+    <div className={styles.sidebar} data-sidebar>
       <div
         className={styles.body}
         data-sidebar-body
@@ -1335,7 +1379,7 @@ export function Sidebar({
                 onClick={() => { onNewNote(); closeContextMenu(); }}
                 size="small"
               >
-                {i("sidebar.newNote")}
+                {i("sidebar.newNote")}<span className={styles.shortcutHint}>Ctrl+N</span>
               </Button>
               <Button
                 appearance="subtle"
@@ -1344,7 +1388,7 @@ export function Sidebar({
                 onClick={() => { onImportFile(); closeContextMenu(); }}
                 size="small"
               >
-                {i("sidebar.import")}
+                {i("sidebar.import")}<span className={styles.shortcutHint}>Ctrl+O</span>
               </Button>
               <Button
                 appearance="subtle"
@@ -1353,7 +1397,7 @@ export function Sidebar({
                 onClick={() => { openNewWindow(); closeContextMenu(); }}
                 size="small"
               >
-                {i("menu.newWindow")}
+                {i("menu.newWindow")}<span className={styles.shortcutHint}>Ctrl+Shift+N</span>
               </Button>
               <Button
                 appearance="subtle"
@@ -1491,7 +1535,7 @@ export function Sidebar({
                 onClick={() => { handleDoubleClick(contextMenu.index); closeContextMenu(); }}
                 size="small"
               >
-                {i("sidebar.rename")}
+                {i("sidebar.rename")}<span className={styles.shortcutHint}>Ctrl+R</span>
               </Button>
               <Button
                 appearance="subtle"
@@ -1500,7 +1544,7 @@ export function Sidebar({
                 onClick={() => { openNewWindow(docs[contextMenu.index]?.id); closeContextMenu(); }}
                 size="small"
               >
-                {i("sidebar.openInNewWindow")}
+                {i("sidebar.openInNewWindow")}<span className={styles.shortcutHint}>Ctrl+Shift+N</span>
               </Button>
               <Button
                 appearance="subtle"
@@ -1509,7 +1553,7 @@ export function Sidebar({
                 onClick={() => { onDuplicateNote(contextMenu.index); closeContextMenu(); }}
                 size="small"
               >
-                {i("sidebar.duplicate")}
+                {i("sidebar.duplicate")}<span className={styles.shortcutHint}>Ctrl+D</span>
               </Button>
               <Button
                 appearance="subtle"
@@ -1518,7 +1562,7 @@ export function Sidebar({
                 onClick={() => { onExportNote(contextMenu.index); closeContextMenu(); }}
                 size="small"
               >
-                {i("sidebar.export")}
+                {i("sidebar.export")}<span className={styles.shortcutHint}>Ctrl+Shift+E</span>
               </Button>
               <Button
                 appearance="subtle"
@@ -1527,7 +1571,7 @@ export function Sidebar({
                 onClick={() => handleCopyContent(contextMenu.index)}
                 size="small"
               >
-                {i("sidebar.copyContent")}
+                {i("sidebar.copyContent")}<span className={styles.shortcutHint}>Ctrl+Alt+C</span>
               </Button>
 
               {/* Add to group submenu */}
@@ -1639,7 +1683,7 @@ export function Sidebar({
                 onClick={() => { onDeleteNote(contextMenu.index); closeContextMenu(); }}
                 size="small"
               >
-                {i("sidebar.delete")}
+                {i("sidebar.delete")}<span className={styles.shortcutHint}>Delete</span>
               </Button>
             </>
           )}

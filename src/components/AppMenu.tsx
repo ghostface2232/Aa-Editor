@@ -85,7 +85,7 @@ const useStyles = makeStyles({
     marginLeft: "auto",
     paddingLeft: "24px",
     fontSize: "12px",
-    color: tokens.colorNeutralForeground3,
+    opacity: 0.45,
     whiteSpace: "nowrap",
   },
   groupLabel: {

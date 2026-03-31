@@ -64,7 +64,7 @@ const dict = {
   "ctx.cut": { en: "Cut", ko: "잘라내기" },
   "ctx.copy": { en: "Copy", ko: "복사" },
   "ctx.paste": { en: "Paste", ko: "붙여넣기" },
-  "ctx.pasteNoFormat": { en: "Paste without formatting", ko: "서식 없이 붙여넣기" },
+  "ctx.pasteNoFormat": { en: "Paste plain text", ko: "서식 없이 붙여넣기" },
   "ctx.selectAll": { en: "Select all", ko: "모두 선택" },
   "ctx.emoji": { en: "Emoji", ko: "이모지" },
 
@@ -77,7 +77,7 @@ const dict = {
   "sidebar.import": { en: "Import", ko: "가져오기" },
   "sidebar.settings": { en: "Settings", ko: "설정" },
   "sidebar.rename": { en: "Rename", ko: "이름 바꾸기" },
-  "sidebar.openInNewWindow": { en: "Open in new window", ko: "새 창에서 열기" },
+  "sidebar.openInNewWindow": { en: "Open in window", ko: "새 창에서 열기" },
   "sidebar.duplicate": { en: "Duplicate", ko: "복제" },
   "sidebar.delete": { en: "Delete", ko: "삭제" },
   "sidebar.export": { en: "Export", ko: "내보내기" },

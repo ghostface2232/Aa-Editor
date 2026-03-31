@@ -51,11 +51,18 @@ export function createMenuShell(pos: { x: number; y: number }, minWidth = 160): 
 export function createMenuItem(
   label: string,
   shortcut: string | null,
-  opts: { danger?: boolean; disabled?: boolean },
+  opts: { danger?: boolean; disabled?: boolean; icon?: string },
 ): HTMLButtonElement {
   const isDark = isDarkTheme();
   const btn = document.createElement("button");
   btn.disabled = !!opts.disabled;
+
+  if (opts.icon) {
+    const iconSpan = document.createElement("span");
+    iconSpan.innerHTML = opts.icon;
+    iconSpan.style.cssText = "display:flex;align-items:center;flex-shrink:0;width:20px;height:20px;";
+    btn.appendChild(iconSpan);
+  }
 
   const labelSpan = document.createElement("span");
   labelSpan.textContent = label;
@@ -64,7 +71,7 @@ export function createMenuItem(
   if (shortcut) {
     const keySpan = document.createElement("span");
     keySpan.textContent = shortcut;
-    keySpan.style.cssText = "margin-left:auto;font-size:12px;opacity:0.45;padding-left:24px;";
+    keySpan.style.cssText = "margin-left:auto;font-size:12px;opacity:0.45;padding-left:24px;white-space:nowrap;";
     btn.appendChild(keySpan);
   }
 
@@ -76,7 +83,7 @@ export function createMenuItem(
 
   btn.style.cssText = `
     display:flex;align-items:center;width:100%;text-align:left;border:none;
-    border-radius:4px;font-size:13px;min-height:32px;padding:0 12px 0 8px;
+    border-radius:4px;font-size:13px;font-weight:500;min-height:32px;padding:0 12px 0 8px;gap:8px;
     background:transparent;cursor:${opts.disabled ? "default" : "pointer"};
     font-family:inherit;color:${textColor};
   `;

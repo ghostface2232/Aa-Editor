@@ -124,6 +124,28 @@ export function useFileSystem(
     await flushAutoSaveRef?.current?.();
   }, []);
 
+  /** Remove the current doc if it's empty (no content, no customName, not the last doc).
+   *  Returns the cleaned docs array. */
+  const pruneEmptyCurrentDoc = useCallback((baseDocs: NoteDoc[]): NoteDoc[] => {
+    const leaving = baseDocs[activeIndex];
+    if (!leaving) return baseDocs;
+    const currentContent = getCurrentMarkdown(state, tiptapRef).trim();
+    if (currentContent || leaving.customName || baseDocs.length <= 1) return baseDocs;
+
+    if (leaving.filePath) {
+      try { markOwnWrite(leaving.filePath); remove(leaving.filePath).catch(() => {}); } catch {}
+    }
+    const leavingId = leaving.id;
+    setGroups?.((prev) =>
+      prev.map((g) => ({ ...g, noteIds: g.noteIds.filter((id) => id !== leavingId) }))
+        .filter((g) => g.noteIds.length > 0));
+    cancelDocSaveRef?.current?.(leavingId);
+
+    const pruned = baseDocs.filter((_, i) => i !== activeIndex);
+    setDocs(pruned);
+    return pruned;
+  }, [activeIndex, state, tiptapRef, setDocs, setGroups]);
+
   const saveFile = useCallback(async () => {
     const doc = docs[activeIndex];
     if (!doc) return;
@@ -222,7 +244,8 @@ export function useFileSystem(
     if (importedDocs.length === 0) return;
 
     const lastImported = importedDocs[importedDocs.length - 1];
-    const nextDocs = [...docs, ...importedDocs];
+    const prunedDocs = pruneEmptyCurrentDoc(docs);
+    const nextDocs = [...prunedDocs, ...importedDocs];
     sortAndPersistDocs(nextDocs, lastImported.id, notesSortOrder, setDocs, setActiveIndex, groupsRef.current);
     importedDocs.forEach((doc) => emitDocCreated(doc));
 
@@ -294,30 +317,9 @@ export function useFileSystem(
 
     await leaveCurrentDoc();
 
-    // Auto-delete empty note when leaving it
-    const leaving = docs[activeIndex];
-    const currentContent = getCurrentMarkdown(state, tiptapRef).trim();
-    let nextDocs = docs;
+    const nextDocs = pruneEmptyCurrentDoc(docs);
     let targetIndex = index;
-
-    if (leaving && !currentContent && !leaving.customName && docs.length > 1) {
-      // Remove file from disk
-      if (leaving.filePath) {
-        try { markOwnWrite(leaving.filePath); await remove(leaving.filePath); } catch {}
-      }
-      // Remove from groups
-      const leavingId = leaving.id;
-      setGroups?.((prev) => {
-        const updated = prev
-          .map((g) => ({ ...g, noteIds: g.noteIds.filter((id) => id !== leavingId) }))
-          .filter((g) => g.noteIds.length > 0);
-        return updated;
-      });
-      // Remove from docs and adjust target index
-      nextDocs = docs.filter((_, i) => i !== activeIndex);
-      if (index > activeIndex) targetIndex = index - 1;
-      setDocs(nextDocs);
-    }
+    if (nextDocs.length < docs.length && index > activeIndex) targetIndex = index - 1;
 
     const target = nextDocs[targetIndex];
     loadIntoEditor(tiptapRef, target.content);
@@ -561,7 +563,8 @@ export function useFileSystem(
       }
     }
 
-    const nextDocs = [...docs, restoredDoc];
+    const prunedDocs = pruneEmptyCurrentDoc(docs);
+    const nextDocs = [...prunedDocs, restoredDoc];
     sortAndPersistDocs(nextDocs, restoredDoc.id, notesSortOrder, setDocs, setActiveIndex, restoredGroups);
     emitDocCreated(restoredDoc);
 

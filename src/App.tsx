@@ -564,11 +564,13 @@ function App() {
   // 단축키
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // 브라우저 단축키 차단 (새로고침, DevTools 등)
-      if ((e.ctrlKey && e.key === "r") || (e.ctrlKey && e.shiftKey && e.key === "R")) { e.preventDefault(); return; }
+      const sidebarFocused = !!document.querySelector("[data-sidebar]")?.contains(document.activeElement);
+
+      // 브라우저 단축키 차단 (새로고침, DevTools 등) — 사이드바 포커스 시 Ctrl+R은 rename으로 사용
+      if ((e.ctrlKey && e.key === "r" && !sidebarFocused) || (e.ctrlKey && e.shiftKey && e.key === "R")) { e.preventDefault(); return; }
       if (e.key === "F5" || (e.ctrlKey && e.shiftKey && e.key === "I") || e.key === "F12") { e.preventDefault(); return; }
 
-      if (e.ctrlKey && e.key === "e") { e.preventDefault(); state.toggleEditing(); }
+      if (e.ctrlKey && !e.shiftKey && e.key === "e") { e.preventDefault(); state.toggleEditing(); }
       if (e.ctrlKey && e.key === "/" && state.isEditing) { e.preventDefault(); handleSwitchEditorMode(); }
       if (e.ctrlKey && e.key === "o") { e.preventDefault(); fs.importFile(); }
       if (e.ctrlKey && !e.shiftKey && e.key === "s") { e.preventDefault(); fs.saveFile(); }

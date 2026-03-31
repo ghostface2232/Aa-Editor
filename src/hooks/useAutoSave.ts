@@ -144,7 +144,7 @@ export function useAutoSave(
 
       latestSetDocs(sortedDocs);
       latestSetActiveIndex(nextIndex);
-      void saveManifest(sortedDocs, currentActiveId).catch(() => {});
+      await saveManifest(sortedDocs, currentActiveId).catch(() => {});
 
       const saved = sortedDocs.find((d) => d.id === snapshot.docId);
       if (saved) emitDocUpdated(saved.id, snapshot.content, saved.fileName);
