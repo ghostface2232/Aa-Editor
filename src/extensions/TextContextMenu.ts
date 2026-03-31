@@ -17,7 +17,7 @@ export interface TextContextMenuContext {
 
 export function showGenericContextMenu(pos: { x: number; y: number }, ctx: TextContextMenuContext) {
   const i = (key: Parameters<typeof t>[0]) => t(key, ctx.locale);
-  const { menu } = createMenuShell(pos, 200);
+  const { menu, isDark } = createMenuShell(pos, 200);
 
   // Fluent UI 20px regular icons (extracted from @fluentui/react-icons)
   const iconCut = '<svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor"><path d="M5.92 2.23a.5.5 0 0 0-.84.54L9.4 9.43l-1.92 2.96a3 3 0 1 0 .78.64L10 10.35l1.74 2.68a3 3 0 1 0 .78-.64L5.92 2.23ZM14 17a2 2 0 1 1 0-4 2 2 0 0 1 0 4ZM4 15a2 2 0 1 1 4 0 2 2 0 0 1-4 0Zm7.2-6.49-.6-.92 3.48-5.36a.5.5 0 0 1 .84.54l-3.73 5.74Z"/></svg>';
@@ -69,8 +69,8 @@ export function showGenericContextMenu(pos: { x: number; y: number }, ctx: TextC
   ];
 
   items.forEach((item) => {
-    if (item.separator) menu.appendChild(createMenuSeparator());
-    const btn = createMenuItem(item.label, item.shortcut, { disabled: item.disabled, icon: item.icon });
+    if (item.separator) menu.appendChild(createMenuSeparator(isDark));
+    const btn = createMenuItem(item.label, item.shortcut, { disabled: item.disabled, icon: item.icon, isDark });
     btn.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); if (!item.disabled) item.action(); });
     menu.appendChild(btn);
   });

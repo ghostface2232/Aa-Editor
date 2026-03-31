@@ -92,7 +92,7 @@ const useStyles = makeStyles({
     width: "100%",
     justifyContent: "flex-start",
     border: "none",
-    borderRadius: "6px", // CONTROL_RADIUS
+    borderRadius: CONTROL_RADIUS,
     fontSize: "13px",
     fontWeight: 400,
     minHeight: "32px",
@@ -113,7 +113,7 @@ const useStyles = makeStyles({
     width: "100%",
     justifyContent: "flex-start",
     border: "none",
-    borderRadius: "6px", // CONTROL_RADIUS
+    borderRadius: CONTROL_RADIUS,
     fontSize: "13px",
     fontWeight: 500,
     minHeight: "32px",
@@ -185,7 +185,7 @@ const useStyles = makeStyles({
   dropdown: {
     minWidth: "150px",
     fontSize: "13px",
-    borderRadius: "6px", // CONTROL_RADIUS
+    borderRadius: CONTROL_RADIUS,
     borderTopColor: "transparent",
     borderRightColor: "transparent",
     borderBottomColor: "transparent",

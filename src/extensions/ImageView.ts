@@ -4,7 +4,7 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import { readFile, writeFile } from "@tauri-apps/plugin-fs";
 import { t } from "../i18n";
 import type { Locale } from "../hooks/useSettings";
-import { dataUrlToUint8Array, mimeToExt, bytesToDataUrl, mimeFromExt } from "../utils/imageUtils";
+import { dataUrlToUint8Array, mimeFromDataUrl, mimeToExt, bytesToDataUrl, mimeFromExt } from "../utils/imageUtils";
 import { closeContextMenu, createMenuShell, createMenuItem } from "../utils/contextMenuRegistry";
 
 const HANDLE_SIZE = 10;
@@ -19,7 +19,7 @@ function showContextMenu(
   locale: Locale,
 ) {
   const i = (key: Parameters<typeof t>[0]) => t(key, locale);
-  const { menu } = createMenuShell(pos, 160);
+  const { menu, isDark } = createMenuShell(pos, 160);
 
   // Fluent UI 20px regular icons (extracted from @fluentui/react-icons)
   const iconSave = '<svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor"><path d="M3 5c0-1.1.9-2 2-2h8.38a2 2 0 0 1 1.41.59l1.62 1.62A2 2 0 0 1 17 6.62V15a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5Zm2-1a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1v-4.5c0-.83.67-1.5 1.5-1.5h7c.83 0 1.5.67 1.5 1.5V16a1 1 0 0 0 1-1V6.62a1 1 0 0 0-.3-.7L14.1 4.28a1 1 0 0 0-.71-.29H13v2.5c0 .83-.67 1.5-1.5 1.5h-4A1.5 1.5 0 0 1 6 6.5V4H5Zm2 0v2.5c0 .28.22.5.5.5h4a.5.5 0 0 0 .5-.5V4H7Zm7 12v-4.5a.5.5 0 0 0-.5-.5h-7a.5.5 0 0 0-.5.5V16h8Z"/></svg>';
@@ -44,7 +44,7 @@ function showContextMenu(
         closeContextMenu();
         try {
           const bytes = dataUrlToUint8Array(src);
-          const mime = src.split(",")[0].split(":")[1].split(";")[0];
+          const mime = mimeFromDataUrl(src);
           const blob = new Blob([bytes], { type: mime });
           await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
         } catch { /* ignore */ }
@@ -77,7 +77,7 @@ function showContextMenu(
   ];
 
   items.forEach((item) => {
-    const btn = createMenuItem(item.label, null, { danger: item.danger, icon: item.icon });
+    const btn = createMenuItem(item.label, null, { danger: item.danger, icon: item.icon, isDark });
     btn.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); item.action(); });
     menu.appendChild(btn);
   });

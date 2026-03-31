@@ -2,7 +2,7 @@ import { Extension, type Content, type Editor } from "@tiptap/core";
 import { Plugin, PluginKey, NodeSelection } from "@tiptap/pm/state";
 import { open } from "@tauri-apps/plugin-dialog";
 import { readFile } from "@tauri-apps/plugin-fs";
-import { bytesToDataUrl, dataUrlToUint8Array, mimeFromExt } from "../utils/imageUtils";
+import { bytesToDataUrl, clampImageDimensions, dataUrlToUint8Array, mimeFromDataUrl, mimeFromExt } from "../utils/imageUtils";
 
 const IMAGE_MIME = ["image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml"];
 const IMAGE_EXTENSIONS = ["png", "jpg", "jpeg", "gif", "webp", "svg"];
@@ -31,8 +31,7 @@ async function loadImageAttrsFromPath(path: string): Promise<{
   const bytes = await readFile(path);
   const dataUrl = bytesToDataUrl(bytes, mimeFromExt(ext));
   const { width: natW, height: natH } = await loadImageSize(dataUrl);
-  const width = natW > MAX_IMAGE_WIDTH ? MAX_IMAGE_WIDTH : natW;
-  const height = natW > MAX_IMAGE_WIDTH ? Math.round(natH * (MAX_IMAGE_WIDTH / natW)) : natH;
+  const { width, height } = clampImageDimensions(natW, natH, MAX_IMAGE_WIDTH);
 
   return { src: dataUrl, width, height };
 }
@@ -101,7 +100,7 @@ const ImageDrop = Extension.create({
               event.preventDefault();
               try {
                 const bytes = dataUrlToUint8Array(src);
-                const mime = src.split(",")[0].split(":")[1].split(";")[0];
+                const mime = mimeFromDataUrl(src);
                 const blob = new Blob([bytes], { type: mime });
                 void navigator.clipboard.write([new ClipboardItem({ [mime]: blob })]);
               } catch { /* ignore */ }
@@ -127,8 +126,7 @@ const ImageDrop = Extension.create({
               reader.onload = async () => {
                 const src = reader.result as string;
                 const { width: natW, height: natH } = await loadImageSize(src);
-                const w = natW > MAX_IMAGE_WIDTH ? MAX_IMAGE_WIDTH : natW;
-                const h = natW > MAX_IMAGE_WIDTH ? Math.round(natH * (MAX_IMAGE_WIDTH / natW)) : natH;
+                const { width: w, height: h } = clampImageDimensions(natW, natH, MAX_IMAGE_WIDTH);
                 const chain = editor.chain().focus();
                 if (pos) chain.setTextSelection(pos.pos);
                 chain.insertContent({
@@ -161,8 +159,7 @@ const ImageDrop = Extension.create({
               reader.onload = async () => {
                 const src = reader.result as string;
                 const { width: natW, height: natH } = await loadImageSize(src);
-                const w = natW > MAX_IMAGE_WIDTH ? MAX_IMAGE_WIDTH : natW;
-                const h = natW > MAX_IMAGE_WIDTH ? Math.round(natH * (MAX_IMAGE_WIDTH / natW)) : natH;
+                const { width: w, height: h } = clampImageDimensions(natW, natH, MAX_IMAGE_WIDTH);
                 editor.chain().focus().setImage({ src, width: w, height: h }).run();
               };
               reader.readAsDataURL(file);

@@ -467,7 +467,7 @@ function App() {
     const name = activeDoc?.fileName ?? "untitled";
     const html = tiptapEditor?.getHTML() ?? "";
     exportAsRtf(html, name, locale);
-  }, [activeDoc?.fileName, tiptapEditor]);
+  }, [activeDoc?.fileName, tiptapEditor, locale]);
 
   const handleDeleteNotes = useCallback((indices: number[]) => {
     const sorted = [...indices].sort((a, b) => b - a);

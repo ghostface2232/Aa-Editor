@@ -21,7 +21,7 @@ export function isDarkTheme(): boolean {
   return document.querySelector("[data-theme='dark']") !== null;
 }
 
-export function createMenuShell(pos: { x: number; y: number }, minWidth = 160): { menu: HTMLElement; overlay: HTMLElement } {
+export function createMenuShell(pos: { x: number; y: number }, minWidth = 160): { menu: HTMLElement; overlay: HTMLElement; isDark: boolean } {
   closeContextMenu();
   const isDark = isDarkTheme();
 
@@ -45,15 +45,15 @@ export function createMenuShell(pos: { x: number; y: number }, minWidth = 160): 
   registerContextMenu(menu, overlay);
   requestAnimationFrame(() => clampMenuToViewport(menu));
 
-  return { menu, overlay };
+  return { menu, overlay, isDark };
 }
 
 export function createMenuItem(
   label: string,
   shortcut: string | null,
-  opts: { danger?: boolean; disabled?: boolean; icon?: string },
+  opts: { danger?: boolean; disabled?: boolean; icon?: string; isDark?: boolean },
 ): HTMLButtonElement {
-  const isDark = isDarkTheme();
+  const isDark = opts.isDark ?? isDarkTheme();
   const btn = document.createElement("button");
   btn.disabled = !!opts.disabled;
 
@@ -100,8 +100,8 @@ export function createMenuItem(
   return btn;
 }
 
-export function createMenuSeparator(): HTMLElement {
-  const isDark = isDarkTheme();
+export function createMenuSeparator(isDark?: boolean): HTMLElement {
+  isDark = isDark ?? isDarkTheme();
   const sep = document.createElement("div");
   sep.style.cssText = `height:1px;margin:4px 8px;background:${isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.06)"};`;
   return sep;

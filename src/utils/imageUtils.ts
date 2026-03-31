@@ -28,3 +28,17 @@ export function mimeToExt(dataUrl: string): string {
   const mime = match?.[1] ?? "png";
   return mime === "jpeg" ? "jpg" : mime;
 }
+
+export function mimeFromDataUrl(dataUrl: string): string {
+  return dataUrl.split(",")[0].split(":")[1].split(";")[0];
+}
+
+export function clampImageDimensions(
+  natW: number,
+  natH: number,
+  maxWidth: number,
+): { width: number; height: number } {
+  const width = natW > maxWidth ? maxWidth : natW;
+  const height = natW > maxWidth ? Math.round(natH * (maxWidth / natW)) : natH;
+  return { width, height };
+}
