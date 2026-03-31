@@ -1,5 +1,5 @@
 import { type Editor } from "@tiptap/core";
-import { NodeSelection } from "@tiptap/pm/state";
+import { startReorder } from "./ImageReorder";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { readFile, writeFile } from "@tauri-apps/plugin-fs";
 import { t } from "../i18n";
@@ -84,7 +84,6 @@ export function createImageNodeView(editor: Editor) {
     let currentSrc = node.attrs.src;
     let currentNode = node;
     let activeDragCleanup: (() => void) | null = null;
-    let activeMoveCleanup: (() => void) | null = null;
 
     const dom = document.createElement("div");
     dom.style.cssText = "position:relative;display:inline-block;max-width:100%;line-height:0;";
@@ -159,10 +158,9 @@ export function createImageNodeView(editor: Editor) {
       if (pos !== undefined) editor.commands.setNodeSelection(pos);
     };
 
-    img.addEventListener("mousedown", (e) => {
+    img.addEventListener("pointerdown", (e) => {
       if (e.button !== 0) return;
       selectImageNode();
-
       if (isReadonly()) return;
 
       const startPos = getPos();
@@ -170,55 +168,28 @@ export function createImageNodeView(editor: Editor) {
 
       const startX = e.clientX;
       const startY = e.clientY;
-      let dragging = false;
+      const pointerId = e.pointerId;
+      let handed = false;
 
-      const cleanup = () => {
-        document.removeEventListener("mousemove", onMouseMove);
-        document.removeEventListener("mouseup", onMouseUp);
-        document.body.style.cursor = "";
-        dom.style.opacity = "";
-        img.style.cursor = isReadonly() ? "default" : "grab";
-        activeMoveCleanup = null;
+      const onMove = (ev: PointerEvent) => {
+        if (handed) return;
+        if (Math.hypot(ev.clientX - startX, ev.clientY - startY) < 6) return;
+
+        handed = true;
+        document.removeEventListener("pointermove", onMove);
+        document.removeEventListener("pointerup", onUp);
+
+        try { img.setPointerCapture(pointerId); } catch {}
+        startReorder(editor, startPos, currentNode.nodeSize, { ...currentNode.attrs }, img, ev);
       };
 
-      const onMouseMove = (ev: MouseEvent) => {
-        if (!dragging && Math.hypot(ev.clientX - startX, ev.clientY - startY) < 6) {
-          return;
-        }
-
-        dragging = true;
-        document.body.style.cursor = "grabbing";
-        dom.style.opacity = "0.72";
-        img.style.cursor = "grabbing";
+      const onUp = () => {
+        document.removeEventListener("pointermove", onMove);
+        document.removeEventListener("pointerup", onUp);
       };
 
-      const onMouseUp = (ev: MouseEvent) => {
-        const wasDragging = dragging;
-        cleanup();
-        if (!wasDragging) return;
-
-        const target = editor.view.posAtCoords({ left: ev.clientX, top: ev.clientY });
-        if (!target) return;
-
-        const imageNode = editor.schema.nodes.image?.create({ ...currentNode.attrs });
-        if (!imageNode) return;
-
-        let insertPos = target.pos;
-        if (insertPos >= startPos) {
-          insertPos = Math.max(startPos, insertPos - currentNode.nodeSize);
-        }
-
-        if (insertPos === startPos) return;
-
-        const tr = editor.view.state.tr.delete(startPos, startPos + currentNode.nodeSize);
-        tr.insert(insertPos, imageNode);
-        tr.setSelection(NodeSelection.create(tr.doc, insertPos));
-        editor.view.dispatch(tr.scrollIntoView());
-      };
-
-      document.addEventListener("mousemove", onMouseMove);
-      document.addEventListener("mouseup", onMouseUp);
-      activeMoveCleanup = cleanup;
+      document.addEventListener("pointermove", onMove);
+      document.addEventListener("pointerup", onUp);
     });
 
     img.addEventListener("click", () => {
@@ -304,7 +275,6 @@ export function createImageNodeView(editor: Editor) {
       destroy: () => {
         editor.off("selectionUpdate", updateSelection);
         activeDragCleanup?.();
-        activeMoveCleanup?.();
       },
     };
   };
