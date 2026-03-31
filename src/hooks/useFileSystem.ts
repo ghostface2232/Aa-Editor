@@ -488,7 +488,8 @@ export function useFileSystem(
       }
     }
 
-    const nextDocs = [...docs, newDoc];
+    const prunedDocs = pruneEmptyCurrentDoc(docs);
+    const nextDocs = [...prunedDocs, newDoc];
     sortAndPersistDocs(nextDocs, newDoc.id, notesSortOrder, setDocs, setActiveIndex, groupsRef.current);
     loadIntoEditor(tiptapRef, content);
     resetDocState(state, filePath, content);
