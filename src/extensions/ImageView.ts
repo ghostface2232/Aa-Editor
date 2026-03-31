@@ -154,9 +154,8 @@ export function createImageNodeView(editor: Editor) {
     };
 
     const selectImageNode = () => {
-      if (isReadonly()) return;
       const pos = getPos();
-      if (pos !== undefined) editor.commands.setNodeSelection(pos);
+      if (pos !== undefined) editor.chain().focus().setNodeSelection(pos).run();
     };
 
     img.addEventListener("pointerdown", (e) => {
@@ -248,6 +247,7 @@ export function createImageNodeView(editor: Editor) {
     });
 
     editor.on("selectionUpdate", updateSelection);
+    editor.on("transaction", syncDragState);
     syncDragState();
 
     return {
@@ -274,6 +274,7 @@ export function createImageNodeView(editor: Editor) {
       deselectNode: () => { dom.style.outline = "none"; hideHandles(); },
       destroy: () => {
         editor.off("selectionUpdate", updateSelection);
+        editor.off("transaction", syncDragState);
         activeDragCleanup?.();
       },
     };

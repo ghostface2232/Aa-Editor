@@ -1,8 +1,8 @@
 import { Extension, type Content, type Editor } from "@tiptap/core";
-import { Plugin, PluginKey } from "@tiptap/pm/state";
+import { Plugin, PluginKey, NodeSelection } from "@tiptap/pm/state";
 import { open } from "@tauri-apps/plugin-dialog";
 import { readFile } from "@tauri-apps/plugin-fs";
-import { bytesToDataUrl, mimeFromExt } from "../utils/imageUtils";
+import { bytesToDataUrl, dataUrlToUint8Array, mimeFromExt } from "../utils/imageUtils";
 
 const IMAGE_MIME = ["image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml"];
 const IMAGE_EXTENSIONS = ["png", "jpg", "jpeg", "gif", "webp", "svg"];
@@ -88,6 +88,26 @@ const ImageDrop = Extension.create({
       new Plugin({
         key: new PluginKey("imageDrop"),
         props: {
+          handleDOMEvents: {
+            copy(view, event) {
+              const { selection } = view.state;
+              if (!(selection instanceof NodeSelection)) return false;
+              const node = selection.node;
+              if (node.type.name !== "image") return false;
+
+              const src = node.attrs.src as string;
+              if (!src?.startsWith("data:")) return false;
+
+              event.preventDefault();
+              try {
+                const bytes = dataUrlToUint8Array(src);
+                const mime = src.split(",")[0].split(":")[1].split(";")[0];
+                const blob = new Blob([bytes], { type: mime });
+                void navigator.clipboard.write([new ClipboardItem({ [mime]: blob })]);
+              } catch { /* ignore */ }
+              return true;
+            },
+          },
           handleDrop(view, event) {
             const files = event.dataTransfer?.files;
             if (!files || files.length === 0) return false;

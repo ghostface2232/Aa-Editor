@@ -53,15 +53,29 @@ export function useAutoSave(
     setActiveIndex,
   };
 
+  // Synchronously tracks which doc the editor currently holds.
+  // Two update paths (both required):
+  //   1. Render path (below): keeps ref in sync when React state is committed.
+  //   2. notifyActiveDoc(): called imperatively right after loading a new doc
+  //      into the editor, BEFORE React re-renders. This covers the window
+  //      between setActiveIndex() call and the next render where
+  //      docs[activeIndex] still points to the old doc.
+  // In React 18 automatic batching, notifyActiveDoc and setActiveIndex are
+  // processed in the same batch, so path 1 always sees the correct doc once
+  // the render fires. The two paths converge safely.
+  const activeDocRef = useRef<{ id: string; filePath: string } | null>(null);
+  const activeTarget = docs[activeIndex];
+  if (activeTarget) {
+    activeDocRef.current = { id: activeTarget.id, filePath: activeTarget.filePath };
+  }
+
   const createSnapshot = useCallback((): SaveSnapshot | null => {
     const {
       state: latestState,
       tiptapRef: latestEditorRef,
-      docs: latestDocs,
-      activeIndex: latestActiveIndex,
     } = stateRef.current;
 
-    const target = latestDocs[latestActiveIndex];
+    const target = activeDocRef.current;
     if (!target?.filePath) return null;
 
     const content = getCurrentMarkdown(latestState, latestEditorRef);
@@ -144,22 +158,19 @@ export function useAutoSave(
   }, []);
 
   const flushAutoSave = useCallback((): Promise<void> => {
-    const pendingEntries = Array.from(pendingSnapshotsRef.current.values());
-    pendingSnapshotsRef.current.clear();
-
+    // Clear all pending timers
     for (const timer of timersRef.current.values()) {
       clearTimeout(timer);
     }
     timersRef.current.clear();
+    pendingSnapshotsRef.current.clear();
 
-    if (pendingEntries.length === 0) return Promise.resolve();
+    // Always capture a fresh snapshot from the current editor state
+    const freshSnapshot = createSnapshot();
+    if (!freshSnapshot) return Promise.resolve();
 
-    return (async () => {
-      for (const snapshot of pendingEntries) {
-        await doSave(snapshot);
-      }
-    })();
-  }, [doSave]);
+    return doSave(freshSnapshot);
+  }, [createSnapshot, doSave]);
 
   const scheduleAutoSave = useCallback(() => {
     const snapshot = createSnapshot();
@@ -201,5 +212,19 @@ export function useAutoSave(
     };
   }, [doSave]);
 
-  return { scheduleAutoSave, flushAutoSave };
+  /** Immediately update activeDocRef so createSnapshot targets the correct doc.
+   *  Call this right after loading a new doc into the editor, before React re-renders. */
+  const notifyActiveDoc = useCallback((id: string, filePath: string) => {
+    activeDocRef.current = { id, filePath };
+  }, []);
+
+  /** Cancel pending autosave for a specific doc (e.g. before deletion). */
+  const cancelDocSave = useCallback((docId: string) => {
+    const timer = timersRef.current.get(docId);
+    if (timer) clearTimeout(timer);
+    timersRef.current.delete(docId);
+    pendingSnapshotsRef.current.delete(docId);
+  }, []);
+
+  return { scheduleAutoSave, flushAutoSave, notifyActiveDoc, cancelDocSave };
 }

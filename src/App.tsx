@@ -323,6 +323,8 @@ function App() {
   }, [isLoading, docs, activeIndex]);
 
   const flushAutoSaveRef = useRef<(() => Promise<void>) | null>(null);
+  const notifyActiveDocRef = useRef<((id: string, filePath: string) => void) | null>(null);
+  const cancelDocSaveRef = useRef<((docId: string) => void) | null>(null);
 
   const fs = useFileSystem(
     state,
@@ -339,10 +341,12 @@ function App() {
     trashedNotes,
     setTrashedNotes,
     flushAutoSaveRef,
+    notifyActiveDocRef,
+    cancelDocSaveRef,
   );
 
   // 자동 저장
-  const { scheduleAutoSave, flushAutoSave } = useAutoSave(
+  const { scheduleAutoSave, flushAutoSave, notifyActiveDoc, cancelDocSave } = useAutoSave(
     state,
     tiptapRef,
     docs,
@@ -353,6 +357,8 @@ function App() {
     settings.notesSortOrder,
   );
   flushAutoSaveRef.current = flushAutoSave;
+  notifyActiveDocRef.current = notifyActiveDoc;
+  cancelDocSaveRef.current = cancelDocSave;
 
   // URL 쿼리 파라미터로 전달된 노트 열기 (새 창에서 열기)
   const fileParamHandled = useRef(false);
@@ -644,7 +650,16 @@ function App() {
     }
   }, [docSearchOpen, tiptapEditor, cmView]);
 
-  // 창 닫기 — 자동 저장이므로 별도 확인 없이 닫기 허용
+  // 창 닫기 — pending autosave flush 후 닫기
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    getCurrentWindow().onCloseRequested(async (event) => {
+      event.preventDefault();
+      await flushAutoSaveRef.current?.();
+      await getCurrentWindow().destroy();
+    }).then((fn) => { unlisten = fn; });
+    return () => unlisten?.();
+  }, []);
 
   const handleTiptapDirty = useCallback(
     (dirty: boolean) => {

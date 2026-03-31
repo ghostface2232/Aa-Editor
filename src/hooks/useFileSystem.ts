@@ -107,6 +107,8 @@ export function useFileSystem(
   trashedNotes?: TrashedNote[],
   setTrashedNotes?: (updater: TrashedNote[] | ((prev: TrashedNote[]) => TrashedNote[])) => void,
   flushAutoSaveRef?: React.RefObject<(() => Promise<void>) | null>,
+  notifyActiveDocRef?: React.RefObject<((id: string, filePath: string) => void) | null>,
+  cancelDocSaveRef?: React.RefObject<((docId: string) => void) | null>,
 ): FileSystemActions {
   const groupsRef = useRef(groups);
   groupsRef.current = groups;
@@ -226,6 +228,7 @@ export function useFileSystem(
 
     loadIntoEditor(tiptapRef, lastImported.content);
     resetDocState(state, lastImported.filePath, lastImported.content);
+    notifyActiveDocRef?.current?.(lastImported.id, lastImported.filePath);
   }, [docs, leaveCurrentDoc, notesSortOrder, setActiveIndex, setDocs, state, tiptapRef]);
 
   const importFile = useCallback(async () => {
@@ -273,6 +276,7 @@ export function useFileSystem(
 
     loadIntoEditor(tiptapRef, "");
     resetDocState(state, filePath, "");
+    notifyActiveDocRef?.current?.(id, filePath);
 
     if (!filePath) return;
 
@@ -318,6 +322,7 @@ export function useFileSystem(
     const target = nextDocs[targetIndex];
     loadIntoEditor(tiptapRef, target.content);
     resetDocState(state, target.filePath, target.content);
+    notifyActiveDocRef?.current?.(target.id, target.filePath);
     setActiveIndex(targetIndex);
     void saveManifest(nextDocs, target.id, groupsRef.current).catch(() => {});
   }, [activeIndex, leaveCurrentDoc, docs, setActiveIndex, setDocs, setGroups, state, tiptapRef]);
@@ -325,6 +330,9 @@ export function useFileSystem(
   const deleteNote = useCallback(async (index: number) => {
     const doc = docs[index];
     if (!doc) return;
+
+    // Cancel any pending autosave timer for this doc to prevent orphan writes after deletion
+    cancelDocSaveRef?.current?.(doc.id);
 
     // Flush pending auto-save so the on-disk file is up-to-date before trash copy
     if (index === activeIndex) await leaveCurrentDoc();
@@ -404,6 +412,7 @@ export function useFileSystem(
       setActiveIndex(0);
       loadIntoEditor(tiptapRef, "");
       resetDocState(state, filePath, "");
+      notifyActiveDocRef?.current?.(id, filePath);
       void saveManifest([newDoc], newDoc.id, cleanedGroups).catch(() => {});
       return;
     }
@@ -417,6 +426,7 @@ export function useFileSystem(
       nextActiveId = target.id;
       loadIntoEditor(tiptapRef, target.content);
       resetDocState(state, target.filePath, target.content);
+      notifyActiveDocRef?.current?.(target.id, target.filePath);
     } else {
       nextActiveId = docs[activeIndex].id;
     }
@@ -439,7 +449,7 @@ export function useFileSystem(
       filePath = `${notesDir}/${id}.md`;
     } catch { /* ignore */ }
 
-    const content = doc.content;
+    const content = index === activeIndex ? getCurrentMarkdown(state, tiptapRef) : doc.content;
     const newDoc: NoteDoc = {
       id,
       filePath,
@@ -463,6 +473,7 @@ export function useFileSystem(
     sortAndPersistDocs(nextDocs, newDoc.id, notesSortOrder, setDocs, setActiveIndex, groupsRef.current);
     loadIntoEditor(tiptapRef, content);
     resetDocState(state, filePath, content);
+    notifyActiveDocRef?.current?.(newDoc.id, filePath);
   }, [leaveCurrentDoc, docs, notesSortOrder, setActiveIndex, setDocs, state, tiptapRef]);
 
   const exportNote = useCallback(async (index: number) => {
@@ -556,6 +567,7 @@ export function useFileSystem(
 
     loadIntoEditor(tiptapRef, content);
     resetDocState(state, restoredPath, content);
+    notifyActiveDocRef?.current?.(restoredDoc.id, restoredPath);
   }, [leaveCurrentDoc, docs, notesSortOrder, setActiveIndex, setDocs, setGroups, state, tiptapRef, setTrashedNotes]);
 
   const permanentlyDeleteNote = useCallback(async (trashedNoteId: string) => {
