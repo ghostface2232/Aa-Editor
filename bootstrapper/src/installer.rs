@@ -6,50 +6,54 @@ use crate::constants::{APP_EXE_NAME, NSIS_TEMP_NAME, SETUP_EXE_NAME, install_dir
 
 const NSIS_BYTES: &[u8] = include_bytes!("../assets/nsis-payload.exe");
 
-pub fn run_install() {
-    extract_and_run_nsis();
-    copy_bootstrapper_to_install_dir();
-}
-
-pub fn extract_and_run_nsis() {
+pub fn extract_and_run_nsis() -> Result<(), String> {
     let temp_path = env::temp_dir().join(NSIS_TEMP_NAME);
-    fs::write(&temp_path, NSIS_BYTES).expect("failed to write NSIS payload");
+    fs::write(&temp_path, NSIS_BYTES)
+        .map_err(|error| format!("failed to write NSIS payload: {error}"))?;
 
     let status = Command::new(&temp_path)
         .arg("/S")
         .status()
-        .expect("failed to run NSIS payload");
+        .map_err(|error| format!("failed to run NSIS payload: {error}"))?;
 
     let _ = fs::remove_file(&temp_path);
 
     if !status.success() {
-        panic!("NSIS payload failed with status: {status}");
+        return Err(format!("NSIS payload failed with status: {status}"));
     }
+
+    Ok(())
 }
 
-pub fn run_uninstall() {
+pub fn run_uninstall() -> Result<(), String> {
     let uninstall_path = install_dir().join("uninstall.exe");
     if !uninstall_path.exists() {
-        return;
+        return Ok(());
     }
 
     let status = Command::new(uninstall_path)
         .arg("/S")
         .status()
-        .expect("failed to run uninstall.exe");
+        .map_err(|error| format!("failed to run uninstall.exe: {error}"))?;
 
     if !status.success() {
-        panic!("uninstall.exe failed with status: {status}");
+        return Err(format!("uninstall.exe failed with status: {status}"));
     }
+
+    Ok(())
 }
 
-pub fn copy_bootstrapper_to_install_dir() {
-    let current_exe = env::current_exe().expect("failed to resolve current executable");
+pub fn copy_bootstrapper_to_install_dir() -> Result<(), String> {
+    let current_exe = env::current_exe()
+        .map_err(|error| format!("failed to resolve current executable: {error}"))?;
     let target_dir = install_dir();
-    fs::create_dir_all(&target_dir).expect("failed to create install directory");
+    fs::create_dir_all(&target_dir)
+        .map_err(|error| format!("failed to create install directory: {error}"))?;
 
     let target_path = target_dir.join(SETUP_EXE_NAME);
-    fs::copy(current_exe, target_path).expect("failed to copy bootstrapper");
+    fs::copy(current_exe, target_path)
+        .map_err(|error| format!("failed to copy bootstrapper: {error}"))?;
+    Ok(())
 }
 
 pub fn launch_app() {

@@ -1,15 +1,15 @@
 use std::mem::size_of;
 use std::slice;
 
-use windows::core::PCWSTR;
 use windows::Win32::Foundation::ERROR_SUCCESS;
 use windows::Win32::System::Registry::{
     HKEY, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_SZ, RegCloseKey, RegOpenKeyExW, RegSetValueExW,
 };
+use windows::core::PCWSTR;
 
 use crate::constants::{SETUP_EXE_NAME, UNINSTALL_REG_KEY, install_dir};
 
-pub fn fix_uninstall_string() {
+pub fn fix_uninstall_string() -> Result<(), String> {
     unsafe {
         let uninstall_path = install_dir().join(SETUP_EXE_NAME);
         let uninstall_string = format!("\"{}\" --uninstall", uninstall_path.display());
@@ -26,7 +26,9 @@ pub fn fix_uninstall_string() {
             &mut key,
         );
         if open_status != ERROR_SUCCESS {
-            panic!("failed to open uninstall registry key: {open_status:?}");
+            return Err(format!(
+                "failed to open uninstall registry key: {open_status:?}"
+            ));
         }
 
         let mut set_status = set_reg_sz(key, "UninstallString", &uninstall_string);
@@ -36,12 +38,20 @@ pub fn fix_uninstall_string() {
         let _ = RegCloseKey(key);
 
         if set_status != ERROR_SUCCESS {
-            panic!("failed to set uninstall registry values: {set_status:?}");
+            return Err(format!(
+                "failed to set uninstall registry values: {set_status:?}"
+            ));
         }
     }
+
+    Ok(())
 }
 
-unsafe fn set_reg_sz(key: HKEY, name: &str, value: &str) -> windows::Win32::Foundation::WIN32_ERROR {
+unsafe fn set_reg_sz(
+    key: HKEY,
+    name: &str,
+    value: &str,
+) -> windows::Win32::Foundation::WIN32_ERROR {
     let mut value_name: Vec<u16> = name.encode_utf16().collect();
     value_name.push(0);
 

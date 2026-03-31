@@ -1,14 +1,14 @@
 use std::ffi::c_void;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr::copy_nonoverlapping;
 use std::time::Instant;
 
 use crate::installer;
-use windows::core::PCWSTR;
 use windows::Win32::Foundation::*;
+use windows::Win32::Globalization::GetUserDefaultUILanguage;
 use windows::Win32::Graphics::Dwm::{
     DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND, DwmSetWindowAttribute,
 };
-use windows::Win32::Globalization::GetUserDefaultUILanguage;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::Graphics::GdiPlus::*;
 use windows::Win32::System::Com::IStream;
@@ -17,21 +17,24 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
 use windows::Win32::UI::HiDpi::GetDpiForSystem;
 use windows::Win32::UI::WindowsAndMessaging::*;
+use windows::core::PCWSTR;
 
 const WM_WORK_DONE: u32 = WM_USER + 1;
 const WM_PRIMARY_ACTION: u32 = WM_USER + 2;
+const WM_START_WORK: u32 = WM_USER + 3;
 const SPLASH_W: i32 = 480;
 const SPLASH_H: i32 = 300;
+const SPLASH_H_WITH_CHECKBOX: i32 = 332;
 const ANIMATION_TIMER_ID: usize = 1;
 const ANIMATION_INTERVAL_MS: u32 = 16;
 const ANIMATION_DURATION_MS: f32 = 1200.0;
 const PROGRESS_SIDE_MARGIN: i32 = 60;
-const PROGRESS_BOTTOM_OFFSET: i32 = 80;
 const PROGRESS_HEIGHT: i32 = 4;
 const PROGRESS_RADIUS: i32 = 2;
 const PROGRESS_BLOCK_WIDTH_RATIO: f32 = 0.30;
 const BUTTON_W: i32 = 120;
 const BUTTON_H: i32 = 36;
+const BUTTON_GAP: i32 = 12;
 const BUTTON_BOTTOM_OFFSET: i32 = 40;
 const BUTTON_RADIUS: i32 = 4;
 const LOGO_SIZE: i32 = 64;
@@ -40,18 +43,31 @@ const TITLE_TOP: i32 = 142;
 const TITLE_BOTTOM: i32 = 174;
 const STATUS_TOP: i32 = 172;
 const STATUS_BOTTOM: i32 = 198;
+const CHECKBOX_TOP: i32 = 206;
+const CHECKBOX_ROW_H: i32 = 22;
+const CHECKBOX_BOX_SIZE: i32 = 16;
+const CHECKBOX_LABEL_GAP: i32 = 10;
 const TITLE_FONT_SIZE: i32 = 18;
 const STATUS_FONT_SIZE: i32 = 13;
 const BUTTON_FONT_SIZE: i32 = 13;
+const CHECKBOX_FONT_SIZE: i32 = 13;
 
 const BG_COLOR: COLORREF = COLORREF(0x00FAFAFA);
 const TITLE_COLOR: COLORREF = COLORREF(0x001F1B1B);
 const STATUS_COLOR: COLORREF = COLORREF(0x00616161);
+const CHECKBOX_TEXT_COLOR: COLORREF = COLORREF(0x00444444);
 const TRACK_COLOR: u32 = 0xFFE0E0E0;
 const BLOCK_COLOR: u32 = 0xFF0078D4;
 const BUTTON_BG_COLOR: u32 = 0xFF0078D4;
 const BUTTON_HOVER_BG_COLOR: u32 = 0xFF106EBE;
 const BUTTON_TEXT_COLOR: COLORREF = COLORREF(0x00FFFFFF);
+const SECONDARY_BUTTON_BG_COLOR: u32 = 0xFFFFFFFF;
+const SECONDARY_BUTTON_HOVER_BG_COLOR: u32 = 0xFFF3F2F1;
+const SECONDARY_BUTTON_BORDER_COLOR: u32 = 0xFFD1D1D1;
+const SECONDARY_BUTTON_TEXT_COLOR: COLORREF = COLORREF(0x00323232);
+const CHECKBOX_BORDER_COLOR: u32 = 0xFF8A8886;
+const CHECKBOX_BG_COLOR: u32 = 0xFFFFFFFF;
+const CHECKBOX_CHECK_COLOR: u32 = 0xFF0078D4;
 const GDIP_OK: Status = Status(0);
 
 const FONT_FACE: &str = "SFProKRDisplay";
@@ -71,14 +87,64 @@ pub enum CompletionAction {
     CloseWindow,
 }
 
-#[allow(dead_code)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SplashStage {
+    Ready,
+    Running,
+    Success,
+    Failure,
+}
+
+pub struct SplashConfig<'a> {
+    pub status_ko: &'a str,
+    pub status_en: &'a str,
+    pub completed_status_ko: &'a str,
+    pub completed_status_en: &'a str,
+    pub failed_status_ko: &'a str,
+    pub failed_status_en: &'a str,
+    pub ready_status_ko: Option<&'a str>,
+    pub ready_status_en: Option<&'a str>,
+    pub primary_button_label_ko: &'a str,
+    pub primary_button_label_en: &'a str,
+    pub ready_button_label_ko: Option<&'a str>,
+    pub ready_button_label_en: Option<&'a str>,
+    pub secondary_button_label_ko: Option<&'a str>,
+    pub secondary_button_label_en: Option<&'a str>,
+    pub completion_action: CompletionAction,
+    pub auto_start: bool,
+    pub checkbox_label_ko: Option<&'a str>,
+    pub checkbox_label_en: Option<&'a str>,
+    pub checkbox_checked: bool,
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct SplashOutcome {
+    pub success: bool,
+    pub checkbox_checked: bool,
+}
+
+struct CheckboxState {
+    label_ko: String,
+    label_en: String,
+    checked: bool,
+    hovered: bool,
+}
+
 struct SplashData {
     status_ko: String,
     status_en: String,
     completed_status_ko: String,
     completed_status_en: String,
+    failed_status_ko: String,
+    failed_status_en: String,
+    ready_status_ko: Option<String>,
+    ready_status_en: Option<String>,
     button_label_ko: String,
     button_label_en: String,
+    ready_button_label_ko: Option<String>,
+    ready_button_label_en: Option<String>,
+    secondary_button_label_ko: Option<String>,
+    secondary_button_label_en: Option<String>,
     completion_action: CompletionAction,
     logo: Option<LogoAsset>,
     font_handles: Vec<HANDLE>,
@@ -87,10 +153,19 @@ struct SplashData {
     window_h: i32,
     animation_started: Instant,
     block_offset_px: i32,
-    is_completed: bool,
+    stage: SplashStage,
+    auto_start: bool,
     button_hovered: bool,
+    secondary_button_hovered: bool,
     use_korean: bool,
-    work: Option<Box<dyn FnOnce() + Send + 'static>>,
+    checkbox: Option<CheckboxState>,
+    work: Option<Box<dyn FnOnce(bool) -> Result<(), String> + Send + 'static>>,
+    work_result: Option<Result<(), String>>,
+}
+
+struct SplashWindowState {
+    data: SplashData,
+    outcome: *mut SplashOutcome,
 }
 
 fn scale_dpi(value: i32, dpi: u32) -> i32 {
@@ -187,16 +262,10 @@ fn load_logo_asset() -> Option<LogoAsset> {
     }
 }
 
-pub fn run_splash<F: FnOnce() + Send + 'static>(
-    status_ko: &str,
-    status_en: &str,
-    completed_status_ko: &str,
-    completed_status_en: &str,
-    button_label_ko: &str,
-    button_label_en: &str,
-    completion_action: CompletionAction,
-    work: F,
-) {
+pub fn run_splash<F>(config: SplashConfig<'_>, work: F) -> SplashOutcome
+where
+    F: FnOnce(bool) -> Result<(), String> + Send + 'static,
+{
     unsafe {
         let mut gdi_token: usize = 0;
         let gdi_input = GdiplusStartupInput {
@@ -222,20 +291,40 @@ pub fn run_splash<F: FnOnce() + Send + 'static>(
 
         let dpi = GetDpiForSystem();
         let window_w = scale_dpi(SPLASH_W, dpi);
-        let window_h = scale_dpi(SPLASH_H, dpi);
+        let wants_checkbox =
+            config.checkbox_label_ko.is_some() && config.checkbox_label_en.is_some();
+        let window_h = scale_dpi(
+            if wants_checkbox {
+                SPLASH_H_WITH_CHECKBOX
+            } else {
+                SPLASH_H
+            },
+            dpi,
+        );
         let screen_w = GetSystemMetrics(SM_CXSCREEN);
         let screen_h = GetSystemMetrics(SM_CYSCREEN);
         let x = (screen_w - window_w) / 2;
         let y = (screen_h - window_h) / 2;
 
-        let data = Box::new(SplashData {
-            status_ko: status_ko.to_string(),
-            status_en: status_en.to_string(),
-            completed_status_ko: completed_status_ko.to_string(),
-            completed_status_en: completed_status_en.to_string(),
-            button_label_ko: button_label_ko.to_string(),
-            button_label_en: button_label_en.to_string(),
-            completion_action,
+        let mut outcome = Box::new(SplashOutcome::default());
+        let outcome_ptr = outcome.as_mut() as *mut SplashOutcome;
+
+        let data = SplashData {
+            status_ko: config.status_ko.to_string(),
+            status_en: config.status_en.to_string(),
+            completed_status_ko: config.completed_status_ko.to_string(),
+            completed_status_en: config.completed_status_en.to_string(),
+            failed_status_ko: config.failed_status_ko.to_string(),
+            failed_status_en: config.failed_status_en.to_string(),
+            ready_status_ko: config.ready_status_ko.map(str::to_string),
+            ready_status_en: config.ready_status_en.map(str::to_string),
+            button_label_ko: config.primary_button_label_ko.to_string(),
+            button_label_en: config.primary_button_label_en.to_string(),
+            ready_button_label_ko: config.ready_button_label_ko.map(str::to_string),
+            ready_button_label_en: config.ready_button_label_en.map(str::to_string),
+            secondary_button_label_ko: config.secondary_button_label_ko.map(str::to_string),
+            secondary_button_label_en: config.secondary_button_label_en.map(str::to_string),
+            completion_action: config.completion_action,
             logo: load_logo_asset(),
             font_handles,
             dpi,
@@ -243,10 +332,31 @@ pub fn run_splash<F: FnOnce() + Send + 'static>(
             window_h,
             animation_started: Instant::now(),
             block_offset_px: progress_start_offset(window_w, dpi),
-            is_completed: false,
+            stage: if config.auto_start {
+                SplashStage::Running
+            } else {
+                SplashStage::Ready
+            },
+            auto_start: config.auto_start,
             button_hovered: false,
+            secondary_button_hovered: false,
             use_korean: prefers_korean(),
+            checkbox: config
+                .checkbox_label_ko
+                .zip(config.checkbox_label_en)
+                .map(|(ko, en)| CheckboxState {
+                    label_ko: ko.to_string(),
+                    label_en: en.to_string(),
+                    checked: config.checkbox_checked,
+                    hovered: false,
+                }),
             work: Some(Box::new(work)),
+            work_result: None,
+        };
+
+        let state = Box::new(SplashWindowState {
+            data,
+            outcome: outcome_ptr,
         });
 
         let _hwnd = CreateWindowExW(
@@ -261,7 +371,7 @@ pub fn run_splash<F: FnOnce() + Send + 'static>(
             None,
             None,
             Some(hinstance),
-            Some(Box::into_raw(data) as *const c_void),
+            Some(Box::into_raw(state) as *const c_void),
         )
         .expect("CreateWindowExW");
 
@@ -272,6 +382,7 @@ pub fn run_splash<F: FnOnce() + Send + 'static>(
         }
 
         GdiplusShutdown(gdi_token);
+        *outcome
     }
 }
 
@@ -285,8 +396,8 @@ unsafe extern "system" fn wnd_proc(
         match msg {
             WM_CREATE => {
                 let cs = &*(lparam.0 as *const CREATESTRUCTW);
-                let data_ptr = cs.lpCreateParams as isize;
-                SetWindowLongPtrW(hwnd, GWLP_USERDATA, data_ptr);
+                let state_ptr = cs.lpCreateParams as isize;
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, state_ptr);
                 let corner_preference = DWMWCP_ROUND;
                 let _ = DwmSetWindowAttribute(
                     hwnd,
@@ -295,19 +406,9 @@ unsafe extern "system" fn wnd_proc(
                     std::mem::size_of_val(&corner_preference) as u32,
                 );
 
-                let data = &mut *(data_ptr as *mut SplashData);
-                let _ = SetTimer(Some(hwnd), ANIMATION_TIMER_ID, ANIMATION_INTERVAL_MS, None);
-                if let Some(work) = data.work.take() {
-                    let hwnd_val = hwnd.0 as usize;
-                    std::thread::spawn(move || {
-                        work();
-                        let _ = PostMessageW(
-                            Some(HWND(hwnd_val as *mut c_void)),
-                            WM_WORK_DONE,
-                            WPARAM(0),
-                            LPARAM(0),
-                        );
-                    });
+                let state = &mut *(state_ptr as *mut SplashWindowState);
+                if state.data.auto_start {
+                    let _ = PostMessageW(Some(hwnd), WM_START_WORK, WPARAM(0), LPARAM(0));
                 }
                 LRESULT(0)
             }
@@ -315,10 +416,10 @@ unsafe extern "system" fn wnd_proc(
                 let mut ps = PAINTSTRUCT::default();
                 let hdc = BeginPaint(hwnd, &mut ps);
 
-                let data_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
-                if data_ptr != 0 {
-                    let data = &*(data_ptr as *const SplashData);
-                    paint_splash(hdc, data, &ps.rcPaint);
+                let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+                if state_ptr != 0 {
+                    let state = &*(state_ptr as *const SplashWindowState);
+                    paint_splash(hdc, &state.data, &ps.rcPaint);
                 }
 
                 let _ = EndPaint(hwnd, &ps);
@@ -327,37 +428,97 @@ unsafe extern "system" fn wnd_proc(
             WM_ERASEBKGND => LRESULT(1),
             WM_TIMER => {
                 if wparam.0 == ANIMATION_TIMER_ID {
-                    let data_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
-                    if data_ptr != 0 {
-                        let data = &mut *(data_ptr as *mut SplashData);
-                        data.block_offset_px =
-                            progress_block_offset(data, data.animation_started.elapsed().as_secs_f32());
+                    let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+                    if state_ptr != 0 {
+                        let state = &mut *(state_ptr as *mut SplashWindowState);
+                        state.data.block_offset_px = progress_block_offset(
+                            &state.data,
+                            state.data.animation_started.elapsed().as_secs_f32(),
+                        );
 
-                        let bar_rect = progress_track_rect(data);
+                        let bar_rect = progress_track_rect(&state.data);
                         let _ = InvalidateRect(Some(hwnd), Some(&bar_rect), false);
                     }
                     return LRESULT(0);
                 }
                 DefWindowProcW(hwnd, msg, wparam, lparam)
             }
+            WM_START_WORK => {
+                let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+                if state_ptr != 0 {
+                    let state = &mut *(state_ptr as *mut SplashWindowState);
+                    if state.data.work.is_none() {
+                        return LRESULT(0);
+                    }
+
+                    let delete_user_data = state
+                        .data
+                        .checkbox
+                        .as_ref()
+                        .map(|checkbox| checkbox.checked)
+                        .unwrap_or(false);
+                    state.data.stage = SplashStage::Running;
+                    state.data.button_hovered = false;
+                    state.data.secondary_button_hovered = false;
+                    state.data.animation_started = Instant::now();
+                    state.data.block_offset_px =
+                        progress_start_offset(state.data.window_w, state.data.dpi);
+                    let _ = SetTimer(Some(hwnd), ANIMATION_TIMER_ID, ANIMATION_INTERVAL_MS, None);
+
+                    if let Some(work) = state.data.work.take() {
+                        let hwnd_val = hwnd.0 as usize;
+                        std::thread::spawn(move || {
+                            let result = catch_unwind(AssertUnwindSafe(|| work(delete_user_data)))
+                                .unwrap_or_else(|_| {
+                                    Err("unexpected bootstrapper panic".to_string())
+                                });
+                            let success = result.is_ok();
+                            let result_ptr = Box::into_raw(Box::new(result));
+                            let _ = PostMessageW(
+                                Some(HWND(hwnd_val as *mut c_void)),
+                                WM_WORK_DONE,
+                                WPARAM(result_ptr as usize),
+                                LPARAM(success as isize),
+                            );
+                        });
+                    }
+
+                    let _ = InvalidateRect(Some(hwnd), None, false);
+                }
+                LRESULT(0)
+            }
             WM_WORK_DONE => {
                 let _ = KillTimer(Some(hwnd), ANIMATION_TIMER_ID);
-                let data_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
-                if data_ptr != 0 {
-                    let data = &mut *(data_ptr as *mut SplashData);
-                    data.is_completed = true;
-                    data.button_hovered = false;
-                    data.status_ko = data.completed_status_ko.clone();
-                    data.status_en = data.completed_status_en.clone();
+                let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+                if state_ptr != 0 {
+                    let state = &mut *(state_ptr as *mut SplashWindowState);
+                    let result_ptr = wparam.0 as *mut Result<(), String>;
+                    if !result_ptr.is_null() {
+                        state.data.work_result = Some(*Box::from_raw(result_ptr));
+                    }
+                    state.data.button_hovered = false;
+                    state.data.secondary_button_hovered = false;
+                    state.data.stage = if lparam.0 != 0 {
+                        SplashStage::Success
+                    } else {
+                        SplashStage::Failure
+                    };
                 }
                 let _ = InvalidateRect(Some(hwnd), None, false);
                 LRESULT(0)
             }
             WM_PRIMARY_ACTION => {
-                let data_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
-                if data_ptr != 0 {
-                    let data = &*(data_ptr as *const SplashData);
-                    if matches!(data.completion_action, CompletionAction::LaunchApp) {
+                let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+                if state_ptr != 0 {
+                    let state = &mut *(state_ptr as *mut SplashWindowState);
+                    if state.data.stage == SplashStage::Ready {
+                        let _ = PostMessageW(Some(hwnd), WM_START_WORK, WPARAM(0), LPARAM(0));
+                        return LRESULT(0);
+                    }
+
+                    if state.data.stage == SplashStage::Success
+                        && matches!(state.data.completion_action, CompletionAction::LaunchApp)
+                    {
                         installer::launch_app();
                     }
                 }
@@ -365,32 +526,67 @@ unsafe extern "system" fn wnd_proc(
                 LRESULT(0)
             }
             WM_MOUSEMOVE => {
-                let data_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
-                if data_ptr != 0 {
-                    let data = &mut *(data_ptr as *mut SplashData);
-                    if data.is_completed {
-                        let x = get_x_lparam(lparam);
-                        let y = get_y_lparam(lparam);
-                        let hovered = point_in_rect(x, y, &launch_button_rect(data));
-                        if hovered != data.button_hovered {
-                            data.button_hovered = hovered;
-                            let _ = InvalidateRect(Some(hwnd), None, false);
+                let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+                if state_ptr != 0 {
+                    let state = &mut *(state_ptr as *mut SplashWindowState);
+                    let x = get_x_lparam(lparam);
+                    let y = get_y_lparam(lparam);
+                    let button_hovered = show_primary_button(&state.data)
+                        && point_in_rect(x, y, &primary_button_rect(&state.data));
+                    let secondary_button_hovered = show_secondary_button(&state.data)
+                        && point_in_rect(x, y, &secondary_button_rect(&state.data));
+                    let checkbox_hovered = state.data.stage == SplashStage::Ready
+                        && state.data.checkbox.is_some()
+                        && point_in_rect(x, y, &checkbox_hit_rect(&state.data));
+
+                    let mut changed = button_hovered != state.data.button_hovered;
+                    state.data.button_hovered = button_hovered;
+                    if secondary_button_hovered != state.data.secondary_button_hovered {
+                        state.data.secondary_button_hovered = secondary_button_hovered;
+                        changed = true;
+                    }
+                    if let Some(checkbox) = state.data.checkbox.as_mut() {
+                        if checkbox.hovered != checkbox_hovered {
+                            checkbox.hovered = checkbox_hovered;
+                            changed = true;
                         }
+                    }
+                    if changed {
+                        let _ = InvalidateRect(Some(hwnd), None, false);
                     }
                 }
                 LRESULT(0)
             }
             WM_LBUTTONUP => {
-                let data_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
-                if data_ptr != 0 {
-                    let data = &mut *(data_ptr as *mut SplashData);
-                    if data.is_completed {
-                        let x = get_x_lparam(lparam);
-                        let y = get_y_lparam(lparam);
-                        if point_in_rect(x, y, &launch_button_rect(data)) {
-                            let _ = PostMessageW(Some(hwnd), WM_PRIMARY_ACTION, WPARAM(0), LPARAM(0));
-                            return LRESULT(0);
+                let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+                if state_ptr != 0 {
+                    let state = &mut *(state_ptr as *mut SplashWindowState);
+                    let x = get_x_lparam(lparam);
+                    let y = get_y_lparam(lparam);
+
+                    if state.data.stage == SplashStage::Ready {
+                        let checkbox_rect = checkbox_hit_rect(&state.data);
+                        if let Some(checkbox) = state.data.checkbox.as_mut() {
+                            if point_in_rect(x, y, &checkbox_rect) {
+                                checkbox.checked = !checkbox.checked;
+                                let _ = InvalidateRect(Some(hwnd), None, false);
+                                return LRESULT(0);
+                            }
                         }
+                    }
+
+                    if show_secondary_button(&state.data)
+                        && point_in_rect(x, y, &secondary_button_rect(&state.data))
+                    {
+                        let _ = DestroyWindow(hwnd);
+                        return LRESULT(0);
+                    }
+
+                    if show_primary_button(&state.data)
+                        && point_in_rect(x, y, &primary_button_rect(&state.data))
+                    {
+                        let _ = PostMessageW(Some(hwnd), WM_PRIMARY_ACTION, WPARAM(0), LPARAM(0));
+                        return LRESULT(0);
                     }
                 }
                 LRESULT(0)
@@ -400,12 +596,20 @@ unsafe extern "system" fn wnd_proc(
                 let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
                 if ptr != 0 {
                     SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
-                    let data = Box::from_raw(ptr as *mut SplashData);
-                    if let Some(ref logo) = data.logo {
+                    let state = Box::from_raw(ptr as *mut SplashWindowState);
+                    if let Some(ref logo) = state.data.logo {
                         let _ = GdipDisposeImage(logo.image);
                     }
-                    unload_fonts(&data.font_handles);
-                    drop(data);
+                    unload_fonts(&state.data.font_handles);
+                    if !state.outcome.is_null() {
+                        (*state.outcome).success = state.data.stage == SplashStage::Success;
+                        (*state.outcome).checkbox_checked = state
+                            .data
+                            .checkbox
+                            .as_ref()
+                            .map(|checkbox| checkbox.checked)
+                            .unwrap_or(false);
+                    }
                 }
                 PostQuitMessage(0);
                 LRESULT(0)
@@ -476,12 +680,7 @@ unsafe fn paint_splash_contents(hdc: HDC, data: &SplashData) {
                 let _ = GdipSetPixelOffsetMode(graphics, PixelOffsetModeHighQuality);
                 let _ = GdipSetCompositingQuality(graphics, CompositingQualityHighQuality);
                 let _ = GdipDrawImageRectI(
-                    graphics,
-                    logo.image,
-                    logo_left,
-                    logo_top,
-                    logo_size,
-                    logo_size,
+                    graphics, logo.image, logo_left, logo_top, logo_size, logo_size,
                 );
                 let _ = GdipDeleteGraphics(graphics);
             }
@@ -508,26 +707,103 @@ unsafe fn paint_splash_contents(hdc: HDC, data: &SplashData) {
             right: data.window_w,
             bottom: scale_dpi(STATUS_BOTTOM, data.dpi),
         };
-        let mut status: Vec<u16> = data.status_en.encode_utf16().collect();
-        DrawTextW(hdc, &mut status, &mut status_rect, DT_CENTER | DT_SINGLELINE);
+        let mut status: Vec<u16> = current_status(data).encode_utf16().collect();
+        DrawTextW(
+            hdc,
+            &mut status,
+            &mut status_rect,
+            DT_CENTER | DT_SINGLELINE,
+        );
 
-        if data.is_completed {
-            paint_launch_button(
-                hdc,
-                data,
-                data.button_hovered,
-                false,
-                &data.button_label_ko,
-                &data.button_label_en,
-            );
-        } else {
+        if data.stage == SplashStage::Ready {
+            if let Some(checkbox) = &data.checkbox {
+                paint_checkbox(hdc, data, checkbox);
+            }
+        }
+
+        if data.stage == SplashStage::Running {
             paint_progress_bar(hdc, data, data.block_offset_px);
+        } else if show_primary_button(data) {
+            if show_secondary_button(data) {
+                paint_secondary_button(
+                    hdc,
+                    data,
+                    data.secondary_button_hovered,
+                    current_secondary_button_label(data),
+                );
+            }
+            paint_launch_button(hdc, data, data.button_hovered, current_button_label(data));
         }
 
         SelectObject(hdc, old_font);
         let _ = DeleteObject(title_font.into());
         let _ = DeleteObject(status_font.into());
     }
+}
+
+fn current_status<'a>(data: &'a SplashData) -> &'a str {
+    match data.stage {
+        SplashStage::Ready => localized_text(
+            data.ready_status_ko.as_deref().unwrap_or(&data.status_ko),
+            data.ready_status_en.as_deref().unwrap_or(&data.status_en),
+            data.use_korean,
+        ),
+        SplashStage::Running => localized_text(&data.status_ko, &data.status_en, data.use_korean),
+        SplashStage::Success => localized_text(
+            &data.completed_status_ko,
+            &data.completed_status_en,
+            data.use_korean,
+        ),
+        SplashStage::Failure => localized_text(
+            &data.failed_status_ko,
+            &data.failed_status_en,
+            data.use_korean,
+        ),
+    }
+}
+
+fn current_button_label<'a>(data: &'a SplashData) -> &'a str {
+    match data.stage {
+        SplashStage::Ready => localized_text(
+            data.ready_button_label_ko
+                .as_deref()
+                .unwrap_or(&data.button_label_ko),
+            data.ready_button_label_en
+                .as_deref()
+                .unwrap_or(&data.button_label_en),
+            data.use_korean,
+        ),
+        SplashStage::Success => localized_text(
+            &data.button_label_ko,
+            &data.button_label_en,
+            data.use_korean,
+        ),
+        SplashStage::Failure => localized_text("닫기", "Close", data.use_korean),
+        SplashStage::Running => "",
+    }
+}
+
+fn current_secondary_button_label<'a>(data: &'a SplashData) -> &'a str {
+    localized_text(
+        data.secondary_button_label_ko.as_deref().unwrap_or("취소"),
+        data.secondary_button_label_en
+            .as_deref()
+            .unwrap_or("Cancel"),
+        data.use_korean,
+    )
+}
+
+fn show_primary_button(data: &SplashData) -> bool {
+    matches!(
+        data.stage,
+        SplashStage::Ready | SplashStage::Success | SplashStage::Failure
+    )
+}
+
+fn show_secondary_button(data: &SplashData) -> bool {
+    data.stage == SplashStage::Ready
+        && data.secondary_button_label_ko.is_some()
+        && data.secondary_button_label_en.is_some()
 }
 
 fn progress_track_rect(data: &SplashData) -> RECT {
@@ -542,10 +818,15 @@ fn progress_track_rect(data: &SplashData) -> RECT {
     }
 }
 
-fn launch_button_rect(data: &SplashData) -> RECT {
+fn primary_button_rect(data: &SplashData) -> RECT {
     let button_w = scale_dpi(BUTTON_W, data.dpi);
     let button_h = scale_dpi(BUTTON_H, data.dpi);
-    let left = (data.window_w - button_w) / 2;
+    let gap = scale_dpi(BUTTON_GAP, data.dpi);
+    let left = if show_secondary_button(data) {
+        (data.window_w - ((button_w * 2) + gap)) / 2 + button_w + gap
+    } else {
+        (data.window_w - button_w) / 2
+    };
     let bottom = data.window_h - scale_dpi(BUTTON_BOTTOM_OFFSET, data.dpi);
     RECT {
         left,
@@ -553,6 +834,46 @@ fn launch_button_rect(data: &SplashData) -> RECT {
         right: left + button_w,
         bottom,
     }
+}
+
+fn secondary_button_rect(data: &SplashData) -> RECT {
+    let button_w = scale_dpi(BUTTON_W, data.dpi);
+    let button_h = scale_dpi(BUTTON_H, data.dpi);
+    let gap = scale_dpi(BUTTON_GAP, data.dpi);
+    let left = (data.window_w - ((button_w * 2) + gap)) / 2;
+    let bottom = data.window_h - scale_dpi(BUTTON_BOTTOM_OFFSET, data.dpi);
+    RECT {
+        left,
+        top: bottom - button_h,
+        right: left + button_w,
+        bottom,
+    }
+}
+
+fn checkbox_row_rect(data: &SplashData) -> RECT {
+    let side_margin = scale_dpi(PROGRESS_SIDE_MARGIN, data.dpi);
+    RECT {
+        left: side_margin,
+        top: scale_dpi(CHECKBOX_TOP, data.dpi),
+        right: data.window_w - side_margin,
+        bottom: scale_dpi(CHECKBOX_TOP + CHECKBOX_ROW_H, data.dpi),
+    }
+}
+
+fn checkbox_box_rect(data: &SplashData) -> RECT {
+    let row = checkbox_row_rect(data);
+    let box_size = scale_dpi(CHECKBOX_BOX_SIZE, data.dpi);
+    let top = row.top + ((row.bottom - row.top - box_size) / 2);
+    RECT {
+        left: row.left,
+        top,
+        right: row.left + box_size,
+        bottom: top + box_size,
+    }
+}
+
+fn checkbox_hit_rect(data: &SplashData) -> RECT {
+    checkbox_row_rect(data)
 }
 
 fn progress_start_offset(window_w: i32, dpi: u32) -> i32 {
@@ -622,14 +943,7 @@ unsafe fn paint_progress_bar(hdc: HDC, data: &SplashData, block_offset_px: i32) 
     }
 }
 
-unsafe fn paint_launch_button(
-    hdc: HDC,
-    data: &SplashData,
-    hovered: bool,
-    use_korean: bool,
-    label_ko: &str,
-    label_en: &str,
-) {
+unsafe fn paint_launch_button(hdc: HDC, data: &SplashData, hovered: bool, label: &str) {
     unsafe {
         let mut graphics = std::ptr::null_mut();
         if GdipCreateFromHDC(hdc, &mut graphics) != GDIP_OK || graphics.is_null() {
@@ -637,7 +951,7 @@ unsafe fn paint_launch_button(
         }
 
         let _ = GdipSetSmoothingMode(graphics, SmoothingModeAntiAlias);
-        let button_rect = launch_button_rect(data);
+        let button_rect = primary_button_rect(data);
         let button_radius = scale_dpi(BUTTON_RADIUS, data.dpi).max(1);
         fill_rounded_rect(
             graphics,
@@ -660,9 +974,7 @@ unsafe fn paint_launch_button(
         SetBkMode(hdc, TRANSPARENT);
         SetTextColor(hdc, BUTTON_TEXT_COLOR);
 
-        let mut label: Vec<u16> = localized_text(label_ko, label_en, use_korean)
-            .encode_utf16()
-            .collect();
+        let mut label: Vec<u16> = label.encode_utf16().collect();
         let mut text_rect = button_rect;
         DrawTextW(
             hdc,
@@ -673,6 +985,137 @@ unsafe fn paint_launch_button(
 
         SelectObject(hdc, old_font);
         let _ = DeleteObject(button_font.into());
+    }
+}
+
+unsafe fn paint_secondary_button(hdc: HDC, data: &SplashData, hovered: bool, label: &str) {
+    unsafe {
+        let button_rect = secondary_button_rect(data);
+        let button_radius = scale_dpi(BUTTON_RADIUS, data.dpi).max(1);
+        let mut graphics = std::ptr::null_mut();
+        if GdipCreateFromHDC(hdc, &mut graphics) != GDIP_OK || graphics.is_null() {
+            return;
+        }
+
+        let _ = GdipSetSmoothingMode(graphics, SmoothingModeAntiAlias);
+        fill_rounded_rect(
+            graphics,
+            if hovered {
+                SECONDARY_BUTTON_HOVER_BG_COLOR
+            } else {
+                SECONDARY_BUTTON_BG_COLOR
+            },
+            &button_rect,
+            button_radius,
+        );
+
+        let path = create_rounded_rect_path(&button_rect, button_radius);
+        if !path.is_null() {
+            let mut pen = std::ptr::null_mut();
+            if GdipCreatePen1(SECONDARY_BUTTON_BORDER_COLOR, 1.0, UnitPixel, &mut pen) == GDIP_OK
+                && !pen.is_null()
+            {
+                let _ = GdipDrawPath(graphics, pen, path);
+                let _ = GdipDeletePen(pen);
+            }
+            let _ = GdipDeletePath(path);
+        }
+
+        let _ = GdipDeleteGraphics(graphics);
+
+        let button_font = create_font_with_face(
+            BUTTON_FONT_FACE,
+            scale_dpi(BUTTON_FONT_SIZE, data.dpi),
+            FW_NORMAL.0 as i32,
+        );
+        let old_font = SelectObject(hdc, button_font.into());
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, SECONDARY_BUTTON_TEXT_COLOR);
+
+        let mut label_text: Vec<u16> = label.encode_utf16().collect();
+        let mut text_rect = button_rect;
+        DrawTextW(
+            hdc,
+            &mut label_text,
+            &mut text_rect,
+            DT_CENTER | DT_VCENTER | DT_SINGLELINE,
+        );
+
+        SelectObject(hdc, old_font);
+        let _ = DeleteObject(button_font.into());
+    }
+}
+
+unsafe fn paint_checkbox(hdc: HDC, data: &SplashData, checkbox: &CheckboxState) {
+    unsafe {
+        let mut graphics = std::ptr::null_mut();
+        if GdipCreateFromHDC(hdc, &mut graphics) != GDIP_OK || graphics.is_null() {
+            return;
+        }
+
+        let _ = GdipSetSmoothingMode(graphics, SmoothingModeAntiAlias);
+        let box_rect = checkbox_box_rect(data);
+        let radius = scale_dpi(4, data.dpi).max(1);
+        fill_rounded_rect(
+            graphics,
+            if checkbox.checked {
+                CHECKBOX_CHECK_COLOR
+            } else {
+                CHECKBOX_BG_COLOR
+            },
+            &box_rect,
+            radius,
+        );
+
+        let path = create_rounded_rect_path(&box_rect, radius);
+        if !path.is_null() {
+            let mut pen = std::ptr::null_mut();
+            if GdipCreatePen1(CHECKBOX_BORDER_COLOR, 1.0, UnitPixel, &mut pen) == GDIP_OK
+                && !pen.is_null()
+            {
+                let _ = GdipDrawPath(graphics, pen, path);
+                let _ = GdipDeletePen(pen);
+            }
+            let _ = GdipDeletePath(path);
+        }
+
+        if checkbox.checked {
+            let mut pen = std::ptr::null_mut();
+            if GdipCreatePen1(0xFFFFFFFF, 1.8, UnitPixel, &mut pen) == GDIP_OK && !pen.is_null() {
+                let left = box_rect.left + scale_dpi(4, data.dpi);
+                let mid_x = box_rect.left + scale_dpi(7, data.dpi);
+                let right = box_rect.left + scale_dpi(12, data.dpi);
+                let low_y = box_rect.top + scale_dpi(8, data.dpi);
+                let mid_y = box_rect.top + scale_dpi(11, data.dpi);
+                let high_y = box_rect.top + scale_dpi(5, data.dpi);
+                let _ = GdipDrawLineI(graphics, pen, left, low_y, mid_x, mid_y);
+                let _ = GdipDrawLineI(graphics, pen, mid_x, mid_y, right, high_y);
+                let _ = GdipDeletePen(pen);
+            }
+        }
+
+        let _ = GdipDeleteGraphics(graphics);
+
+        let label_font = create_font(scale_dpi(CHECKBOX_FONT_SIZE, data.dpi), FW_NORMAL.0 as i32);
+        let old_font = SelectObject(hdc, label_font.into());
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, CHECKBOX_TEXT_COLOR);
+
+        let mut text_rect = checkbox_row_rect(data);
+        text_rect.left += scale_dpi(CHECKBOX_BOX_SIZE + CHECKBOX_LABEL_GAP, data.dpi);
+        let mut label: Vec<u16> =
+            localized_text(&checkbox.label_ko, &checkbox.label_en, data.use_korean)
+                .encode_utf16()
+                .collect();
+        DrawTextW(
+            hdc,
+            &mut label,
+            &mut text_rect,
+            DT_LEFT | DT_VCENTER | DT_SINGLELINE,
+        );
+
+        SelectObject(hdc, old_font);
+        let _ = DeleteObject(label_font.into());
     }
 }
 
