@@ -164,7 +164,7 @@ const dict = {
     ko: "노트가 저장되는 경로를 설정합니다. 클라우드 폴더(OneDrive, Google Drive 등)를 지정하면 기기 간 동기화가 가능합니다.",
   },
   "settings.notesDirectory.change": { en: "Change", ko: "변경" },
-  "settings.notesDirectory.reset": { en: "Reset to default", ko: "기본값으로 초기화" },
+  "settings.notesDirectory.reset": { en: "Reset", ko: "초기화" },
   "settings.notesDirectory.default": { en: "Default", ko: "기본 위치" },
   "settings.notesDirectory.confirmMove": {
     en: "Changing the storage location will copy existing notes to the new location. Continue?",

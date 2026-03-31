@@ -99,7 +99,7 @@ const useStyles = makeStyles({
     border: "none",
     borderRadius: CONTROL_RADIUS,
     fontSize: "13px",
-    fontWeight: 400,
+    fontWeight: 500,
     minHeight: "32px",
     paddingLeft: "8px",
     paddingRight: "8px",
@@ -264,7 +264,7 @@ export function SettingsModal({ open, onClose, settings, onUpdate, currentNotesD
   const [appVersion, setAppVersion] = useState("");
   const [confirmOpen, setConfirmOpen] = useState(false);
   const { state: updaterState, checkForUpdate, installUpdate, restartApp } = useUpdater();
-  const subtleBtnStyle: React.CSSProperties = { fontSize: "13px", fontWeight: 400, borderRadius: CONTROL_RADIUS, backgroundColor: isDarkMode ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.04)" };
+  const subtleBtnStyle: React.CSSProperties = { fontSize: "13px", fontWeight: 500, borderRadius: CONTROL_RADIUS, backgroundColor: isDarkMode ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.04)" };
 
   useEffect(() => {
     getVersion().then(setAppVersion).catch(() => {});
@@ -415,32 +415,30 @@ export function SettingsModal({ open, onClose, settings, onUpdate, currentNotesD
                 <div className={settingItemClass(styles)}>
                   <div className={styles.row}>
                     <Label className={styles.label}>{i("settings.notesDirectory")}</Label>
-                    <div style={{ display: "flex", alignItems: "center", gap: "10px", minWidth: 0 }}>
-                    <Tooltip content={currentNotesDir} relationship="description" positioning="above">
-                      <span style={{
-                        fontSize: "13px",
-                        opacity: 0.7,
-                        maxWidth: "160px",
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                        direction: "rtl",
-                        textAlign: "left",
-                      }}>
-                        {settings.notesDirectory || i("settings.notesDirectory.default")}
-                      </span>
-                    </Tooltip>
-                    <Button size="medium" appearance="subtle" onClick={onChangeNotesDir} style={{ ...subtleBtnStyle, minWidth: 0 }}>
-                      {i("settings.notesDirectory.change")}
-                    </Button>
-                    {settings.notesDirectory && (
-                      <Button size="medium" appearance="subtle" onClick={onResetNotesDir} style={{ ...subtleBtnStyle, minWidth: 0 }}>
-                        {i("settings.notesDirectory.reset")}
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0 }}>
+                      <Button size="medium" appearance="subtle" onClick={onChangeNotesDir} style={{ ...subtleBtnStyle, minWidth: 0 }}>
+                        {i("settings.notesDirectory.change")}
                       </Button>
-                    )}
+                      {settings.notesDirectory && (
+                        <Button size="medium" appearance="subtle" onClick={onResetNotesDir} style={{ ...subtleBtnStyle, minWidth: 0 }}>
+                          {i("settings.notesDirectory.reset")}
+                        </Button>
+                      )}
                     </div>
                   </div>
-                  <div style={{ fontSize: "12px", color: tokens.colorNeutralForeground3, marginTop: "8px", lineHeight: "1.5" }}>
+                  <Tooltip content={currentNotesDir} relationship="description" positioning="above">
+                    <div style={{
+                      fontSize: "13px",
+                      color: tokens.colorNeutralForeground3,
+                      marginTop: "10px",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}>
+                      {currentNotesDir}
+                    </div>
+                  </Tooltip>
+                  <div style={{ fontSize: "12px", color: tokens.colorNeutralForeground3, marginTop: "4px", lineHeight: "1.5" }}>
                     {i("settings.notesDirectory.description")}
                   </div>
                 </div>

@@ -115,7 +115,7 @@ const useStyles = makeStyles({
     border: "none",
     fontSize: "12px",
     gap: "2px",
-    fontWeight: 600,
+    fontWeight: 400,
   },
 });
 
