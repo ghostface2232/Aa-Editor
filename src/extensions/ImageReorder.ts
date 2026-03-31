@@ -19,15 +19,12 @@ export function startReorder(
 
   const ghost = document.createElement("div");
   ghost.className = "image-drag-ghost";
+  ghost.style.cssText = "position:fixed;left:0;top:0;pointer-events:none;z-index:9999;will-change:transform;";
+  ghost.style.transform = `translate3d(${event.clientX - offsetX}px, ${event.clientY - offsetY}px, 0)`;
   const ghostImg = document.createElement("img");
   ghostImg.src = attrs.src as string;
-  ghostImg.style.width = `${ghostW}px`;
-  ghostImg.style.height = `${ghostH}px`;
+  ghostImg.style.cssText = `width:${ghostW}px;height:${ghostH}px;display:block;border-radius:var(--editor-radius,4px);opacity:0.85;`;
   ghost.appendChild(ghostImg);
-  ghost.style.position = "fixed";
-  ghost.style.pointerEvents = "none";
-  ghost.style.zIndex = "9999";
-  ghost.style.transform = `translate3d(${event.clientX - offsetX}px, ${event.clientY - offsetY}px, 0)`;
   document.body.appendChild(ghost);
 
   // [2] 원본 이미지 반투명 처리
@@ -55,7 +52,6 @@ export function startReorder(
   let lastInsertPos: number | null = null;
   let currentInsertPos: number | null = null;
   let cleaned = false;
-  const pointerId = event.pointerId;
 
   // [6] 스크롤 컨테이너 캐싱
   let scrollContainer: HTMLElement | null = null;
@@ -79,13 +75,9 @@ export function startReorder(
     indicator.remove();
     imgEl.style.opacity = "";
     if (rafId !== null) cancelAnimationFrame(rafId);
-    try {
-      imgEl.releasePointerCapture(pointerId);
-    } catch {}
     document.removeEventListener("pointermove", onPointerMove);
     document.removeEventListener("pointerup", onPointerUp);
     document.removeEventListener("keydown", onKeyDown);
-    imgEl.removeEventListener("lostpointercapture", onLostCapture);
   }
 
   // [8] tick 함수
@@ -217,13 +209,8 @@ export function startReorder(
     }
   };
 
-  const onLostCapture = () => {
-    cleanup();
-  };
-
   // [10] 이벤트 리스너 등록
   document.addEventListener("pointermove", onPointerMove);
   document.addEventListener("pointerup", onPointerUp);
   document.addEventListener("keydown", onKeyDown);
-  imgEl.addEventListener("lostpointercapture", onLostCapture);
 }

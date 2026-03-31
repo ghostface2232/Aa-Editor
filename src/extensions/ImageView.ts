@@ -168,7 +168,6 @@ export function createImageNodeView(editor: Editor) {
 
       const startX = e.clientX;
       const startY = e.clientY;
-      const pointerId = e.pointerId;
       let handed = false;
 
       const onMove = (ev: PointerEvent) => {
@@ -179,7 +178,6 @@ export function createImageNodeView(editor: Editor) {
         document.removeEventListener("pointermove", onMove);
         document.removeEventListener("pointerup", onUp);
 
-        try { img.setPointerCapture(pointerId); } catch {}
         startReorder(editor, startPos, currentNode.nodeSize, { ...currentNode.attrs }, img, ev);
       };
 
