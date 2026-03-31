@@ -454,7 +454,13 @@ export function useNotesLoader(
 
 export function deriveTitle(content: string): string {
   if (!content) return "";
-  const firstLine = content.trimStart().split("\n")[0];
-  const heading = firstLine.replace(/^#+\s*/, "").trim();
-  return heading.slice(0, 20) || "";
+  const lines = content.trimStart().split("\n");
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line) continue;
+    if (line.startsWith("![") || line.startsWith("<img")) continue;
+    const heading = line.replace(/^#+\s*/, "").replace(/&[a-zA-Z]+;|&#\d+;/g, " ").trim();
+    if (heading) return heading.slice(0, 20);
+  }
+  return "";
 }

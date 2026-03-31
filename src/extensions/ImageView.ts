@@ -130,7 +130,7 @@ export function createImageNodeView(editor: Editor) {
     const isReadonly = () => !!editor.storage.readonlyGuard?.readonly;
 
     const syncDragState = () => {
-      img.style.cursor = isReadonly() ? "default" : "grab";
+      img.style.cursor = isReadonly() ? "default" : "move";
     };
 
     const showHandles = () => {
@@ -142,6 +142,7 @@ export function createImageNodeView(editor: Editor) {
     dom.addEventListener("mouseleave", hideHandles);
 
     const updateSelection = () => {
+      syncDragState();
       if (isReadonly()) { dom.style.outline = "none"; hideHandles(); return; }
       const pos = getPos();
       if (pos === undefined) return;
@@ -160,6 +161,7 @@ export function createImageNodeView(editor: Editor) {
 
     img.addEventListener("pointerdown", (e) => {
       if (e.button !== 0) return;
+      e.preventDefault();
       selectImageNode();
       if (isReadonly()) return;
 

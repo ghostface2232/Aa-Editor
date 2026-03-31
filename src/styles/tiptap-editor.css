@@ -354,6 +354,35 @@
   outline-offset: -1px;
 }
 
+/* ─── 이미지 드래그 재배치 ─── */
+.image-drag-ghost {
+  position: fixed;
+  pointer-events: none;
+  z-index: 10000;
+  opacity: 0.6;
+  border-radius: 8px;
+  filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.15));
+  will-change: transform;
+}
+
+.image-drag-ghost img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 8px;
+}
+
+.image-drop-indicator {
+  position: fixed;
+  pointer-events: none;
+  z-index: 10000;
+  height: 3px;
+  background: var(--editor-color-accent, #0078d4);
+  border-radius: 1.5px;
+  opacity: 0;
+  transition: opacity 0.08s ease;
+}
+
 /* ═══════════════════════════════════════════
    다크 모드
    ═══════════════════════════════════════════ */
@@ -429,6 +458,10 @@
 [data-theme="dark"] .ProseMirror pre .hljs-number,
 [data-theme="dark"] .ProseMirror pre .hljs-literal {
   color: #f0b072;
+}
+
+[data-theme="dark"] .image-drag-ghost {
+  filter: drop-shadow(0 4px 16px rgba(0, 0, 0, 0.4));
 }
 
 /* ═══════════════════════════════════════════

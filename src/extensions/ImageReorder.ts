@@ -19,21 +19,25 @@ export function startReorder(
 
   const ghost = document.createElement("div");
   ghost.className = "image-drag-ghost";
-  ghost.style.cssText = "position:fixed;left:0;top:0;pointer-events:none;z-index:9999;will-change:transform;";
+  ghost.style.left = "0";
+  ghost.style.top = "0";
   ghost.style.transform = `translate3d(${event.clientX - offsetX}px, ${event.clientY - offsetY}px, 0)`;
   const ghostImg = document.createElement("img");
   ghostImg.src = attrs.src as string;
-  ghostImg.style.cssText = `width:${ghostW}px;height:${ghostH}px;display:block;border-radius:var(--editor-radius,4px);opacity:0.85;`;
+  ghostImg.style.width = `${ghostW}px`;
+  ghostImg.style.height = `${ghostH}px`;
   ghost.appendChild(ghostImg);
   document.body.appendChild(ghost);
 
-  // [2] 원본 이미지 반투명 처리
+  // [2] 원본 이미지 반투명 처리 + 커서 변경
   imgEl.style.opacity = "0.3";
+  document.body.style.cursor = "move";
 
   // [3] 드롭 인디케이터 생성
   const indicator = document.createElement("div");
   indicator.className = "image-drop-indicator";
-  indicator.style.opacity = "0";
+  indicator.style.left = "0";
+  indicator.style.top = "0";
   document.body.appendChild(indicator);
 
   // [4] 콘텐츠 영역 bounds 캐싱
@@ -74,6 +78,7 @@ export function startReorder(
     ghost.remove();
     indicator.remove();
     imgEl.style.opacity = "";
+    document.body.style.cursor = "";
     if (rafId !== null) cancelAnimationFrame(rafId);
     document.removeEventListener("pointermove", onPointerMove);
     document.removeEventListener("pointerup", onPointerUp);

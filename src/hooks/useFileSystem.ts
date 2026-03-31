@@ -235,6 +235,15 @@ export function useFileSystem(
   }, [importFiles]);
 
   const newNote = useCallback(async () => {
+    // If current note is empty, just keep focus on it instead of creating another
+    const currentContent = getCurrentMarkdown(state, tiptapRef).trim();
+    const currentDoc = docs[activeIndex];
+    if (currentDoc && !currentContent && !currentDoc.customName) {
+      loadIntoEditor(tiptapRef, "");
+      resetDocState(state, currentDoc.filePath, "");
+      return;
+    }
+
     await leaveCurrentDoc();
 
     const id = crypto.randomUUID();
@@ -273,7 +282,7 @@ export function useFileSystem(
     } catch (error) {
       console.warn("Failed to create new note file:", error);
     }
-  }, [leaveCurrentDoc, docs, locale, notesSortOrder, setActiveIndex, setDocs, state, tiptapRef]);
+  }, [activeIndex, leaveCurrentDoc, docs, locale, notesSortOrder, setActiveIndex, setDocs, state, tiptapRef]);
 
   const switchDocument = useCallback(async (index: number) => {
     if (index === activeIndex) return;
@@ -281,12 +290,37 @@ export function useFileSystem(
 
     await leaveCurrentDoc();
 
-    const target = docs[index];
+    // Auto-delete empty note when leaving it
+    const leaving = docs[activeIndex];
+    const currentContent = getCurrentMarkdown(state, tiptapRef).trim();
+    let nextDocs = docs;
+    let targetIndex = index;
+
+    if (leaving && !currentContent && !leaving.customName && docs.length > 1) {
+      // Remove file from disk
+      if (leaving.filePath) {
+        try { markOwnWrite(leaving.filePath); await remove(leaving.filePath); } catch {}
+      }
+      // Remove from groups
+      const leavingId = leaving.id;
+      setGroups?.((prev) => {
+        const updated = prev
+          .map((g) => ({ ...g, noteIds: g.noteIds.filter((id) => id !== leavingId) }))
+          .filter((g) => g.noteIds.length > 0);
+        return updated;
+      });
+      // Remove from docs and adjust target index
+      nextDocs = docs.filter((_, i) => i !== activeIndex);
+      if (index > activeIndex) targetIndex = index - 1;
+      setDocs(nextDocs);
+    }
+
+    const target = nextDocs[targetIndex];
     loadIntoEditor(tiptapRef, target.content);
     resetDocState(state, target.filePath, target.content);
-    setActiveIndex(index);
-    void saveManifest(docs, target.id, groupsRef.current).catch(() => {});
-  }, [activeIndex, leaveCurrentDoc, docs, setActiveIndex, state, tiptapRef]);
+    setActiveIndex(targetIndex);
+    void saveManifest(nextDocs, target.id, groupsRef.current).catch(() => {});
+  }, [activeIndex, leaveCurrentDoc, docs, setActiveIndex, setDocs, setGroups, state, tiptapRef]);
 
   const deleteNote = useCallback(async (index: number) => {
     const doc = docs[index];
