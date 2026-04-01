@@ -56,5 +56,5 @@
 
 ## License
 MIT
-
-2026 Mingwan Bae
+---
+© 2026 Mingwan Bae
