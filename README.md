@@ -8,9 +8,9 @@
 [![Release](https://img.shields.io/github/v/release/ghostface2232/Noten?style=flat-square)](https://github.com/ghostface2232/Noten/releases)
 ![Platform](https://img.shields.io/badge/platform-Windows-blue?style=flat-square)
 
-<p>
+
 A clean, fast markdown and rich text editor for Windows, inspired by Apple Notes and Notion. Powered by [Tiptap](https://tiptap.dev/) and [CodeMirror](https://codemirror.net/).
-</p>
+
 
 ## Features
 - **Dual editor** - Rich text (WYSIWYG) and Markdown side by side, switchable with `Ctrl+/`
