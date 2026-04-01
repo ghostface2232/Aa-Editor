@@ -80,11 +80,6 @@ struct LogoAsset {
     _stream: IStream,
 }
 
-#[derive(Clone, Copy)]
-pub enum CompletionAction {
-    CloseWindow,
-}
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SplashStage {
     Ready,
@@ -108,7 +103,6 @@ pub struct SplashConfig<'a> {
     pub ready_button_label_en: Option<&'a str>,
     pub secondary_button_label_ko: Option<&'a str>,
     pub secondary_button_label_en: Option<&'a str>,
-    pub completion_action: CompletionAction,
     pub auto_start: bool,
     pub checkbox_label_ko: Option<&'a str>,
     pub checkbox_label_en: Option<&'a str>,
@@ -143,7 +137,6 @@ struct SplashData {
     ready_button_label_en: Option<String>,
     secondary_button_label_ko: Option<String>,
     secondary_button_label_en: Option<String>,
-    _completion_action: CompletionAction,
     logo: Option<LogoAsset>,
     font_handles: Vec<HANDLE>,
     dpi: u32,
@@ -322,7 +315,6 @@ where
             ready_button_label_en: config.ready_button_label_en.map(str::to_string),
             secondary_button_label_ko: config.secondary_button_label_ko.map(str::to_string),
             secondary_button_label_en: config.secondary_button_label_en.map(str::to_string),
-            _completion_action: config.completion_action,
             logo: load_logo_asset(),
             font_handles,
             dpi,

@@ -8,7 +8,7 @@ mod registry;
 mod splash;
 mod uninstaller;
 
-use splash::{CompletionAction, SplashConfig};
+use splash::SplashConfig;
 
 fn main() {
     let _ = unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
@@ -35,7 +35,6 @@ fn main() {
             ready_button_label_en: Some("Remove"),
             secondary_button_label_ko: Some("취소"),
             secondary_button_label_en: Some("Cancel"),
-            completion_action: CompletionAction::CloseWindow,
             auto_start: false,
             checkbox_label_ko: Some("노트 및 설정 데이터도 삭제"),
             checkbox_label_en: Some("Also delete notes and settings data"),
