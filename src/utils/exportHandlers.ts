@@ -20,11 +20,11 @@ async function fontToDataUrl(publicPath: string): Promise<string> {
 
 async function buildFontFaces(): Promise<string> {
   const fonts = [
-    { family: "SF Pro KR", file: "/fonts/SFProKR-Regular.woff2", weight: 400 },
-    { family: "SF Pro KR", file: "/fonts/SFProKR-Medium.woff2", weight: 500 },
-    { family: "SF Pro KR", file: "/fonts/SFProKR-Semibold.woff2", weight: 600 },
-    { family: "SF Mono", file: "/fonts/SF-Mono-Regular.woff2", weight: 400 },
-    { family: "SF Mono", file: "/fonts/SF-Mono-Medium.woff2", weight: 500 },
+    { family: "Pretendard JP", file: "/fonts/PretendardJP-Regular.woff2", weight: 400 },
+    { family: "Pretendard JP", file: "/fonts/PretendardJP-Medium.woff2", weight: 500 },
+    { family: "Pretendard JP", file: "/fonts/PretendardJP-SemiBold.woff2", weight: 600 },
+    { family: "JetBrains Mono", file: "/fonts/JetBrainsMono-Regular.woff2", weight: 400 },
+    { family: "JetBrains Mono", file: "/fonts/JetBrainsMono-Medium.woff2", weight: 500 },
   ];
 
   const faces: string[] = [];
@@ -108,7 +108,7 @@ export async function exportAsPdf(editorEl: HTMLElement, defaultName: string, lo
     border-radius: 8px !important;
     overflow: hidden !important;
     border: none !important;
-    font-family: "SF Mono", "SF Pro KR", Consolas, "Courier New", monospace !important;
+    font-family: "JetBrains Mono", "Pretendard JP", Consolas, "Courier New", monospace !important;
     font-size: 0.9em !important;
     line-height: 1.5 !important;
     color: #333 !important;
@@ -118,7 +118,7 @@ export async function exportAsPdf(editorEl: HTMLElement, defaultName: string, lo
     display: block !important;
     padding: 0.4rem 1rem !important;
     background-color: #e0e0e0 !important;
-    font-family: "SF Pro KR", system-ui, sans-serif !important;
+    font-family: "Pretendard JP", system-ui, sans-serif !important;
     font-size: 0.75em !important;
     color: #616161 !important;
     text-transform: uppercase !important;
@@ -151,7 +151,7 @@ export async function exportAsPdf(editorEl: HTMLElement, defaultName: string, lo
   .ProseMirror code {
     color: #333 !important;
     background-color: #f6f6f6 !important;
-    font-family: "SF Mono", "SF Pro KR", Consolas, "Courier New", monospace !important;
+    font-family: "JetBrains Mono", "Pretendard JP", Consolas, "Courier New", monospace !important;
     font-size: 0.9em !important;
     padding: 0.15em 0.4em !important;
     border-radius: 4px !important;

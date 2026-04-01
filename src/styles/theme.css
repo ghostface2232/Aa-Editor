@@ -8,24 +8,24 @@
 
 /* ─── @font-face ─── */
 @font-face {
-  font-family: "SF Pro KR";
-  src: url("/fonts/SFProKR-Regular.woff2") format("woff2");
+  font-family: "Pretendard JP";
+  src: url("/fonts/PretendardJP-Regular.woff2") format("woff2");
   font-weight: 400;
   font-style: normal;
   font-display: swap;
 }
 
 @font-face {
-  font-family: "SF Pro KR";
-  src: url("/fonts/SFProKR-Medium.woff2") format("woff2");
+  font-family: "Pretendard JP";
+  src: url("/fonts/PretendardJP-Medium.woff2") format("woff2");
   font-weight: 500;
   font-style: normal;
   font-display: swap;
 }
 
 @font-face {
-  font-family: "SF Pro KR";
-  src: url("/fonts/SFProKR-Semibold.woff2") format("woff2");
+  font-family: "Pretendard JP";
+  src: url("/fonts/PretendardJP-SemiBold.woff2") format("woff2");
   font-weight: 600;
   font-style: normal;
   font-display: swap;
@@ -56,16 +56,16 @@
 }
 
 @font-face {
-  font-family: "SF Mono";
-  src: url("/fonts/SF-Mono-Regular.woff2") format("woff2");
+  font-family: "JetBrains Mono";
+  src: url("/fonts/JetBrainsMono-Regular.woff2") format("woff2");
   font-weight: 400;
   font-style: normal;
   font-display: swap;
 }
 
 @font-face {
-  font-family: "SF Mono";
-  src: url("/fonts/SF-Mono-Medium.woff2") format("woff2");
+  font-family: "JetBrains Mono";
+  src: url("/fonts/JetBrainsMono-Medium.woff2") format("woff2");
   font-weight: 500;
   font-style: normal;
   font-display: swap;
@@ -90,8 +90,8 @@
   --shell-card-gap: 6px;
 
   /* ─── 폰트 ─── */
-  --editor-font-family-sans: "SF Pro KR", system-ui, sans-serif;
-  --editor-font-family-mono: "SF Mono", "SF Pro KR", ui-monospace, monospace;
+  --editor-font-family-sans: "Pretendard JP", system-ui, sans-serif;
+  --editor-font-family-mono: "JetBrains Mono", "Pretendard JP", ui-monospace, monospace;
   --editor-font-family-serif: "Noto Serif", Georgia, serif;
   --editor-font-family: var(--editor-font-family-sans);
 
