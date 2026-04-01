@@ -27,11 +27,20 @@ Powered by [Tiptap](https://tiptap.dev/) and [CodeMirror](https://codemirror.net
 - **i18n** - English and Korean
 
 ## Tech Stack
+
+### Core
 - [Tauri v2](https://v2.tauri.app/) - Rust backend, WebView frontend
 - [React 19](https://react.dev/) - UI framework
-- [Fluent UI v9](https://react.fluentui.dev/) - Component library
-- [Tiptap](https://tiptap.dev/) - Rich text editor
-- [CodeMirror](https://codemirror.net/) - Markdown editor
+
+### Editors
+- [Tiptap](https://tiptap.dev/) - Rich text editor (Note surface)
+- [CodeMirror](https://codemirror.net/) - Source editor (Markdown surface)
+
+### Design
+- [Fluent UI v9](https://react.fluentui.dev/) - Component library & design tokens
+- [Pretendard JP](https://github.com/orioncactus/pretendard) - Primary typeface
+- [Noto Serif](https://fonts.google.com/noto/specimen/Noto+Serif) - Serif typeface
+- [JetBrains Mono](https://www.jetbrains.com/lp/mono/) - Monospace typeface
 
 ## Keyboard Shortcuts
 
