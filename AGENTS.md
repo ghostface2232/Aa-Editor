@@ -5,15 +5,15 @@ Windows-native Markdown editor built with Tauri v2, React, and TypeScript.
 ## Core Architecture
 
 - Markdown string is the single source of truth.
-- Read mode and Rich Text edit mode share one persistent Tiptap instance.
-- Mode switching between read and Rich Text must not replace the editor DOM.
-- Markdown source editing uses CodeMirror and is mounted only while `editorMode === "markdown"`.
+- Note quiet state and Note editing state share one persistent Tiptap instance.
+- Switching between Note quiet and Note editing must not replace the editor DOM.
+- Markdown source editing uses CodeMirror and is mounted only while `surface === "markdown"`.
 
 ## Editing Modes
 
-- Read: `Tiptap editable: false` (via ReadonlyGuard extension, not `editor.setEditable`)
-- Edit / Rich Text: `Tiptap editable: true`
-- Edit / Markdown: CodeMirror 6 with `@codemirror/lang-markdown`
+- Note / View (quiet): `Tiptap editable: false` (via ReadonlyGuard extension, not `editor.setEditable`)
+- Note / Edit (editing): `Tiptap editable: true`
+- Markdown: CodeMirror 6 with `@codemirror/lang-markdown`
 
 ## Editor Synchronization
 
@@ -53,7 +53,7 @@ Windows-native Markdown editor built with Tauri v2, React, and TypeScript.
 - Theme, startup mode, note sort order, paste formatting, spellcheck, wrap mode, font family, group layout, and paragraph spacing are user settings.
 - Note sort order supports four options: `updated-desc`, `updated-asc`, `created-desc`, `created-asc` (default: `updated-desc`).
 - Old values `recent-first`/`recent-last` are auto-migrated on load.
-- Startup mode is configurable between read and edit.
+- Startup mode is configurable between View and Edit labels (internally `quiet` / `editing`).
 
 ## Images
 
@@ -62,8 +62,8 @@ Windows-native Markdown editor built with Tauri v2, React, and TypeScript.
 - When `width`/`height` are set, `renderMarkdown` outputs `<img>` HTML tags to preserve dimensions through markdown round-trips.
 - On insert (pick, drop, paste), images are capped to 560px width with aspect ratio preserved. Clamping uses `clampImageDimensions` from `imageUtils.ts`.
 - Image height is always `auto` (CSS) — only width is set as px to prevent aspect ratio distortion on narrow viewports.
-- In Read mode, image selection, resize handles, outline, and drag are disabled. Cursor is `default`.
-- In Edit mode, images show `move` cursor and can be dragged to reorder via `ImageReorder.ts`.
+- In Note quiet state, image selection, resize handles, outline, and drag are disabled. Cursor is `default`.
+- In Note editing state, images show `move` cursor and can be dragged to reorder via `ImageReorder.ts`.
 - Image drag reorder: `ImageView.ts` detects a 6px threshold on `pointerdown`, then delegates to `startReorder()` which creates a ghost preview, drop indicator, and handles the transaction in a single undo step.
 - Ctrl+C on a selected image copies the image blob to clipboard (not HTML).
 
@@ -73,7 +73,7 @@ Windows-native Markdown editor built with Tauri v2, React, and TypeScript.
 - Only one context menu can be open at a time (singleton registry).
 - All menus are clamped to the viewport via `clampMenuToViewport()`, accounting for the 25px status bar at the bottom.
 - Image context menu: save, copy, replace, delete.
-- Text context menu: cut, copy, paste, paste plain text, select all, emoji. Disabled items are grayed out in Read mode. All context menu items have Fluent UI icons.
+- Text context menu: cut, copy, paste, paste plain text, select all, emoji. Disabled items are grayed out in Note quiet state. All context menu items have Fluent UI icons.
 - Both Tiptap and CodeMirror editors share the same context menu interface (`TextContextMenuContext`).
 
 ## Tiptap Markdown Rules
