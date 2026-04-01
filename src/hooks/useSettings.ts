@@ -4,7 +4,7 @@ import { mkdir, readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";
 
 export type Locale = "en" | "ko";
 export type ThemeMode = "light" | "dark";
-export type StartupMode = "read" | "edit";
+export type StartupMode = "quiet" | "editing";
 export type NotesSortOrder = "updated-desc" | "updated-asc" | "created-desc" | "created-asc";
 export type WordWrap = "word" | "char";
 export type ParagraphSpacing = 0 | 10 | 20 | 30 | 40 | 50;
@@ -28,7 +28,7 @@ export interface Settings {
 const DEFAULTS: Settings = {
   locale: "ko",
   themeMode: "light",
-  startupMode: "read",
+  startupMode: "quiet",
   notesSortOrder: "updated-desc",
   wordWrap: "word",
   paragraphSpacing: 30,
@@ -69,12 +69,19 @@ function migrateSortOrder(order: string): NotesSortOrder {
   return valid.includes(order as NotesSortOrder) ? (order as NotesSortOrder) : DEFAULTS.notesSortOrder;
 }
 
+function migrateStartupMode(mode: string): StartupMode {
+  if (mode === "read") return "quiet";
+  if (mode === "edit") return "editing";
+  return mode === "editing" ? "editing" : "quiet";
+}
+
 function parseSettings(raw: string | null): Settings {
   if (!raw) return DEFAULTS;
 
   try {
     const parsed = { ...DEFAULTS, ...JSON.parse(raw) };
     parsed.notesSortOrder = migrateSortOrder(parsed.notesSortOrder);
+    parsed.startupMode = migrateStartupMode(parsed.startupMode);
     return parsed;
   } catch {
     return DEFAULTS;

@@ -9,12 +9,12 @@
 ![Platform](https://img.shields.io/badge/platform-Windows-blue?style=flat-square)
 
 
-A clean, fast and modern note-taking app for Windows, with markdown and rich text editing.
+A clean, fast and modern note-taking app for Windows, with Note and Markdown surfaces.
 Powered by [Tiptap](https://tiptap.dev/) and [CodeMirror](https://codemirror.net/).
 
 
 ## Features
-- **Dual editor** - Rich text (WYSIWYG) and Markdown side by side, switchable with `Ctrl+/`
+- **Note / Markdown surfaces** - A quiet Note surface, in-place Note editing, and an explicit Markdown source view switchable with `Ctrl+/`
 - **Slash commands** - Type `/` to insert headings, lists, code blocks, images, and more
 - **Image support** - Drag & drop, paste, resize with corner handles, and drag to reorder
 - **Note management** - Sidebar with grouping, multi-select, drag reorder, search, and context menus
@@ -42,8 +42,8 @@ Powered by [Tiptap](https://tiptap.dev/) and [CodeMirror](https://codemirror.net
 | New window | `Ctrl+Shift+N` |
 | Open file | `Ctrl+O` |
 | Save now | `Ctrl+S` |
-| Toggle edit mode | `Ctrl+E` |
-| Switch editor | `Ctrl+/` |
+| Switch Note / Markdown | `Ctrl+/` |
+| Enter or leave Note editing | `Click / Esc` |
 | Find in document | `Ctrl+F` |
 
 ### Sidebar (when sidebar is focused)
@@ -51,7 +51,7 @@ Powered by [Tiptap](https://tiptap.dev/) and [CodeMirror](https://codemirror.net
 |---|---|
 | Rename | `Ctrl+R` |
 | Duplicate | `Ctrl+D` |
-| Export | `Ctrl+Shift+X` |
+| Export | `Ctrl+E` |
 | Copy content | `Ctrl+Alt+C` |
 | Delete | `Delete` |
 

@@ -326,6 +326,7 @@ interface TiptapEditorProps {
   spellcheck: boolean;
   onDirtyChange: (dirty: boolean) => void;
   onReady?: () => void;
+  onActivateQuietState?: () => void;
 }
 
 export const TiptapEditor = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
@@ -340,6 +341,7 @@ export const TiptapEditor = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
     spellcheck,
     onDirtyChange,
     onReady,
+    onActivateQuietState,
   }, ref) {
     const dirtyRef = useRef(false);
     const localeRef = useRef(locale);
@@ -447,7 +449,7 @@ export const TiptapEditor = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
         editor.storage.readonlyGuard.readonly = !editable;
         if (!editable) {
           dirtyRef.current = false;
-          // Read 모드 전환 시 이미지 선택/핸들/아웃라인 해제
+          // Note quiet 상태 전환 시 이미지 선택/핸들/아웃라인 해제
           if (editor.state.selection instanceof NodeSelection) {
             editor.commands.setTextSelection(0);
           }
@@ -525,7 +527,18 @@ export const TiptapEditor = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
         data-theme={isDarkMode ? "dark" : "light"}
         style={editorStyle}
         onMouseDownCapture={(event) => {
-          if (!editor || !editable || event.button !== 0) return;
+          if (!editor || event.button !== 0) return;
+          const target = event.target as HTMLElement | null;
+          const isLinkClick = !!target?.closest("a");
+          let activated = false;
+
+          if (!editable && !isLinkClick) {
+            onActivateQuietState?.();
+            editor.storage.readonlyGuard.readonly = false;
+            activated = true;
+          }
+
+          if ((!editable && !activated) || isLinkClick) return;
           if (!isBelowTiptapDocumentEnd(editor, event.clientY)) return;
           event.preventDefault();
           moveTiptapSelectionToEnd(editor);

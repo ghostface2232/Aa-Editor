@@ -3,13 +3,14 @@ import type { Locale } from "./hooks/useSettings";
 const dict = {
   /* ─── TitleBar ─── */
   "app.name": { en: "Noten", ko: "Noten" },
-  "mode.read": { en: "Read", ko: "읽기" },
-  "mode.edit": { en: "Edit", ko: "편집" },
+  "surface.note": { en: "Note", ko: "노트" },
+  "surface.markdown": { en: "Markdown", ko: "마크다운" },
+  "noteState.quiet": { en: "Quiet", ko: "조용히 보기" },
+  "noteState.editing": { en: "Editing", ko: "편집 중" },
   "theme.light": { en: "Light", ko: "라이트" },
   "theme.dark": { en: "Dark", ko: "다크" },
 
   /* ─── EditorToolbar ─── */
-  "editor.richtext": { en: "Rich Text", ko: "서식 편집" },
   "editor.markdown": { en: "Markdown", ko: "마크다운" },
   "heading.body": { en: "Body", ko: "본문" },
   "heading.h1": { en: "Heading 1", ko: "제목 1" },
@@ -110,7 +111,7 @@ const dict = {
   "settings.title": { en: "Settings", ko: "설정" },
   "settings.language": { en: "Language", ko: "언어" },
   "settings.theme": { en: "Theme", ko: "테마" },
-  "settings.startupMode": { en: "Startup mode", ko: "시작 모드" },
+  "settings.startupMode": { en: "Startup note state", ko: "시작 노트 상태" },
   "settings.noteOrder": { en: "Note order", ko: "노트 정렬" },
   "settings.noteOrder.updatedDesc": { en: "Edited: newest first", ko: "편집일: 최신순" },
   "settings.noteOrder.updatedAsc": { en: "Edited: oldest first", ko: "편집일: 오래된 순" },
@@ -122,8 +123,8 @@ const dict = {
   "settings.paragraphSpacing": { en: "Paragraph Spacing", ko: "문단 간격" },
   "settings.keepFormat": { en: "Keep formatting on paste", ko: "붙여넣기 시 원문 서식 유지" },
   "settings.shortcuts": { en: "Keyboard Shortcuts", ko: "단축키 안내" },
-  "settings.shortcut.toggleEdit": { en: "Toggle edit mode", ko: "편집 모드 전환" },
-  "settings.shortcut.switchEditor": { en: "Switch editor", ko: "에디터 전환" },
+  "settings.shortcut.switchSurface": { en: "Switch Note / Markdown", ko: "노트 / 마크다운 전환" },
+  "settings.shortcut.enterEditing": { en: "Enter or leave Note editing", ko: "노트 편집 들어가기 / 나오기" },
   "settings.shortcut.import": { en: "Open file", ko: "파일 열기" },
   "settings.shortcut.save": { en: "Save now", ko: "즉시 저장" },
   "settings.shortcut.newFile": { en: "New document", ko: "새 문서" },

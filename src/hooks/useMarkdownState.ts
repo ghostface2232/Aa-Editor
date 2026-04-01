@@ -1,22 +1,25 @@
 import { useState, useRef, useCallback } from "react";
 import type { Editor } from "@tiptap/react";
 
-export type EditorMode = "richtext" | "markdown";
+export type EditorSurface = "note" | "markdown";
+export type NoteState = "quiet" | "editing";
 
 export interface MarkdownState {
   markdown: string;
-  isEditing: boolean;
-  editorMode: EditorMode;
+  surface: EditorSurface;
+  noteState: NoteState;
   filePath: string | null;
   isDirty: boolean;
   tiptapDirty: boolean;
   editorRef: React.MutableRefObject<Editor | null>;
   readCurrentEditor: () => string;
-  toggleEditing: () => void;
-  switchEditorMode: () => void;
+  setSurface: (surface: EditorSurface) => void;
+  toggleSurface: () => void;
+  setNoteState: (state: NoteState) => void;
+  enterNoteEditing: () => void;
+  exitNoteEditing: () => void;
   updateMarkdown: (value: string) => void;
   setTiptapDirty: (dirty: boolean) => void;
-  setEditing: (editing: boolean) => void;
   setFilePath: (path: string | null) => void;
   setMarkdownRaw: (value: string) => void;
   setIsDirty: (dirty: boolean) => void;
@@ -24,8 +27,8 @@ export interface MarkdownState {
 
 export function useMarkdownState(): MarkdownState {
   const [markdown, setMarkdown] = useState("");
-  const [isEditing, setIsEditing] = useState(false);
-  const [editorMode, setEditorMode] = useState<EditorMode>("richtext");
+  const [surface, setSurfaceRaw] = useState<EditorSurface>("note");
+  const [noteState, setNoteStateRaw] = useState<NoteState>("quiet");
   const [filePath, setFilePath] = useState<string | null>(null);
   const [isDirty, setIsDirty] = useState(false);
   const [tiptapDirty, setTiptapDirty] = useState(false);
@@ -40,10 +43,10 @@ export function useMarkdownState(): MarkdownState {
 
   const readCurrentEditor = useCallback(() => {
     const editor = editorRef.current;
-    return editorMode === "markdown"
+    return surface === "markdown"
       ? codemirrorValueRef.current
       : editor?.getMarkdown() ?? markdown;
-  }, [editorMode, markdown]);
+  }, [surface, markdown]);
 
   /**
    * 현재 활성 편집기에서 최신 마크다운을 직접 읽어 state를 동기화.
@@ -73,42 +76,57 @@ export function useMarkdownState(): MarkdownState {
     editor.storage.readonlyGuard.readonly = wasReadonly;
   }, []);
 
-  const toggleEditing = useCallback(() => {
+  const applySurface = useCallback((nextSurface: EditorSurface) => {
     const editor = editorRef.current;
-    if (!editor) return;
+    if (nextSurface === surface) return;
 
-    if (isEditing) {
-      const md = flushCurrentEditor();
-      if (editorMode === "markdown") {
-        loadIntoTiptap(md);
-        setEditorMode("richtext");
-      }
-      setIsEditing(false);
-    } else {
-      setEditorMode("richtext");
-      setIsEditing(true);
+    const md = surface === "markdown"
+      ? codemirrorValueRef.current
+      : editor?.getMarkdown() ?? markdown;
+
+    if (nextSurface === "markdown") {
+      codemirrorValueRef.current = md;
+      setSurfaceRaw("markdown");
+      return;
     }
-  }, [isEditing, editorMode, flushCurrentEditor, loadIntoTiptap]);
 
-  const switchEditorMode = useCallback(() => {
+    if (editor) {
+      loadIntoTiptap(md);
+    }
+    setSurfaceRaw("note");
+  }, [loadIntoTiptap, markdown, surface]);
+
+  const setSurface = useCallback((nextSurface: EditorSurface) => {
+    applySurface(nextSurface);
+  }, [applySurface]);
+
+  const toggleSurface = useCallback(() => {
+    applySurface(surface === "note" ? "markdown" : "note");
+  }, [applySurface, surface]);
+
+  const setNoteState = useCallback((nextState: NoteState) => {
+    setNoteStateRaw(nextState);
+  }, []);
+
+  const enterNoteEditing = useCallback(() => {
+    setNoteStateRaw("editing");
+  }, []);
+
+  const exitNoteEditing = useCallback(() => {
     const editor = editorRef.current;
-    if (!editor || !isEditing) return;
+    if (!editor) {
+      setNoteStateRaw("quiet");
+      return;
+    }
 
     const md = flushCurrentEditor();
-
-    if (editorMode === "richtext") {
+    if (surface === "markdown") {
       codemirrorValueRef.current = md;
-      setEditorMode("markdown");
     } else {
       loadIntoTiptap(md);
-      setEditorMode("richtext");
     }
-  }, [isEditing, editorMode, flushCurrentEditor, loadIntoTiptap]);
-
-  const setEditing = useCallback((editing: boolean) => {
-    setEditorMode("richtext");
-    setIsEditing(editing);
-  }, []);
+    setNoteStateRaw("quiet");
+  }, [flushCurrentEditor, loadIntoTiptap, surface]);
 
   const setMarkdownRaw = useCallback((value: string) => {
     codemirrorValueRef.current = value;
@@ -117,18 +135,20 @@ export function useMarkdownState(): MarkdownState {
 
   return {
     markdown,
-    isEditing,
-    editorMode,
+    surface,
+    noteState,
     filePath,
     isDirty,
     tiptapDirty,
     editorRef,
     readCurrentEditor,
-    toggleEditing,
-    switchEditorMode,
+    setSurface,
+    toggleSurface,
+    setNoteState,
+    enterNoteEditing,
+    exitNoteEditing,
     updateMarkdown,
     setTiptapDirty,
-    setEditing,
     setFilePath,
     setMarkdownRaw,
     setIsDirty,

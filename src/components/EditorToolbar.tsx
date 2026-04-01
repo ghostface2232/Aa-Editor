@@ -31,7 +31,7 @@ import {
 import { PillSelector } from "./PillSelector";
 import { pickAndInsertImage } from "../extensions/ImageDrop";
 import { t } from "../i18n";
-import type { EditorMode } from "../hooks/useMarkdownState";
+import type { EditorSurface } from "../hooks/useMarkdownState";
 import type { Editor } from "@tiptap/react";
 import type { Locale } from "../hooks/useSettings";
 
@@ -128,8 +128,8 @@ function getHeadingLabel(editor: Editor | null, locale: Locale): string {
 }
 
 interface EditorToolbarProps {
-  editorMode: EditorMode;
-  onSwitchMode: () => void;
+  surface: EditorSurface;
+  onSelectSurface: (surface: EditorSurface) => void;
   editor: Editor | null;
   sidebarOpen: boolean;
   visible: boolean;
@@ -137,8 +137,8 @@ interface EditorToolbarProps {
 }
 
 export function EditorToolbar({
-  editorMode,
-  onSwitchMode,
+  surface,
+  onSelectSurface,
   editor,
   sidebarOpen,
   visible,
@@ -146,12 +146,11 @@ export function EditorToolbar({
 }: EditorToolbarProps) {
   const styles = useStyles();
   const i = (key: Parameters<typeof t>[0]) => t(key, locale);
-  const isRichText = editorMode === "richtext";
-  const modeItems = [
-    { key: "richtext", label: i("editor.richtext") },
-    { key: "markdown", label: i("editor.markdown") },
+  const surfaceItems = [
+    { key: "note", label: i("surface.note") },
+    { key: "markdown", label: i("surface.markdown") },
   ];
-  const showTools = visible && isRichText && !!editor;
+  const showTools = visible && !!editor;
 
   const gridRef = useRef<HTMLDivElement>(null);
   const toolsRef = useRef<HTMLDivElement>(null);
@@ -239,21 +238,21 @@ export function EditorToolbar({
     <div
       className={styles.bar}
       style={{
-        height: visible ? barHeight : 0,
-        opacity: visible ? 1 : 0,
-        borderBottomColor: visible ? undefined : "transparent",
+        height: barHeight,
+        opacity: 1,
+        borderBottomColor: undefined,
       }}
     >
       <div
         ref={gridRef}
         className={styles.grid}
-        style={visible && !sidebarOpen ? { paddingLeft: "46px" } : undefined}
+        style={!sidebarOpen ? { paddingLeft: "46px" } : undefined}
       >
         <div>
           <PillSelector
-            items={modeItems}
-            activeKey={editorMode}
-            onSelect={() => onSwitchMode()}
+            items={surfaceItems}
+            activeKey={surface}
+            onSelect={(key) => onSelectSurface(key as EditorSurface)}
           />
         </div>
 

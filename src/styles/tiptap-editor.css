@@ -63,7 +63,7 @@
   user-select: text !important;
 }
 
-/* ─── 읽기 모드 ─── */
+/* ─── Note quiet 상태 ─── */
 .tiptap-readonly .ProseMirror {
   cursor: default;
   caret-color: transparent;
@@ -82,12 +82,11 @@
 .tiptap-readonly .ProseMirror blockquote,
 .tiptap-readonly .ProseMirror pre,
 .tiptap-readonly .ProseMirror code,
-.tiptap-readonly .ProseMirror a,
 .tiptap-readonly .ProseMirror span {
   cursor: text;
 }
 
-/* 읽기 모드에서 placeholder 숨김 */
+/* Note quiet 상태에서 placeholder 숨김 */
 .tiptap-readonly .is-editor-empty::before {
   display: none !important;
 }
@@ -247,7 +246,7 @@
   accent-color: var(--editor-color-accent);
 }
 
-/* 읽기 모드에서 체크박스 비활성 */
+/* Note quiet 상태에서 체크박스 비활성 */
 .tiptap-readonly ul[data-type="taskList"] li > label input[type="checkbox"] {
   pointer-events: none;
   opacity: 0.6;
@@ -271,6 +270,10 @@
 .ProseMirror a {
   color: var(--editor-color-accent);
   text-decoration: underline;
+  cursor: pointer;
+}
+
+.tiptap-readonly .ProseMirror a {
   cursor: pointer;
 }
 

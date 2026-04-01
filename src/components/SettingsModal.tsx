@@ -363,8 +363,8 @@ export function SettingsModal({ open, onClose, settings, onUpdate, currentNotesD
                     value={settings.startupMode}
                     onChange={(_, data) => onUpdate("startupMode", data.value as StartupMode)}
                   >
-                    <Radio value="read" label={i("mode.read")} />
-                    <Radio value="edit" label={i("mode.edit")} />
+                    <Radio value="quiet" label={i("noteState.quiet")} />
+                    <Radio value="editing" label={i("noteState.editing")} />
                   </RadioGroup>
                 </div>
 
@@ -522,12 +522,12 @@ export function SettingsModal({ open, onClose, settings, onUpdate, currentNotesD
                   ["settings.shortcut.newWindow", "Ctrl+Shift+N", WindowNew20Regular],
                   ["settings.shortcut.save", "Ctrl+S", Save20Regular],
                   ["settings.shortcut.import", "Ctrl+O", ArrowDownload20Regular],
-                  ["settings.shortcut.toggleEdit", "Ctrl+E", Edit20Regular],
-                  ["settings.shortcut.switchEditor", "Ctrl+/", Code20Regular],
+                  ["settings.shortcut.switchSurface", "Ctrl+/", Code20Regular],
+                  ["settings.shortcut.enterEditing", "Click / Esc", Edit20Regular],
                   ["settings.shortcut.find", "Ctrl+F", Search20Regular],
                   ["settings.shortcut.rename", "Ctrl+R", Rename20Regular],
                   ["settings.shortcut.duplicate", "Ctrl+D", DocumentCopy20Regular],
-                  ["settings.shortcut.export", "Ctrl+Shift+X", ArrowExportUp20Regular],
+                  ["settings.shortcut.export", "Ctrl+E", ArrowExportUp20Regular],
                   ["settings.shortcut.copyContent", "Ctrl+Alt+C", CopySelect20Regular],
                   ["settings.shortcut.delete", "Delete", Delete20Regular],
                 ] as [Parameters<typeof t>[0], string, React.ComponentType][]).map(([labelKey, key, Icon], idx) => (
@@ -637,14 +637,14 @@ export function SettingsModal({ open, onClose, settings, onUpdate, currentNotesD
                       {locale === "ko" ? (
                         <>
                           · 빠른 문서 전환과 새 문서 생성 시 저장 안정성 개선<br />
-                          · 마크다운 편집 잔상 및 빈 영역 동작 개선<br />
+                          · Markdown 화면 잔상 및 빈 영역 동작 개선<br />
                           · 설정의 노트 저장 위치 표시 정리<br />
                           · Windows 제거 흐름 및 정리 동작 개선
                         </>
                       ) : (
                         <>
                           · Improved save reliability when switching notes or creating a new note quickly<br />
-                          · Improved Markdown editing leftovers and empty-area behavior<br />
+                          · Improved Markdown surface leftovers and empty-area behavior<br />
                           · Refined the notes directory display in Settings<br />
                           · Improved the Windows uninstall and cleanup flow
                         </>

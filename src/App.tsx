@@ -303,8 +303,9 @@ function App() {
   useEffect(() => {
     if (!settingsLoaded || startupModeApplied.current) return;
     startupModeApplied.current = true;
-    state.setEditing(settings.startupMode === "edit");
-  }, [settings.startupMode, settingsLoaded, state.setEditing]);
+    state.setSurface("note");
+    state.setNoteState(settings.startupMode === "editing" ? "editing" : "quiet");
+  }, [settings.startupMode, settingsLoaded, state.setNoteState, state.setSurface]);
 
   const initialLoaded = useRef(false);
   useEffect(() => {
@@ -551,14 +552,13 @@ function App() {
     setReloadKey((k) => k + 1);
   }, [locale, settings.notesDirectory, updateSetting]);
 
-  // 에디터 모드 전환 시 스크롤 위치 보존
-  const handleSwitchEditorMode = useCallback(() => {
+  const handleSelectSurface = useCallback((nextSurface: "note" | "markdown") => {
     const el = contentRef.current;
     const scrollRatio = el && el.scrollHeight > el.clientHeight
       ? el.scrollTop / (el.scrollHeight - el.clientHeight)
       : 0;
 
-    state.switchEditorMode();
+    state.setSurface(nextSurface);
 
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
@@ -567,7 +567,21 @@ function App() {
         }
       });
     });
-  }, [state.switchEditorMode]);
+  }, [state.setSurface]);
+
+  const handleToggleSurface = useCallback(() => {
+    handleSelectSurface(state.surface === "note" ? "markdown" : "note");
+  }, [handleSelectSurface, state.surface]);
+
+  const handleActivateNoteEditing = useCallback(() => {
+    state.enterNoteEditing();
+  }, [state.enterNoteEditing]);
+
+  const handleNewNote = useCallback(async () => {
+    await fs.newNote();
+    state.setSurface("note");
+    state.setNoteState("editing");
+  }, [fs.newNote, state.setNoteState, state.setSurface]);
 
   // 단축키
   useEffect(() => {
@@ -578,18 +592,23 @@ function App() {
       if ((e.ctrlKey && e.key === "r" && !sidebarFocused) || (e.ctrlKey && e.shiftKey && e.key === "R")) { e.preventDefault(); return; }
       if (e.key === "F5" || (e.ctrlKey && e.shiftKey && e.key === "I") || e.key === "F12") { e.preventDefault(); return; }
 
-      if (e.ctrlKey && !e.shiftKey && e.key === "e") { e.preventDefault(); state.toggleEditing(); }
-      if (e.ctrlKey && e.key === "/" && state.isEditing) { e.preventDefault(); handleSwitchEditorMode(); }
+      if (e.ctrlKey && e.key === "/") { e.preventDefault(); handleToggleSurface(); }
       if (e.ctrlKey && e.key === "o") { e.preventDefault(); fs.importFile(); }
       if (e.ctrlKey && !e.shiftKey && e.key === "s") { e.preventDefault(); fs.saveFile(); }
-      if (e.ctrlKey && !e.shiftKey && e.key === "n") { e.preventDefault(); fs.newNote(); }
+      if (e.ctrlKey && !e.shiftKey && e.key === "n") { e.preventDefault(); void handleNewNote(); }
       if (e.ctrlKey && e.shiftKey && e.key === "N") { e.preventDefault(); openNewWindow(); }
       if (e.ctrlKey && e.key === "f") { e.preventDefault(); setDocSearchOpen((o) => !o); }
-      if (e.key === "Escape" && docSearchOpen) { e.preventDefault(); setDocSearchOpen(false); }
+      if (e.key === "Escape" && docSearchOpen) {
+        e.preventDefault();
+        setDocSearchOpen(false);
+      } else if (e.key === "Escape" && state.surface === "note" && state.noteState === "editing") {
+        e.preventDefault();
+        state.exitNoteEditing();
+      }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [state.toggleEditing, handleSwitchEditorMode, state.isEditing, fs.importFile, fs.saveFile, fs.newNote, docSearchOpen]);
+  }, [docSearchOpen, fs.importFile, fs.saveFile, handleNewNote, handleToggleSurface, state.exitNoteEditing, state.noteState, state.surface]);
 
   // 마우스 클릭 후 버튼류 요소 자동 blur → Esc/Space 시 포커스 링 방지
   const settingsOpenRef = useRef(settingsOpen);
@@ -707,7 +726,7 @@ function App() {
         await fs.importFiles(markdownPaths);
       }
 
-      if (imagePaths.length === 0 || !state.isEditing) {
+      if (imagePaths.length === 0) {
         return;
       }
 
@@ -715,7 +734,7 @@ function App() {
       const clientX = payload.position.x / scale;
       const clientY = payload.position.y / scale;
 
-      if (state.editorMode === "markdown" && cmView) {
+      if (state.surface === "markdown" && cmView) {
         const pos = cmView.posAtCoords({ x: clientX, y: clientY }) ?? cmView.state.doc.length;
         const markdown = await buildImageMarkdownFromPaths(imagePaths);
         const insert = pos > 0 ? `\n\n${markdown}\n\n` : `${markdown}\n\n`;
@@ -727,14 +746,14 @@ function App() {
         return;
       }
 
-      if (state.editorMode === "richtext") {
-        const editor = tiptapRef.current?.getEditor();
-        if (!editor) return;
-        const pos = editor.view.posAtCoords({ left: clientX, top: clientY })?.pos;
-        await insertImagesAtPosition(editor, imagePaths, pos);
-        state.setIsDirty(true);
-        scheduleAutoSave();
-      }
+      if (state.surface !== "note" || state.noteState !== "editing") return;
+
+      const editor = tiptapRef.current?.getEditor();
+      if (!editor) return;
+      const pos = editor.view.posAtCoords({ left: clientX, top: clientY })?.pos;
+      await insertImagesAtPosition(editor, imagePaths, pos);
+      state.setIsDirty(true);
+      scheduleAutoSave();
     }).then((fn) => {
       if (disposed) {
         fn();
@@ -747,9 +766,11 @@ function App() {
       disposed = true;
       unlisten?.();
     };
-  }, [cmView, fs.importFiles, scheduleAutoSave, state.editorMode, state.isEditing, state.setIsDirty]);
+  }, [cmView, fs.importFiles, scheduleAutoSave, state.noteState, state.setIsDirty, state.surface]);
 
-  const showCodeMirror = state.isEditing && state.editorMode === "markdown";
+  const isNoteSurface = state.surface === "note";
+  const isNoteEditing = isNoteSurface && state.noteState === "editing";
+  const showCodeMirror = state.surface === "markdown";
 
   return (
     <FluentProvider
@@ -779,13 +800,11 @@ function App() {
 
         <TitleBar
           isDark={isDarkMode}
-          isEditing={state.isEditing}
           locale={locale}
           editor={tiptapEditor}
           paragraphSpacing={settings.paragraphSpacing}
           documentTitle={activeDoc?.fileName}
-          onToggleEditing={state.toggleEditing}
-          onNewNote={fs.newNote}
+          onNewNote={handleNewNote}
           onImportFile={fs.importFile}
           onToggleTheme={handleToggleTheme}
           onOpenSettings={() => setSettingsOpen(true)}
@@ -856,7 +875,7 @@ function App() {
               activeIndex={activeIndex}
               getDocumentContent={getSidebarDocumentContent}
               onSwitchDocument={fs.switchDocument}
-              onNewNote={fs.newNote}
+              onNewNote={handleNewNote}
               onDeleteNote={fs.deleteNote}
 
               onDuplicateNote={fs.duplicateNote}
@@ -915,11 +934,11 @@ function App() {
 
           <div className={styles.floatingCard}>
             <EditorToolbar
-              editorMode={state.editorMode}
-              onSwitchMode={handleSwitchEditorMode}
+              surface={state.surface}
+              onSelectSurface={handleSelectSurface}
               editor={tiptapEditor}
               sidebarOpen={sidebarOpen}
-              visible={state.isEditing}
+              visible={isNoteEditing}
               locale={locale}
             />
 
@@ -939,7 +958,7 @@ function App() {
                 <TiptapEditor
                   ref={tiptapRef}
                   initialMarkdown={activeDoc?.content ?? ""}
-                  editable={state.isEditing && state.editorMode === "richtext"}
+                  editable={isNoteEditing}
                   isDarkMode={isDarkMode}
                   locale={locale}
                   paragraphSpacing={settings.paragraphSpacing}
@@ -948,6 +967,7 @@ function App() {
                   spellcheck={settings.spellcheck}
                   onDirtyChange={handleTiptapDirty}
                   onReady={syncEditorRef}
+                  onActivateQuietState={!showCodeMirror && state.noteState === "quiet" ? handleActivateNoteEditing : undefined}
                 />
               </div>
 
@@ -968,8 +988,7 @@ function App() {
 
             <StatusBar
               markdown={state.markdown}
-              isEditing={state.isEditing}
-              editorMode={state.editorMode}
+              surface={state.surface}
               editor={tiptapEditor}
               locale={locale}
             />

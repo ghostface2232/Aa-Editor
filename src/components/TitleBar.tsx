@@ -152,12 +152,10 @@ const useStyles = makeStyles({
 
 interface TitleBarProps {
   isDark: boolean;
-  isEditing: boolean;
   locale: Locale;
   editor: Editor | null;
   paragraphSpacing: ParagraphSpacing;
   documentTitle?: string;
-  onToggleEditing: () => void;
   onNewNote: () => void;
   onImportFile: () => void;
   onToggleTheme: () => void;
@@ -170,12 +168,10 @@ interface TitleBarProps {
 
 export function TitleBar({
   isDark,
-  isEditing,
   locale,
   editor,
   paragraphSpacing,
   documentTitle,
-  onToggleEditing,
   onNewNote,
   onImportFile,
   onToggleTheme,
@@ -216,27 +212,6 @@ export function TitleBar({
       </div>
 
       <div className={styles.dragRegion} data-tauri-drag-region />
-
-      <div className={styles.actions}>
-        <div className={styles.segmentGroup}>
-          <Button
-            appearance="transparent"
-            className={!isEditing ? styles.segmentActive : styles.segment}
-            onClick={() => isEditing && onToggleEditing()}
-            size="small"
-          >
-            {i("mode.read")}
-          </Button>
-          <Button
-            appearance="transparent"
-            className={isEditing ? styles.segmentActive : styles.segment}
-            onClick={() => !isEditing && onToggleEditing()}
-            size="small"
-          >
-            {i("mode.edit")}
-          </Button>
-        </div>
-      </div>
 
       <div className={styles.windowControls}>
         <Button

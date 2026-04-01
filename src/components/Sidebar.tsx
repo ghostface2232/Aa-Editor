@@ -899,7 +899,7 @@ export function Sidebar({
       if (ctrl && e.key === "d") {
         e.preventDefault();
         onDuplicateNote(activeIndex);
-      } else if (ctrl && e.shiftKey && e.key === "X") {
+      } else if (ctrl && !e.shiftKey && !e.altKey && e.key === "e") {
         e.preventDefault();
         onExportNote(activeIndex);
       } else if (ctrl && e.key === "r") {
@@ -1617,7 +1617,7 @@ export function Sidebar({
                 onClick={() => { onExportNote(contextMenu.index); closeContextMenu(); }}
                 size="small"
               >
-                {i("sidebar.export")}<span className={styles.shortcutHint}>Ctrl+Shift+X</span>
+                {i("sidebar.export")}<span className={styles.shortcutHint}>Ctrl+E</span>
               </Button>
               <Button
                 appearance="subtle"

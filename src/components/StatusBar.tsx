@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { makeStyles, tokens } from "@fluentui/react-components";
 import { t } from "../i18n";
-import type { EditorMode } from "../hooks/useMarkdownState";
+import type { EditorSurface } from "../hooks/useMarkdownState";
 import type { Editor } from "@tiptap/react";
 import type { Locale } from "../hooks/useSettings";
 
@@ -72,18 +72,17 @@ function countLines(str: string): number {
 
 interface StatusBarProps {
   markdown: string;
-  isEditing: boolean;
-  editorMode: EditorMode;
+  surface: EditorSurface;
   editor: Editor | null;
   locale: Locale;
 }
 
-export function StatusBar({ markdown, isEditing, editorMode, editor, locale }: StatusBarProps) {
+export function StatusBar({ markdown, surface, editor, locale }: StatusBarProps) {
   const styles = useStyles();
   const editorStats = useEditorStats(editor);
   const i = (key: Parameters<typeof t>[0]) => t(key, locale);
 
-  const useMarkdownSource = isEditing && editorMode === "markdown";
+  const useMarkdownSource = surface === "markdown";
   const mdLineCount = useMemo(() => countLines(markdown), [markdown]);
   const charCount = useMarkdownSource ? markdown.length : editorStats.charCount;
   const lineCount = useMarkdownSource ? mdLineCount : editorStats.lineCount;
