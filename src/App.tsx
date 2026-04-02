@@ -637,16 +637,14 @@ function App() {
     handleSelectSurface(state.surface === "note" ? "markdown" : "note");
   }, [handleSelectSurface, state.surface]);
 
+  const [reserveTopToolbarSpace, setReserveTopToolbarSpace] = useState(false);
   const handleActivateNoteEditing = useCallback(() => {
     const el = contentRef.current;
     const h = toolbarHeightRef.current;
-    const needsScroll = el && h && el.scrollTop < h;
+    const shouldReserveSpace = !!(el && h && el.scrollTop < h);
 
+    setReserveTopToolbarSpace(shouldReserveSpace);
     state.enterNoteEditing();
-
-    if (needsScroll) {
-      requestAnimationFrame(() => { el.scrollTop = h; });
-    }
   }, [state.enterNoteEditing]);
 
   const handleNewNote = useCallback(async () => {
@@ -742,6 +740,12 @@ function App() {
       setDocGoToLineOpen(false);
     }
   }, [docGoToLineOpen, state.surface]);
+
+  useEffect(() => {
+    if (state.surface !== "note" || state.noteState !== "editing") {
+      setReserveTopToolbarSpace(false);
+    }
+  }, [state.noteState, state.surface]);
 
   useEffect(() => {
     const handleMouseDown = (event: MouseEvent) => {
@@ -913,7 +917,11 @@ function App() {
   const hideEditorChrome = isNoteSurface && state.noteState === "quiet";
 
   const toolbarHeightRef = useRef(0);
-  const handleBarHeight = useCallback((h: number) => { toolbarHeightRef.current = h; }, []);
+  const [toolbarHeight, setToolbarHeight] = useState(0);
+  const handleBarHeight = useCallback((h: number) => {
+    toolbarHeightRef.current = h;
+    setToolbarHeight((prev) => (prev === h ? prev : h));
+  }, []);
 
   return (
     <FluentProvider
@@ -1089,6 +1097,9 @@ function App() {
                   onBarHeight={handleBarHeight}
                 />
               </div>
+              {isNoteEditing && reserveTopToolbarSpace && toolbarHeight > 0 && (
+                <div style={{ height: `${toolbarHeight}px`, pointerEvents: "none" }} />
+              )}
               {(docSearchOpen || docGoToLineOpen) && (
                 <div className={styles.searchBarAnchor}>
                   {docSearchOpen ? (
