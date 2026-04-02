@@ -17,7 +17,6 @@ import CodeBlockLowlight from "@tiptap/extension-code-block-lowlight";
 import Image from "@tiptap/extension-image";
 import Placeholder from "@tiptap/extension-placeholder";
 import Typography from "@tiptap/extension-typography";
-import TextAlign from "@tiptap/extension-text-align";
 import TaskList from "@tiptap/extension-task-list";
 import TaskItem from "@tiptap/extension-task-item";
 import { Table } from "@tiptap/extension-table";
@@ -306,16 +305,6 @@ const ReadonlyGuard = Extension.create({
   },
 });
 
-const MarkdownSafeTextAlign = TextAlign.extend({
-  addKeyboardShortcuts() {
-    return {
-      "Mod-Shift-l": () => true,
-      "Mod-Shift-e": () => true,
-      "Mod-Shift-r": () => true,
-    };
-  },
-});
-
 const lowlight = createLowlight(common);
 
 export interface TiptapEditorHandle {
@@ -424,7 +413,6 @@ export const TiptapEditor = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
         }),
         Placeholder.configure({ placeholder: () => t("placeholder", localeRef.current) }),
         Typography,
-        MarkdownSafeTextAlign.configure({ types: ["heading", "paragraph"] }),
         Underline,
         TaskList,
         TaskItem.configure({ nested: true }),

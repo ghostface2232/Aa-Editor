@@ -36,7 +36,10 @@
 .markdown-editor .cm-content {
   box-sizing: border-box;
   min-height: 100%;
-  padding: var(--editor-padding-y) var(--editor-padding-x);
+  padding:
+    calc(var(--editor-padding-y) + var(--editor-top-offset, 0px))
+    var(--editor-padding-x)
+    var(--editor-padding-y);
 }
 
 .markdown-editor-wrap-word .cm-content,

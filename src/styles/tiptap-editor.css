@@ -16,7 +16,10 @@
   font-family: var(--editor-font-family);
   font-size: var(--editor-font-size);
   line-height: var(--editor-line-height);
-  padding: var(--editor-padding-y) var(--editor-padding-x);
+  padding:
+    calc(var(--editor-padding-y) + var(--editor-top-offset, 0px))
+    var(--editor-padding-x)
+    var(--editor-padding-y);
   min-height: 100%;
 }
 

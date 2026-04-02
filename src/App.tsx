@@ -240,6 +240,7 @@ const SIDEBAR_MIN = 200;
 const SIDEBAR_MAX = 400;
 const SIDEBAR_DEFAULT = 260;
 const MARKDOWN_FILE_PATTERN = /\.(md|markdown|mdx|txt)$/i;
+const CHROME_HIDE_SCROLL_THRESHOLD = 36;
 
 function shortcutTargetElement(target: EventTarget | null): HTMLElement | null {
   if (target instanceof HTMLElement) return target;
@@ -366,6 +367,12 @@ function App() {
   const [pendingRenameGroupId, setPendingRenameGroupId] = useState<string | null>(null);
 
   const initialLoaded = useRef(false);
+  useEffect(() => {
+    if (reloadKey > 0) {
+      initialLoaded.current = false;
+    }
+  }, [reloadKey]);
+
   useEffect(() => {
     if (!isLoading && docs.length > 0 && !initialLoaded.current) {
       initialLoaded.current = true;
@@ -509,6 +516,11 @@ function App() {
   }, [state.isDirty, activeIndex]);
 
   const activeDoc = docs[activeIndex];
+  const isNoteSurface = state.surface === "note";
+  const docReady = !isLoading && !!activeDoc;
+  const noteEditor = docReady ? tiptapEditor : null;
+  const activeCmView = docReady ? cmView : null;
+  const showCodeMirror = state.surface === "markdown";
 
   const handleToggleTheme = useCallback(() => {
     updateSetting("themeMode", isDarkMode ? "light" : "dark");
@@ -632,9 +644,9 @@ function App() {
     handleSelectSurface(state.surface === "note" ? "markdown" : "note");
   }, [handleSelectSurface, state.surface]);
 
-  const [chromeShownByInteraction, setChromeShownByInteraction] = useState(false);
+  const [chromeVisible, setChromeVisible] = useState(true);
   const handleShowEditorChrome = useCallback(() => {
-    setChromeShownByInteraction(true);
+    setChromeVisible(true);
   }, []);
 
   const handleNewNote = useCallback(async () => {
@@ -650,14 +662,14 @@ function App() {
       const key = e.key.toLowerCase();
 
       if (e.key === "Tab" && !isDialogTarget(e.target)) {
-        if (state.surface === "markdown" && cmView) {
+        if (state.surface === "markdown") {
           e.preventDefault();
-          cmView.focus();
+          activeCmView?.focus();
           return;
         }
         if (state.surface === "note") {
           e.preventDefault();
-          tiptapRef.current?.getEditor()?.commands.focus();
+          noteEditor?.commands.focus();
           return;
         }
       }
@@ -693,8 +705,8 @@ function App() {
       }
       if (ctrl && e.shiftKey && key === "x" && isEditorShortcutTarget(e.target)) {
         e.preventDefault();
-        if (state.surface === "markdown" && cmView) {
-          toggleMarkdownStrike(cmView);
+        if (state.surface === "markdown" && activeCmView) {
+          toggleMarkdownStrike(activeCmView);
         } else if (state.surface === "note") {
           tiptapRef.current?.getEditor()?.chain().focus().toggleStrike().run();
         }
@@ -711,13 +723,14 @@ function App() {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [
-    cmView,
+    activeCmView,
     docGoToLineOpen,
     docSearchOpen,
     fs.importFile,
     fs.saveFile,
     handleNewNote,
     handleToggleSurface,
+    noteEditor,
     state.surface,
   ]);
 
@@ -849,11 +862,11 @@ function App() {
       const clientX = payload.position.x / scale;
       const clientY = payload.position.y / scale;
 
-      if (state.surface === "markdown" && cmView) {
-        const pos = cmView.posAtCoords({ x: clientX, y: clientY }) ?? cmView.state.doc.length;
+      if (state.surface === "markdown" && activeCmView) {
+        const pos = activeCmView.posAtCoords({ x: clientX, y: clientY }) ?? activeCmView.state.doc.length;
         const markdown = await buildImageMarkdownFromPaths(imagePaths);
         const insert = pos > 0 ? `\n\n${markdown}\n\n` : `${markdown}\n\n`;
-        cmView.dispatch({
+        activeCmView.dispatch({
           changes: { from: pos, to: pos, insert },
           selection: { anchor: pos + insert.length },
           scrollIntoView: true,
@@ -861,7 +874,7 @@ function App() {
         return;
       }
 
-      if (state.surface !== "note") return;
+      if (state.surface !== "note" || !docReady) return;
 
       const editor = tiptapRef.current?.getEditor();
       if (!editor) return;
@@ -881,16 +894,15 @@ function App() {
       disposed = true;
       unlisten?.();
     };
-  }, [cmView, fs.importFiles, scheduleAutoSave, state.setIsDirty, state.surface]);
+  }, [activeCmView, docReady, fs.importFiles, scheduleAutoSave, state.setIsDirty, state.surface]);
 
-  const isNoteSurface = state.surface === "note";
-  const showCodeMirror = state.surface === "markdown";
-  const [isContentAtTop, setIsContentAtTop] = useState(true);
-  const hideEditorChrome = isNoteSurface && !isContentAtTop && !chromeShownByInteraction;
+  const lastScrollTopRef = useRef(0);
+  const hideEditorChrome = !chromeVisible;
   const hideToolbar = hideEditorChrome;
   const hideStatusBar = hideEditorChrome;
 
   const [toolbarHeight, setToolbarHeight] = useState(0);
+  const editorTopOffset = Math.max(toolbarHeight - 16, 0);
   const handleBarHeight = useCallback((h: number) => {
     setToolbarHeight((prev) => (prev === h ? prev : h));
   }, []);
@@ -899,24 +911,34 @@ function App() {
     const el = contentRef.current;
     if (!el) return;
 
-    const updateIsAtTop = () => {
-      const next = el.scrollTop <= 1;
-      setIsContentAtTop((prev) => (prev === next ? prev : next));
-      setChromeShownByInteraction(false);
+    const updateChromeVisibility = () => {
+      const nextTop = el.scrollTop;
+      const previousTop = lastScrollTopRef.current;
+
+      if (nextTop <= 1) {
+        setChromeVisible(true);
+      } else if (nextTop < previousTop) {
+        setChromeVisible(true);
+      } else if (nextTop >= CHROME_HIDE_SCROLL_THRESHOLD) {
+        setChromeVisible(false);
+      }
+
+      lastScrollTopRef.current = nextTop;
     };
 
-    updateIsAtTop();
-    el.addEventListener("scroll", updateIsAtTop, { passive: true });
-    return () => el.removeEventListener("scroll", updateIsAtTop);
+    lastScrollTopRef.current = el.scrollTop;
+    updateChromeVisibility();
+    el.addEventListener("scroll", updateChromeVisibility, { passive: true });
+    return () => el.removeEventListener("scroll", updateChromeVisibility);
   }, []);
 
   useEffect(() => {
     requestAnimationFrame(() => {
       const el = contentRef.current;
       if (!el) return;
-      const next = el.scrollTop <= 1;
-      setIsContentAtTop((prev) => (prev === next ? prev : next));
-      setChromeShownByInteraction(false);
+      const nextTop = el.scrollTop;
+      lastScrollTopRef.current = nextTop;
+      setChromeVisible(nextTop < CHROME_HIDE_SCROLL_THRESHOLD);
     });
   }, [activeDoc?.id, state.surface]);
 
@@ -949,7 +971,7 @@ function App() {
         <TitleBar
           isDark={isDarkMode}
           locale={locale}
-          editor={tiptapEditor}
+          editor={showCodeMirror ? null : noteEditor}
           paragraphSpacing={settings.paragraphSpacing}
           documentTitle={activeDoc?.fileName}
           onNewNote={handleNewNote}
@@ -1086,8 +1108,8 @@ function App() {
                 <EditorToolbar
                   surface={state.surface}
                   onSelectSurface={handleSelectSurface}
-                  editor={tiptapEditor}
-                  cmView={cmView}
+                  editor={noteEditor}
+                  cmView={activeCmView}
                   sidebarOpen={sidebarOpen}
                   hidden={hideToolbar}
                   locale={locale}
@@ -1097,38 +1119,33 @@ function App() {
               {(docSearchOpen || docGoToLineOpen) && (
                 <div
                   className={styles.searchBarAnchor}
-                  style={isNoteSurface && !hideToolbar && toolbarHeight > 0 ? { top: `${toolbarHeight}px` } : undefined}
+                  style={!hideToolbar && toolbarHeight > 0 ? { top: `${toolbarHeight}px` } : undefined}
                 >
                   {docSearchOpen ? (
                     <SearchBar
-                      editor={tiptapEditor}
-                      cmView={cmView}
+                      editor={noteEditor}
+                      cmView={activeCmView}
                       isCmMode={showCodeMirror}
                       onClose={() => setDocSearchOpen(false)}
                       locale={locale}
                     />
                   ) : (
                     <GoToLineBar
-                      cmView={cmView}
+                      cmView={activeCmView}
                       onClose={() => setDocGoToLineOpen(false)}
                       locale={locale}
                     />
                   )}
                 </div>
               )}
-              {isNoteSurface && toolbarHeight > 0 && (
-                <div
-                  style={{
-                    height: `max(calc(${toolbarHeight}px - 1rem), 0px)`,
-                    pointerEvents: "none",
-                  }}
-                />
-              )}
-              <div className={showCodeMirror ? styles.editorPaneHidden : styles.editorPane}>
+              <div
+                className={showCodeMirror ? styles.editorPaneHidden : styles.editorPane}
+                style={editorTopOffset > 0 ? { "--editor-top-offset": `${editorTopOffset}px` } as React.CSSProperties : undefined}
+              >
                 <TiptapEditor
                   ref={tiptapRef}
                   initialMarkdown={activeDoc?.content ?? ""}
-                  editable={isNoteSurface}
+                  editable={isNoteSurface && docReady}
                   isDarkMode={isDarkMode}
                   locale={locale}
                   paragraphSpacing={settings.paragraphSpacing}
@@ -1137,20 +1154,25 @@ function App() {
                   spellcheck={settings.spellcheck}
                   onDirtyChange={handleTiptapDirty}
                   onReady={syncEditorRef}
-                  onChromeActivate={!showCodeMirror ? handleShowEditorChrome : undefined}
+                  onChromeActivate={!showCodeMirror && docReady ? handleShowEditorChrome : undefined}
                 />
               </div>
 
               {showCodeMirror && (
-                <div className={styles.editorPane}>
+                <div
+                  className={styles.editorPane}
+                  style={editorTopOffset > 0 ? { "--editor-top-offset": `${editorTopOffset}px` } as React.CSSProperties : undefined}
+                >
                   <MarkdownEditor
                     key={activeDoc?.id ?? "markdown-editor"}
                     value={state.markdown}
                     onChange={(value) => handleCodemirrorChange(activeDoc?.id ?? null, value)}
+                    editable={docReady}
                     isDarkMode={isDarkMode}
                     locale={locale}
                     wordWrap={settings.wordWrap}
                     onViewReady={(view) => handleMarkdownViewReady(activeDoc?.id ?? null, view)}
+                    onChromeActivate={docReady ? handleShowEditorChrome : undefined}
                   />
                 </div>
               )}
@@ -1159,7 +1181,7 @@ function App() {
             <StatusBar
               markdown={state.markdown}
               surface={state.surface}
-              editor={tiptapEditor}
+              editor={showCodeMirror ? null : noteEditor}
               hidden={hideStatusBar}
               locale={locale}
             />

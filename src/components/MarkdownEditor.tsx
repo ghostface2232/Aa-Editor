@@ -3,7 +3,7 @@ import CodeMirror from "@uiw/react-codemirror";
 import { markdown as cmMarkdown } from "@codemirror/lang-markdown";
 import { languages } from "@codemirror/language-data";
 import { EditorView } from "@codemirror/view";
-import type { EditorState } from "@codemirror/state";
+import { EditorState } from "@codemirror/state";
 import { cmSearchField } from "../extensions/cmSearchHighlight";
 import {
   HighlightStyle,
@@ -49,7 +49,7 @@ function createContextMenuContext(view: EditorView, locale: Locale): TextContext
   const { from, to } = view.state.selection.main;
   return {
     hasSelection: from !== to,
-    isEditable: true,
+    isEditable: view.state.facet(EditorState.readOnly) !== true,
     locale,
     cut: () => document.execCommand("cut"),
     copy: () => document.execCommand("copy"),
@@ -158,19 +158,23 @@ function buildEditorTheme(dark: boolean) {
 interface MarkdownEditorProps {
   value: string;
   onChange: (value: string) => void;
+  editable?: boolean;
   isDarkMode: boolean;
   locale: Locale;
   wordWrap: WordWrap;
   onViewReady?: (view: EditorView) => void;
+  onChromeActivate?: () => void;
 }
 
 export function MarkdownEditor({
   value,
   onChange,
+  editable = true,
   isDarkMode,
   locale,
   wordWrap,
   onViewReady,
+  onChromeActivate,
 }: MarkdownEditorProps) {
   const localeRef = useRef(locale);
   localeRef.current = locale;
@@ -217,12 +221,13 @@ export function MarkdownEditor({
 
   const handleWrapperMouseDownCapture = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
+    onChromeActivate?.();
     const view = viewRef.current;
     if (!view) return;
     if (!isBelowDocumentEnd(view, event.clientY)) return;
     if (!moveCursorToDocumentEndIfBelow(view, event.clientY)) return;
     event.preventDefault();
-  }, []);
+  }, [onChromeActivate]);
 
   const handleWrapperContextMenuCapture = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
     const view = viewRef.current;
@@ -244,6 +249,7 @@ export function MarkdownEditor({
       <CodeMirror
         value={value}
         onChange={onChange}
+        editable={editable}
         extensions={extensions}
         theme="none"
         basicSetup={{
