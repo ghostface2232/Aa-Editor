@@ -45,7 +45,10 @@ const useStyles = makeStyles({
     zIndex: 5,
     transitionProperty: "height, opacity, border-bottom-color",
     transitionDuration: "0.25s",
-    transitionTimingFunction: "ease",
+    transitionTimingFunction: "cubic-bezier(0.4, 0, 0.2, 1)",
+  },
+  barHidden: {
+    pointerEvents: "none",
   },
   grid: {
     display: "grid",
@@ -54,6 +57,13 @@ const useStyles = makeStyles({
     columnGap: "6px",
     rowGap: "4px",
     padding: "10px 10px",
+    transitionProperty: "transform, opacity",
+    transitionDuration: "0.25s",
+    transitionTimingFunction: "cubic-bezier(0.4, 0, 0.2, 1)",
+  },
+  gridHidden: {
+    transform: "translateY(-18px)",
+    opacity: 0,
   },
   /* tools 기본: 1줄 모드 (grid-column/row 등은 JS에서 직접 설정) */
   tools: {
@@ -134,7 +144,7 @@ interface EditorToolbarProps {
   editor: Editor | null;
   cmView: import("@codemirror/view").EditorView | null;
   sidebarOpen: boolean;
-  visible: boolean;
+  hidden: boolean;
   locale: Locale;
 }
 
@@ -144,7 +154,7 @@ export function EditorToolbar({
   editor,
   cmView,
   sidebarOpen,
-  visible,
+  hidden,
   locale,
 }: EditorToolbarProps) {
   const styles = useStyles();
@@ -153,7 +163,7 @@ export function EditorToolbar({
     { key: "note", label: i("surface.note") },
     { key: "markdown", label: i("surface.markdown") },
   ];
-  const showFormattingTools = visible && surface === "note" && !!editor;
+  const showFormattingTools = surface === "note" && !!editor;
   const showUndo = surface === "note" ? !!editor : !!cmView;
 
   const gridRef = useRef<HTMLDivElement>(null);
@@ -242,16 +252,16 @@ export function EditorToolbar({
 
   return (
     <div
-      className={styles.bar}
+      className={hidden ? `${styles.bar} ${styles.barHidden}` : styles.bar}
       style={{
-        height: barHeight,
-        opacity: 1,
-        borderBottomColor: undefined,
+        height: hidden ? 0 : barHeight,
+        opacity: hidden ? 0 : 1,
+        borderBottomColor: hidden ? "transparent" : undefined,
       }}
     >
       <div
         ref={gridRef}
-        className={styles.grid}
+        className={hidden ? `${styles.grid} ${styles.gridHidden}` : styles.grid}
         style={!sidebarOpen ? { paddingLeft: "46px" } : undefined}
       >
         <div>

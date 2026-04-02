@@ -874,6 +874,7 @@ function App() {
   const isNoteSurface = state.surface === "note";
   const isNoteEditing = isNoteSurface && state.noteState === "editing";
   const showCodeMirror = state.surface === "markdown";
+  const hideEditorChrome = isNoteSurface && state.noteState === "quiet";
 
   return (
     <FluentProvider
@@ -1042,7 +1043,7 @@ function App() {
               editor={tiptapEditor}
               cmView={cmView}
               sidebarOpen={sidebarOpen}
-              visible={isNoteEditing}
+              hidden={hideEditorChrome}
               locale={locale}
             />
 
@@ -1102,6 +1103,7 @@ function App() {
               markdown={state.markdown}
               surface={state.surface}
               editor={tiptapEditor}
+              hidden={hideEditorChrome}
               locale={locale}
             />
           </div>

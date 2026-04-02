@@ -6,6 +6,18 @@ import type { Editor } from "@tiptap/react";
 import type { Locale } from "../hooks/useSettings";
 
 const useStyles = makeStyles({
+  shell: {
+    flexShrink: 0,
+    overflow: "hidden",
+    borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground3,
+    transitionProperty: "height, opacity, border-top-color",
+    transitionDuration: "0.25s",
+    transitionTimingFunction: "cubic-bezier(0.4, 0, 0.2, 1)",
+  },
+  shellHidden: {
+    pointerEvents: "none",
+  },
   statusBar: {
     display: "flex",
     alignItems: "center",
@@ -13,11 +25,16 @@ const useStyles = makeStyles({
     height: "24px",
     paddingLeft: "12px",
     paddingRight: "12px",
-    backgroundColor: tokens.colorNeutralBackground3,
-    borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
     fontSize: "11px",
     color: tokens.colorNeutralForeground3,
     userSelect: "none",
+    transitionProperty: "transform, opacity",
+    transitionDuration: "0.25s",
+    transitionTimingFunction: "cubic-bezier(0.4, 0, 0.2, 1)",
+  },
+  statusBarHidden: {
+    transform: "translateY(18px)",
+    opacity: 0,
   },
   left: {
     display: "flex",
@@ -74,10 +91,11 @@ interface StatusBarProps {
   markdown: string;
   surface: EditorSurface;
   editor: Editor | null;
+  hidden: boolean;
   locale: Locale;
 }
 
-export function StatusBar({ markdown, surface, editor, locale }: StatusBarProps) {
+export function StatusBar({ markdown, surface, editor, hidden, locale }: StatusBarProps) {
   const styles = useStyles();
   const editorStats = useEditorStats(editor);
   const i = (key: Parameters<typeof t>[0]) => t(key, locale);
@@ -88,12 +106,21 @@ export function StatusBar({ markdown, surface, editor, locale }: StatusBarProps)
   const lineCount = useMarkdownSource ? mdLineCount : editorStats.lineCount;
 
   return (
-    <div className={styles.statusBar}>
-      <div className={styles.left}>
-        <span>{charCount.toLocaleString()}{i("status.chars")}</span>
-        <span>{lineCount.toLocaleString()}{i("status.lines")}</span>
+    <div
+      className={hidden ? `${styles.shell} ${styles.shellHidden}` : styles.shell}
+      style={{
+        height: hidden ? 0 : 24,
+        opacity: hidden ? 0 : 1,
+        borderTopColor: hidden ? "transparent" : undefined,
+      }}
+    >
+      <div className={hidden ? `${styles.statusBar} ${styles.statusBarHidden}` : styles.statusBar}>
+        <div className={styles.left}>
+          <span>{charCount.toLocaleString()}{i("status.chars")}</span>
+          <span>{lineCount.toLocaleString()}{i("status.lines")}</span>
+        </div>
+        <span>{i("status.cursorRow")}{editorStats.cursorRow}{i("status.cursorRowSuffix")}</span>
       </div>
-      <span>{i("status.cursorRow")}{editorStats.cursorRow}{i("status.cursorRowSuffix")}</span>
     </div>
   );
 }
