@@ -22,6 +22,7 @@ fn main() {
 
     let outcome = run_splash(
         SplashConfig {
+            window_title: "Noten",
             status_ko: "제거 중...",
             status_en: "Removing...",
             completed_status_ko: "제거 완료",

@@ -15,6 +15,7 @@ fn main() {
     println!("[noten-setup] Running install...");
     let _ = run_splash(
         SplashConfig {
+            window_title: "Noten Setup",
             status_ko: "설치 중...",
             status_en: "Installing...",
             completed_status_ko: "완료",

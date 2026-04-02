@@ -36,6 +36,7 @@ const BUTTON_W: i32 = 120;
 const BUTTON_H: i32 = 36;
 const BUTTON_GAP: i32 = 12;
 const BUTTON_BOTTOM_OFFSET: i32 = 40;
+const PROGRESS_BOTTOM_OFFSET: i32 = 64;
 const BUTTON_RADIUS: i32 = 4;
 const LOGO_SIZE: i32 = 64;
 const LOGO_TOP: i32 = 42;
@@ -88,6 +89,7 @@ enum SplashStage {
 }
 
 pub struct SplashConfig<'a> {
+    pub window_title: &'a str,
     pub status_ko: &'a str,
     pub status_en: &'a str,
     pub completed_status_ko: &'a str,
@@ -351,10 +353,12 @@ where
             outcome: outcome_ptr,
         });
 
+        let mut window_title: Vec<u16> = config.window_title.encode_utf16().collect();
+        window_title.push(0);
         let _hwnd = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             class_name,
-            windows::core::w!("Noten Setup"),
+            PCWSTR(window_title.as_ptr()),
             WS_POPUP | WS_VISIBLE,
             x,
             y,
@@ -800,7 +804,7 @@ fn show_secondary_button(data: &SplashData) -> bool {
 
 fn progress_track_rect(data: &SplashData) -> RECT {
     let side_margin = scale_dpi(PROGRESS_SIDE_MARGIN, data.dpi);
-    let bottom = data.window_h - scale_dpi(64, data.dpi);
+    let bottom = data.window_h - scale_dpi(PROGRESS_BOTTOM_OFFSET, data.dpi);
     let height = scale_dpi(PROGRESS_HEIGHT, data.dpi).max(1);
     RECT {
         left: side_margin,
