@@ -650,9 +650,15 @@ function App() {
       const ctrl = e.ctrlKey || e.metaKey;
       const key = e.key.toLowerCase();
 
-      // 브라우저 단축키 차단 (새로고침, DevTools 등) — 사이드바 포커스 시 Ctrl+R은 rename으로 사용
+      // 브라우저/WebView 단축키 차단 — 사이드바 포커스 시 Ctrl+R은 rename으로 사용
       if ((ctrl && key === "r" && !sidebarFocused) || (ctrl && e.shiftKey && key === "r")) { e.preventDefault(); return; }
-      if (e.key === "F5" || (e.ctrlKey && e.shiftKey && e.key === "I") || e.key === "F12") { e.preventDefault(); return; }
+      if (e.key === "F5" || e.key === "F12" || e.key === "F7") { e.preventDefault(); return; }
+      if (ctrl && e.shiftKey && (key === "i" || key === "j" || key === "c")) { e.preventDefault(); return; }
+      if (ctrl && (key === "p" || key === "u")) { e.preventDefault(); return; }
+      if (ctrl && (key === "=" || key === "+" || key === "-" || key === "0")) { e.preventDefault(); return; }
+      if (ctrl && (e.key === "Add" || e.key === "Subtract")) { e.preventDefault(); return; }
+      if (e.altKey && (e.key === "ArrowLeft" || e.key === "ArrowRight")) { e.preventDefault(); return; }
+      if (e.key === "BrowserBack" || e.key === "BrowserForward") { e.preventDefault(); return; }
 
       if (ctrl && key === "/") { e.preventDefault(); handleToggleSurface(); }
       if (ctrl && key === "o") { e.preventDefault(); fs.importFile(); }
@@ -707,6 +713,17 @@ function App() {
     state.noteState,
     state.surface,
   ]);
+
+  useEffect(() => {
+    const handleWheel = (event: WheelEvent) => {
+      if (event.ctrlKey || event.metaKey) {
+        event.preventDefault();
+      }
+    };
+
+    window.addEventListener("wheel", handleWheel, { passive: false });
+    return () => window.removeEventListener("wheel", handleWheel);
+  }, []);
 
   useEffect(() => {
     if (state.surface !== "markdown" && docGoToLineOpen) {

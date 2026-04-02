@@ -7,7 +7,10 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "prepare-helper": "powershell -ExecutionPolicy Bypass -File .\\scripts\\prepare-helper.ps1",
+    "prepare-helper:release": "powershell -ExecutionPolicy Bypass -File .\\scripts\\prepare-helper.ps1 -Release",
+    "tauri:dev": "npm run prepare-helper && tauri dev"
   },
   "dependencies": {
     "@codemirror/lang-markdown": "^6.5.0",
