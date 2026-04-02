@@ -3,6 +3,7 @@ import { makeStyles, tokens } from "@fluentui/react-components";
 import { t } from "../i18n";
 import type { EditorSurface } from "../hooks/useMarkdownState";
 import type { Editor } from "@tiptap/react";
+import type { EditorView as CmEditorView } from "@codemirror/view";
 import type { Locale } from "../hooks/useSettings";
 
 const useStyles = makeStyles({
@@ -92,17 +93,22 @@ interface StatusBarProps {
   markdown: string;
   surface: EditorSurface;
   editor: Editor | null;
+  cmView: CmEditorView | null;
   hidden: boolean;
   locale: Locale;
 }
 
-export function StatusBar({ markdown, surface, editor, hidden, locale }: StatusBarProps) {
+export function StatusBar({ markdown, surface, editor, cmView, hidden, locale }: StatusBarProps) {
   const styles = useStyles();
   const editorStats = useEditorStats(editor);
   const i = (key: Parameters<typeof t>[0]) => t(key, locale);
 
   const useMarkdownSource = surface === "markdown";
   const mdLineCount = useMemo(() => countLines(markdown), [markdown]);
+  const cursorRow = useMemo(() => {
+    if (!useMarkdownSource || !cmView) return editorStats.cursorRow;
+    return cmView.state.doc.lineAt(cmView.state.selection.main.head).number;
+  }, [cmView, editorStats.cursorRow, useMarkdownSource]);
   const charCount = useMarkdownSource ? markdown.length : editorStats.charCount;
   const lineCount = useMarkdownSource ? mdLineCount : editorStats.lineCount;
 
@@ -119,7 +125,7 @@ export function StatusBar({ markdown, surface, editor, hidden, locale }: StatusB
           <span>{charCount.toLocaleString()}{i("status.chars")}</span>
           <span>{lineCount.toLocaleString()}{i("status.lines")}</span>
         </div>
-        <span>{i("status.cursorRow")}{editorStats.cursorRow}{i("status.cursorRowSuffix")}</span>
+        <span>{i("status.cursorRow")}{cursorRow}{i("status.cursorRowSuffix")}</span>
       </div>
     </div>
   );

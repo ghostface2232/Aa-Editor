@@ -1182,6 +1182,7 @@ function App() {
               markdown={state.markdown}
               surface={state.surface}
               editor={showCodeMirror ? null : noteEditor}
+              cmView={showCodeMirror ? activeCmView : null}
               hidden={hideStatusBar}
               locale={locale}
             />
