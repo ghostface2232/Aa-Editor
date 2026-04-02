@@ -7,14 +7,13 @@ use windows::Win32::UI::HiDpi::{
 mod constants;
 mod installer;
 mod registry;
-mod splash;
-use splash::{CompletionAction, SplashConfig};
+use noten_splash_ui::{SplashConfig, run_splash};
 
 fn main() {
     let _ = unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
 
     println!("[noten-setup] Running install...");
-    let _ = splash::run_splash(
+    let _ = run_splash(
         SplashConfig {
             status_ko: "설치 중...",
             status_en: "Installing...",
@@ -30,7 +29,7 @@ fn main() {
             ready_button_label_en: None,
             secondary_button_label_ko: None,
             secondary_button_label_en: None,
-            completion_action: CompletionAction::LaunchApp,
+            on_completion: Some(Box::new(|| installer::launch_app())),
             auto_start: true,
             checkbox_label_ko: None,
             checkbox_label_en: None,

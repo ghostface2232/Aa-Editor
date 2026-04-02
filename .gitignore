@@ -40,10 +40,8 @@ public/tauri.svg
 public/vite.svg
 src/assets/react.svg
 
-# Bootstrapper
-bootstrapper/target/
-bootstrapper/assets/nsis-payload.exe
+# Rust workspace
+target/
 
-# Maintenance helper
-maintenance-helper/target/
-maintenance-helper/assets/nsis-payload.exe
+# Bootstrapper
+bootstrapper/assets/nsis-payload.exe

@@ -1,10 +1,9 @@
 [package]
-name = "noten-setup"
+name = "noten-splash-ui"
 version = "0.1.2"
-edition = "2024"
+edition = "2021"
 
 [dependencies]
-noten-splash-ui = { path = "../noten-splash-ui" }
 windows = { version = ">=0.59, <=0.62", features = [
     "Win32_Foundation",
     "Win32_Globalization",
@@ -18,8 +17,4 @@ windows = { version = ">=0.59, <=0.62", features = [
     "Win32_System_LibraryLoader",
     "Win32_System_Memory",
     "Win32_System_Threading",
-    "Win32_System_Registry",
 ] }
-
-[build-dependencies]
-winresource = "0.1"

@@ -5,21 +5,19 @@ $ErrorActionPreference = "Stop"
 # before the Tauri/NSIS build consumes src-tauri/resources/maintenance-helper.exe.
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$maintenanceHelperDir = Join-Path $repoRoot "maintenance-helper"
-$maintenanceHelperExe = Join-Path $repoRoot "maintenance-helper\target\release\maintenance-helper.exe"
+$maintenanceHelperExe = Join-Path $repoRoot "target\release\maintenance-helper.exe"
 $tauriResourcesDir = Join-Path $repoRoot "src-tauri\resources"
 $tauriResourceHelperExe = Join-Path $tauriResourcesDir "maintenance-helper.exe"
 $nsisBundleGlob = Join-Path $repoRoot "src-tauri\target\release\bundle\nsis\Noten_*_x64-setup.exe"
 $payloadPath = Join-Path $repoRoot "bootstrapper\assets\nsis-payload.exe"
-$bootstrapperDir = Join-Path $repoRoot "bootstrapper"
-$bootstrapperExe = Join-Path $repoRoot "bootstrapper\target\release\noten-setup.exe"
+$bootstrapperExe = Join-Path $repoRoot "target\release\noten-setup.exe"
 $distDir = Join-Path $repoRoot "dist"
 $distExe = Join-Path $distDir "Noten-Setup.exe"
 
 Write-Host "[1/6] Building maintenance-helper..."
-Push-Location $maintenanceHelperDir
+Push-Location $repoRoot
 try {
-  cargo build --release
+  cargo build --release -p maintenance-helper
   if ($LASTEXITCODE -ne 0) {
     throw "maintenance-helper cargo build failed with exit code $LASTEXITCODE"
   }
@@ -60,9 +58,9 @@ if (-not $nsisBundle) {
 Copy-Item -LiteralPath $nsisBundle -Destination $payloadPath -Force
 
 Write-Host "[5/6] Building bootstrapper in release mode..."
-Push-Location $bootstrapperDir
+Push-Location $repoRoot
 try {
-  cargo build --release
+  cargo build --release -p noten-setup
   if ($LASTEXITCODE -ne 0) {
     throw "bootstrapper cargo build failed with exit code $LASTEXITCODE"
   }

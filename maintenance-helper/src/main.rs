@@ -7,10 +7,9 @@ use windows::Win32::UI::HiDpi::{
 mod cleanup;
 mod constants;
 mod registry;
-mod splash;
 mod uninstaller;
 
-use splash::SplashConfig;
+use noten_splash_ui::{SplashConfig, run_splash};
 
 fn main() {
     let _ = unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
@@ -21,7 +20,7 @@ fn main() {
         return;
     }
 
-    let outcome = splash::run_splash(
+    let outcome = run_splash(
         SplashConfig {
             status_ko: "제거 중...",
             status_en: "Removing...",
@@ -37,6 +36,7 @@ fn main() {
             ready_button_label_en: Some("Remove"),
             secondary_button_label_ko: Some("취소"),
             secondary_button_label_en: Some("Cancel"),
+            on_completion: None,
             auto_start: false,
             checkbox_label_ko: Some("노트 및 설정 데이터도 삭제"),
             checkbox_label_en: Some("Also delete notes and settings data"),

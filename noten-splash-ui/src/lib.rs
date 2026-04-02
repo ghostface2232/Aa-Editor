@@ -3,7 +3,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr::copy_nonoverlapping;
 use std::time::Instant;
 
-use crate::installer;
+
 use windows::Win32::Foundation::*;
 use windows::Win32::Globalization::GetUserDefaultUILanguage;
 use windows::Win32::Graphics::Dwm::{
@@ -79,11 +79,6 @@ struct LogoAsset {
     _stream: IStream,
 }
 
-#[derive(Clone, Copy)]
-pub enum CompletionAction {
-    LaunchApp,
-}
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SplashStage {
     Ready,
@@ -107,7 +102,7 @@ pub struct SplashConfig<'a> {
     pub ready_button_label_en: Option<&'a str>,
     pub secondary_button_label_ko: Option<&'a str>,
     pub secondary_button_label_en: Option<&'a str>,
-    pub completion_action: CompletionAction,
+    pub on_completion: Option<Box<dyn FnOnce() + Send + 'static>>,
     pub auto_start: bool,
     pub checkbox_label_ko: Option<&'a str>,
     pub checkbox_label_en: Option<&'a str>,
@@ -142,7 +137,7 @@ struct SplashData {
     ready_button_label_en: Option<String>,
     secondary_button_label_ko: Option<String>,
     secondary_button_label_en: Option<String>,
-    completion_action: CompletionAction,
+    on_completion: Option<Box<dyn FnOnce() + Send + 'static>>,
     logo: Option<LogoAsset>,
     font_handles: Vec<HANDLE>,
     dpi: u32,
@@ -321,7 +316,7 @@ where
             ready_button_label_en: config.ready_button_label_en.map(str::to_string),
             secondary_button_label_ko: config.secondary_button_label_ko.map(str::to_string),
             secondary_button_label_en: config.secondary_button_label_en.map(str::to_string),
-            completion_action: config.completion_action,
+            on_completion: config.on_completion,
             logo: load_logo_asset(),
             font_handles,
             dpi,
@@ -467,7 +462,7 @@ unsafe extern "system" fn wnd_proc(
                         std::thread::spawn(move || {
                             let result = catch_unwind(AssertUnwindSafe(|| work(delete_user_data)))
                                 .unwrap_or_else(|_| {
-                                    Err("unexpected bootstrapper panic".to_string())
+                                    Err("unexpected panic in splash work thread".to_string())
                                 });
                             let success = result.is_ok();
                             let result_ptr = Box::into_raw(Box::new(result));
@@ -513,10 +508,10 @@ unsafe extern "system" fn wnd_proc(
                         return LRESULT(0);
                     }
 
-                    if state.data.stage == SplashStage::Success
-                        && matches!(state.data.completion_action, CompletionAction::LaunchApp)
-                    {
-                        installer::launch_app();
+                    if state.data.stage == SplashStage::Success {
+                        if let Some(callback) = state.data.on_completion.take() {
+                            callback();
+                        }
                     }
                 }
                 let _ = DestroyWindow(hwnd);

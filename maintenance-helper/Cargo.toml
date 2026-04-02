@@ -4,6 +4,7 @@ version = "0.1.2"
 edition = "2021"
 
 [dependencies]
+noten-splash-ui = { path = "../noten-splash-ui" }
 windows = { version = ">=0.59, <=0.62", features = [
     "Win32_Foundation",
     "Win32_Globalization",
@@ -26,8 +27,3 @@ winresource = "0.1"
 [[bin]]
 name = "maintenance-helper"
 path = "src/main.rs"
-
-[profile.release]
-opt-level = "z"
-lto = true
-strip = true

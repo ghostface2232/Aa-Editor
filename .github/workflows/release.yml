@@ -32,13 +32,12 @@ jobs:
         run: npm ci
 
       - name: Build maintenance-helper
-        working-directory: maintenance-helper
-        run: cargo build --release
+        run: cargo build --release -p maintenance-helper
 
       - name: Copy maintenance-helper to Tauri resources
         shell: pwsh
         run: |
-          $source = "maintenance-helper\target\release\maintenance-helper.exe"
+          $source = "target\release\maintenance-helper.exe"
           $dest = "src-tauri\resources\maintenance-helper.exe"
           New-Item -ItemType Directory -Path "src-tauri\resources" -Force | Out-Null
           Copy-Item -LiteralPath $source -Destination $dest -Force
@@ -71,8 +70,7 @@ jobs:
           Copy-Item -LiteralPath $source -Destination $destination -Force
 
       - name: Build bootstrapper
-        working-directory: bootstrapper
-        run: cargo build --release
+        run: cargo build --release -p noten-setup
 
       - name: Code sign bootstrapper
         if: ${{ env.CODE_SIGN_PFX != '' }}
@@ -94,7 +92,7 @@ jobs:
             }
 
             Write-Host "[3/3] Signing bootstrapper executable..."
-            & $signtool sign /f $certPath /p $env:CODE_SIGN_PFX_PASSWORD /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 "bootstrapper\target\release\noten-setup.exe"
+            & $signtool sign /f $certPath /p $env:CODE_SIGN_PFX_PASSWORD /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 "target\release\noten-setup.exe"
 
             if ($LASTEXITCODE -ne 0) {
               throw "signtool failed with exit code $LASTEXITCODE"
@@ -109,4 +107,4 @@ jobs:
         with:
           draft: true
           tag_name: ${{ github.ref_name }}
-          files: bootstrapper/target/release/noten-setup.exe
+          files: target/release/noten-setup.exe
