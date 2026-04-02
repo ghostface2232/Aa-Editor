@@ -626,23 +626,23 @@ export function SettingsModal({ open, onClose, settings, onUpdate, currentNotesD
 
                   {/* Version notes */}
                   <div className={settingItemClass(styles)} style={{ paddingTop: "18px" }}>
-                    <div style={{ fontSize: "12px", fontWeight: 500, color: tokens.colorNeutralForeground2, marginBottom: "6px" }}>v0.1.3</div>
+                    <div style={{ fontSize: "12px", fontWeight: 500, color: tokens.colorNeutralForeground2, marginBottom: "6px" }}>v0.1.4</div>
                     <div style={{ fontSize: "12px", color: tokens.colorNeutralForeground3, lineHeight: "1.6" }}>
                       {locale === "ko" ? (
                         <>
-                          · 사이드바 문서 목록에 "내 노트" 라벨 추가<br />
-                          · 다크모드 Mica 효과 안정성 수정<br />
-                          · 노트 보기 모드에서 툴바/상태바 숨김 처리<br />
-                          · 에디터 및 사이드바 키보드 단축키 추가<br />
-                          · 에디터 모드 전환 동작 개선
+                          · Note surface를 상시 편집 구조로 정리<br />
+                          · Note / Markdown 모두 동일한 상단 chrome 표시 규칙 적용<br />
+                          · 초기 로딩 중 문서 준비 전 입력 유실 방지<br />
+                          · Markdown과 호환되지 않는 TextAlign 확장 제거<br />
+                          · 하단 스크롤 구간의 상태바 떨림 현상 완화
                         </>
                       ) : (
                         <>
-                          · Added "My Notes" label above document list in sidebar<br />
-                          · Fixed dark mode Mica stability<br />
-                          · Hide toolbar and status bar in Note view mode<br />
-                          · Added editor and sidebar keyboard shortcuts<br />
-                          · Improved editor mode transition behavior
+                          · Simplified the Note surface to stay always editable<br />
+                          · Unified top chrome visibility behavior across Note and Markdown<br />
+                          · Prevented input loss before the first document is ready<br />
+                          · Removed the markdown-incompatible TextAlign extension<br />
+                          · Reduced status bar jitter near the bottom scroll boundary
                         </>
                       )}
                     </div>

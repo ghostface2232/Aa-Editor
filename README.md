@@ -14,7 +14,7 @@ Powered by [Tiptap](https://tiptap.dev/) and [CodeMirror](https://codemirror.net
 
 
 ## Features
-- **Note / Markdown surfaces** - A quiet Note surface, in-place Note editing, outside-click / `Esc` exit from Note editing, and an explicit Markdown source view switchable with `Ctrl+/`
+- **Note / Markdown surfaces** - An always-editable Note surface and an explicit Markdown source view switchable with `Ctrl+/`
 - **Slash commands** - Type `/` to insert headings, lists, code blocks, images, and more
 - **Image support** - Drag & drop, paste, resize with corner handles, and drag to reorder
 - **Note management** - Sidebar with grouping, multi-select, drag reorder, search, and context menus
@@ -52,8 +52,7 @@ Powered by [Tiptap](https://tiptap.dev/) and [CodeMirror](https://codemirror.net
 | Open file | `Ctrl+O` |
 | Save now | `Ctrl+S` |
 | Switch Note / Markdown | `Ctrl+/` |
-| Enter Note editing | `Click editor` |
-| Leave Note editing | `Click outside editor` / `Esc` |
+| Show toolbar / status bar | `Click editor` / scroll up / top of document |
 | Find in document | `Ctrl+F` |
 | Go to line (Markdown) | `Ctrl+G` |
 | Strike-through | `Ctrl+Shift+X` |
