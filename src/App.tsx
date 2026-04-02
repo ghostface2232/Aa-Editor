@@ -252,6 +252,11 @@ function isEditorShortcutTarget(target: EventTarget | null) {
   return !!element?.closest(".ProseMirror, .cm-editor");
 }
 
+function isDialogTarget(target: EventTarget | null) {
+  const element = shortcutTargetElement(target);
+  return !!element?.closest('[role="dialog"]');
+}
+
 function toggleMarkdownStrike(cmView: import("@codemirror/view").EditorView) {
   const { state } = cmView;
   const selection = state.selection.main;
@@ -643,6 +648,19 @@ function App() {
       const sidebarFocused = document.documentElement.dataset.sidebarActive === "1";
       const ctrl = e.ctrlKey || e.metaKey;
       const key = e.key.toLowerCase();
+
+      if (e.key === "Tab" && !isDialogTarget(e.target)) {
+        if (state.surface === "markdown" && cmView) {
+          e.preventDefault();
+          cmView.focus();
+          return;
+        }
+        if (state.surface === "note") {
+          e.preventDefault();
+          tiptapRef.current?.getEditor()?.commands.focus();
+          return;
+        }
+      }
 
       // 브라우저/WebView 단축키 차단 — 사이드바 포커스 시 Ctrl+R은 rename으로 사용
       if ((ctrl && key === "r" && !sidebarFocused) || (ctrl && e.shiftKey && key === "r")) { e.preventDefault(); return; }
