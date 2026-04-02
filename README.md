@@ -14,7 +14,7 @@ Powered by [Tiptap](https://tiptap.dev/) and [CodeMirror](https://codemirror.net
 
 
 ## Features
-- **Note / Markdown surfaces** - A quiet Note surface, in-place Note editing, and an explicit Markdown source view switchable with `Ctrl+/`
+- **Note / Markdown surfaces** - A quiet Note surface, in-place Note editing, outside-click / `Esc` exit from Note editing, and an explicit Markdown source view switchable with `Ctrl+/`
 - **Slash commands** - Type `/` to insert headings, lists, code blocks, images, and more
 - **Image support** - Drag & drop, paste, resize with corner handles, and drag to reorder
 - **Note management** - Sidebar with grouping, multi-select, drag reorder, search, and context menus
@@ -52,17 +52,25 @@ Powered by [Tiptap](https://tiptap.dev/) and [CodeMirror](https://codemirror.net
 | Open file | `Ctrl+O` |
 | Save now | `Ctrl+S` |
 | Switch Note / Markdown | `Ctrl+/` |
-| Enter or leave Note editing | `Click / Esc` |
+| Enter Note editing | `Click editor` |
+| Leave Note editing | `Click outside editor` / `Esc` |
 | Find in document | `Ctrl+F` |
+| Go to line (Markdown) | `Ctrl+G` |
+| Strike-through | `Ctrl+Shift+X` |
 
 ### Sidebar (when sidebar is focused)
 | Action | Shortcut |
 |---|---|
-| Rename | `Ctrl+R` |
+| Rename | `Ctrl+R` / `F2` |
 | Duplicate | `Ctrl+D` |
 | Export | `Ctrl+E` |
 | Copy content | `Ctrl+Alt+C` |
 | Delete | `Delete` |
+
+## Development
+
+- Use `npm run tauri:dev` for local app development. It prepares `maintenance-helper.exe` in Tauri resources and then starts `tauri dev`.
+- Use `.\scripts\build-release.ps1` only when you want the full release output, including the final setup executable.
 
 ## License
 MIT
