@@ -6,18 +6,17 @@ $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $profile = if ($Release) { "release" } else { "debug" }
-$maintenanceHelperDir = Join-Path $repoRoot "maintenance-helper"
-$maintenanceHelperExe = Join-Path $repoRoot "maintenance-helper\target\$profile\maintenance-helper.exe"
+$maintenanceHelperExe = Join-Path $repoRoot "target\$profile\maintenance-helper.exe"
 $tauriResourcesDir = Join-Path $repoRoot "src-tauri\resources"
 $tauriResourceHelperExe = Join-Path $tauriResourcesDir "maintenance-helper.exe"
 
-$cargoArgs = @("build")
+$cargoArgs = @("build", "-p", "maintenance-helper")
 if ($Release) {
   $cargoArgs += "--release"
 }
 
 Write-Host "[prepare-helper] Building maintenance-helper ($profile)..."
-Push-Location $maintenanceHelperDir
+Push-Location $repoRoot
 try {
   & cargo @cargoArgs
   if ($LASTEXITCODE -ne 0) {
