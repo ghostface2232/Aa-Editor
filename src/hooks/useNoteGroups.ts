@@ -107,6 +107,41 @@ export function useNoteGroups(
     [groups, persist],
   );
 
+  const reorderNoteInGroup = useCallback(
+    (noteId: string, groupId: string, newIndex: number) => {
+      persist(
+        groups.map((g) => {
+          if (g.id !== groupId) return g;
+          const cur = g.noteIds.indexOf(noteId);
+          if (cur === -1 || cur === newIndex) return g;
+          const next = [...g.noteIds];
+          next.splice(cur, 1);
+          next.splice(newIndex, 0, noteId);
+          return { ...g, noteIds: next };
+        }),
+      );
+    },
+    [groups, persist],
+  );
+
+  const insertNoteInGroup = useCallback(
+    (noteId: string, groupId: string, index: number) => {
+      persist(
+        groups.map((g) => {
+          if (g.id === groupId) {
+            const filtered = g.noteIds.filter((id) => id !== noteId);
+            filtered.splice(index, 0, noteId);
+            return { ...g, noteIds: filtered };
+          }
+          return g.noteIds.includes(noteId)
+            ? { ...g, noteIds: g.noteIds.filter((id) => id !== noteId) }
+            : g;
+        }),
+      );
+    },
+    [groups, persist],
+  );
+
   const toggleGroupCollapsed = useCallback(
     (groupId: string) => {
       persist(
@@ -153,6 +188,8 @@ export function useNoteGroups(
     addNoteToGroup,
     removeNoteFromGroup,
     moveNotesToGroup,
+    reorderNoteInGroup,
+    insertNoteInGroup,
     toggleGroupCollapsed,
     createGroupFromSelection,
     cleanupDeletedNote,

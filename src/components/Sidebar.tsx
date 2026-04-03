@@ -21,6 +21,7 @@ import {
 import { t } from "../i18n";
 import type { NoteDoc, NoteGroup } from "../hooks/useNotesLoader";
 import type { Locale, NotesSortOrder } from "../hooks/useSettings";
+import { useSidebarDrag } from "../hooks/useSidebarDrag";
 import { openNewWindow } from "../utils/newWindow";
 import { clampMenuToViewport } from "../utils/clampMenuPosition";
 
@@ -599,6 +600,8 @@ interface SidebarProps {
   onAddNoteToGroup: (noteId: string, groupId: string) => void;
   onRemoveNoteFromGroup: (noteId: string) => void;
   onMoveNotesToGroup: (noteIds: string[], groupId: string) => void;
+  onInsertNoteInGroup: (noteId: string, groupId: string, index: number) => void;
+  onReorderNoteInGroup: (noteId: string, groupId: string, newIndex: number) => void;
   onToggleGroupCollapsed: (groupId: string) => void;
   onDeleteNotes: (indices: number[]) => void;
   /* ─── Select mode (controlled from App) ─── */
@@ -642,6 +645,8 @@ export function Sidebar({
   onAddNoteToGroup,
   onRemoveNoteFromGroup,
   onMoveNotesToGroup,
+  onInsertNoteInGroup,
+  onReorderNoteInGroup,
   onToggleGroupCollapsed,
   onDeleteNotes,
   selectMode,
@@ -665,6 +670,7 @@ export function Sidebar({
   const [submenuPos, setSubmenuPos] = useState<{ x: number; y: number } | null>(null);
   const [selectedNoteIds, setSelectedNoteIds] = useState<Set<string>>(new Set());
 
+  const sidebarBodyRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const groupInputRef = useRef<HTMLInputElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -683,6 +689,22 @@ export function Sidebar({
     for (const g of groups) for (const id of g.noteIds) set.add(id);
     return set;
   }, [groups]);
+
+  const { handleDragPointerDown, isDragging } = useSidebarDrag({
+    groups,
+    docs,
+    selectedNoteIds,
+    selectMode,
+    editingIndex,
+    editingGroupId,
+    searchActive: !!sidebarSearchQuery,
+    sidebarBodyRef,
+    onAddNoteToGroup,
+    onMoveNotesToGroup,
+    onInsertNoteInGroup,
+    onReorderNoteInGroup,
+    onToggleGroupCollapsed,
+  });
 
   // Focus sidebar search input when opened
   useEffect(() => {
@@ -1113,6 +1135,8 @@ export function Sidebar({
       <div
         key={doc.id}
         data-doc-item
+        data-note-id={doc.id}
+        data-group-id={noteGroup?.id}
         className={mergeClasses(
           styles.docItemWrapper,
           newDocIds.has(doc.id) && styles.docItemNew,
@@ -1121,9 +1145,11 @@ export function Sidebar({
           isInRemovingGroup && styles.groupCollapseOut,
         )}
         style={expandStagger > 0 ? { animationDelay: `${expandStagger}s` } : undefined}
+        onPointerDown={(e) => handleDragPointerDown(e, doc.id)}
         onMouseEnter={() => setHoveredIndex(originalIndex)}
         onMouseLeave={() => setHoveredIndex(null)}
         onContextMenu={(e) => {
+          if (isDragging.current) { e.preventDefault(); return; }
           if (selectMode) {
             // In select mode, auto-select this note if not already, then show bulk menu
             if (!selectedNoteIds.has(doc.id)) toggleNoteSelection(doc.id);
@@ -1182,6 +1208,7 @@ export function Sidebar({
                 indented && !selectMode && styles.docItemIndented,
               )}
               onClick={() => {
+                if (isDragging.current) return;
                 setFocusedGroupId(null);
                 if (selectMode) {
                   toggleNoteSelection(doc.id);
@@ -1241,6 +1268,7 @@ export function Sidebar({
       <div
         key={`group-${group.id}`}
         data-group-item
+        data-group-id={group.id}
         className={mergeClasses(
           styles.docItemWrapper,
           newGroupIds.has(group.id) && styles.docItemNew,
@@ -1310,6 +1338,7 @@ export function Sidebar({
   return (
     <div className={styles.sidebar} data-sidebar tabIndex={-1} style={{ outline: "none" }}>
       <div
+        ref={sidebarBodyRef}
         className={styles.body}
         data-sidebar-body
         onContextMenu={(e) => {
@@ -1378,30 +1407,32 @@ export function Sidebar({
             )}
 
             {/* Notes section */}
-            {!sidebarSearchQuery && (noteItems.length > 0 || exitingDoc) && (
-              <span className={styles.sectionLabel}>{i("sidebar.notesLabel")}</span>
-            )}
-            {exitingDoc && exitingDoc.index === 0 && (
-              <div key={`exit-${exitingDoc.doc.id}`} className={mergeClasses(styles.docItemWrapper, styles.docItemExit)}>
-                <div className={styles.docItem} style={{ opacity: 0.5 }}>
-                  <span className={styles.docName}>{exitingDoc.doc.fileName}</span>
-                </div>
-              </div>
-            )}
-            {noteItems.map((item, idx) => {
-              if (item.kind !== "note") return null;
-              const elements = [renderNoteItem(item.doc, item.originalIndex, item.indented)];
-              if (exitingDoc && exitingDoc.index === idx + 1) {
-                elements.unshift(
-                  <div key={`exit-${exitingDoc.doc.id}`} className={mergeClasses(styles.docItemWrapper, styles.docItemExit)}>
-                    <div className={styles.docItem} style={{ opacity: 0.5 }}>
-                      <span className={styles.docName}>{exitingDoc.doc.fileName}</span>
-                    </div>
+            <div data-notes-section>
+              {!sidebarSearchQuery && (noteItems.length > 0 || exitingDoc) && (
+                <span className={styles.sectionLabel}>{i("sidebar.notesLabel")}</span>
+              )}
+              {exitingDoc && exitingDoc.index === 0 && (
+                <div key={`exit-${exitingDoc.doc.id}`} className={mergeClasses(styles.docItemWrapper, styles.docItemExit)}>
+                  <div className={styles.docItem} style={{ opacity: 0.5 }}>
+                    <span className={styles.docName}>{exitingDoc.doc.fileName}</span>
                   </div>
-                );
-              }
-              return elements;
-            })}
+                </div>
+              )}
+              {noteItems.map((item, idx) => {
+                if (item.kind !== "note") return null;
+                const elements = [renderNoteItem(item.doc, item.originalIndex, item.indented)];
+                if (exitingDoc && exitingDoc.index === idx + 1) {
+                  elements.unshift(
+                    <div key={`exit-${exitingDoc.doc.id}`} className={mergeClasses(styles.docItemWrapper, styles.docItemExit)}>
+                      <div className={styles.docItem} style={{ opacity: 0.5 }}>
+                        <span className={styles.docName}>{exitingDoc.doc.fileName}</span>
+                      </div>
+                    </div>
+                  );
+                }
+                return elements;
+              })}
+            </div>
           </>
         )}
       </div>
