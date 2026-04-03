@@ -242,6 +242,21 @@ const TableNodeSelect = Extension.create({
   },
 });
 
+const goToLineCallbackRef: { current: (() => void) | undefined } = { current: undefined };
+
+const GoToLineShortcut = Extension.create({
+  name: "goToLineShortcut",
+
+  addKeyboardShortcuts() {
+    return {
+      "Mod-g": () => {
+        goToLineCallbackRef.current?.();
+        return true;
+      },
+    };
+  },
+});
+
 const ReadonlyGuard = Extension.create({
   name: "readonlyGuard",
 
@@ -326,6 +341,7 @@ interface TiptapEditorProps {
   onDirtyChange: (dirty: boolean) => void;
   onReady?: () => void;
   onChromeActivate?: () => void;
+  onGoToLine?: () => void;
 }
 
 export const TiptapEditor = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
@@ -341,10 +357,14 @@ export const TiptapEditor = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
     onDirtyChange,
     onReady,
     onChromeActivate,
+    onGoToLine,
   }, ref) {
     const dirtyRef = useRef(false);
     const localeRef = useRef(locale);
     localeRef.current = locale;
+    const onGoToLineRef = useRef(onGoToLine);
+    onGoToLineRef.current = onGoToLine;
+    goToLineCallbackRef.current = onGoToLine;
     const spellcheckRef = useRef(spellcheck);
     const spellcheckRefreshFrameRef = useRef<number | null>(null);
     const editorStyle = {
@@ -427,6 +447,7 @@ export const TiptapEditor = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
         ImageDrop,
         TextContextMenu,
         SearchHighlight,
+        GoToLineShortcut,
       ],
       content: initialMarkdown,
       contentType: "markdown",
