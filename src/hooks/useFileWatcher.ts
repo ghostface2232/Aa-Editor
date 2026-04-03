@@ -1,4 +1,5 @@
 import { useEffect, useRef, useCallback } from "react";
+import { flushSync } from "react-dom";
 import { watch, readTextFile } from "@tauri-apps/plugin-fs";
 import type { WatchEvent } from "@tauri-apps/plugin-fs";
 import { getNotesDir, deriveTitle, saveManifest, migrationInProgress, reconcileFolder } from "./useNotesLoader";
@@ -153,30 +154,36 @@ export function useFileWatcher(
 
         const { updatedAt: fileUpdatedAt } = await getFileTimestamps(doc.filePath);
 
-        const isActiveDoc =
-          docsRef.current.findIndex((d) => d.id === doc.id) === activeIndexRef.current;
+        let needsSyncMarkdown = false;
 
-        setDocs((prev) => {
-          const idx = prev.findIndex((d) => d.id === doc.id);
-          if (idx < 0) return prev;
-          const updated = [...prev];
-          const autoTitle = prev[idx].customName
-            ? prev[idx].fileName
-            : deriveTitle(content) || prev[idx].fileName;
-          updated[idx] = {
-            ...prev[idx],
-            content,
-            fileName: autoTitle,
-            updatedAt: fileUpdatedAt,
-            isDirty: false,
-          };
+        // flushSync forces the updater to run synchronously so the
+        // flag it sets is reliable when checked afterwards.  Side
+        // effects stay outside the updater for StrictMode safety.
+        flushSync(() => {
+          setDocs((prev) => {
+            const idx = prev.findIndex((d) => d.id === doc.id);
+            if (idx < 0) return prev;
+            const updated = [...prev];
+            const autoTitle = prev[idx].customName
+              ? prev[idx].fileName
+              : deriveTitle(content) || prev[idx].fileName;
+            updated[idx] = {
+              ...prev[idx],
+              content,
+              fileName: autoTitle,
+              updatedAt: fileUpdatedAt,
+              isDirty: false,
+            };
 
-          return updated;
+            if (idx === activeIndexRef.current) {
+              needsSyncMarkdown = true;
+            }
+
+            return updated;
+          });
         });
 
-        // Sync editor & markdown state outside the updater to avoid
-        // React batching deferring the side-effect check.
-        if (isActiveDoc && tiptapRef.current) {
+        if (needsSyncMarkdown && tiptapRef.current) {
           tiptapRef.current.setContent(content);
           onActiveDocChangedRef.current?.({ filePath: doc.filePath, content });
         }

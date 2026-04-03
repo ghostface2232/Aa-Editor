@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { flushSync } from "react-dom";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { emit, listen } from "@tauri-apps/api/event";
 import type { NoteDoc, NoteGroup, TrashedNote } from "./useNotesLoader";
@@ -84,7 +85,6 @@ export function emitTrashUpdated(trashedNotes: TrashedNote[]) {
 /* ── Listener hook ── */
 
 export function useWindowSync(
-  docs: NoteDoc[],
   setDocs: React.Dispatch<React.SetStateAction<NoteDoc[]>>,
   activeIndex: number,
   tiptapRef: React.RefObject<{ setContent: (md: string) => void } | null>,
@@ -94,8 +94,6 @@ export function useWindowSync(
   onActiveDocChanged?: (doc: { filePath: string; content: string }) => void,
 ) {
   // Refs to avoid stale closures in event listeners
-  const docsRef = useRef(docs);
-  docsRef.current = docs;
   const activeIndexRef = useRef(activeIndex);
   activeIndexRef.current = activeIndex;
   const onActiveDocChangedRef = useRef(onActiveDocChanged);
@@ -110,22 +108,27 @@ export function useWindowSync(
         const { sourceWindow, docId, content, fileName, updatedAt } = event.payload;
         if (sourceWindow === WINDOW_LABEL) return;
 
-        const currentDocs = docsRef.current;
-        const preIdx = currentDocs.findIndex((d) => d.id === docId);
-        const isActiveDoc = preIdx >= 0 && preIdx === activeIndexRef.current;
-        const syncFilePath = preIdx >= 0 ? currentDocs[preIdx].filePath : "";
+        let needsSyncMarkdown = false;
+        let syncFilePath = "";
 
-        setDocs((prev) => {
-          const idx = prev.findIndex((d) => d.id === docId);
-          if (idx < 0) return prev;
-          const updated = [...prev];
-          updated[idx] = { ...updated[idx], content, fileName, updatedAt, isDirty: false };
-          return updated;
+        // flushSync forces the updater to run synchronously so the
+        // flags it sets are reliable when checked afterwards.
+        flushSync(() => {
+          setDocs((prev) => {
+            const idx = prev.findIndex((d) => d.id === docId);
+            if (idx < 0) return prev;
+            const updated = [...prev];
+            updated[idx] = { ...updated[idx], content, fileName, updatedAt, isDirty: false };
+
+            if (idx === activeIndexRef.current) {
+              needsSyncMarkdown = true;
+              syncFilePath = updated[idx].filePath;
+            }
+            return updated;
+          });
         });
 
-        // Sync editor & markdown state outside the updater to avoid
-        // React batching deferring the side-effect check.
-        if (isActiveDoc && tiptapRef.current) {
+        if (needsSyncMarkdown && tiptapRef.current) {
           tiptapRef.current.setContent(content);
           onActiveDocChangedRef.current?.({ filePath: syncFilePath, content });
         }
