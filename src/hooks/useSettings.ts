@@ -26,7 +26,7 @@ export interface Settings {
 const DEFAULTS: Settings = {
   locale: "ko",
   themeMode: "light",
-  notesSortOrder: "updated-desc",
+  notesSortOrder: "created-desc",
   wordWrap: "word",
   paragraphSpacing: 30,
   keepFormatOnPaste: true,
