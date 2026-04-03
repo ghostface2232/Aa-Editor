@@ -19,7 +19,7 @@ const useStyles = makeStyles({
     borderRadius: "8px",
     padding: "4px 4px 4px 10px",
     boxShadow: tokens.shadow8,
-    width: "170px",
+    width: "120px",
     pointerEvents: "auto",
   },
   input: {
