@@ -144,6 +144,10 @@
 }
 
 /* ─── 코드블럭 ─── */
+.ProseMirror .noten-code-block {
+  margin-bottom: 0;
+}
+
 .ProseMirror pre {
   position: relative;
   background-color: var(--editor-color-code-bg);
@@ -177,6 +181,32 @@
   font-size: inherit;
   color: inherit;
   overflow-x: auto;
+}
+
+.ProseMirror .noten-code-block .noten-mermaid-preview {
+  margin-top: 0;
+  border-top: 1px solid var(--editor-color-border);
+  background-color: var(--editor-color-bg-subtle);
+  padding: 0.75rem 1rem;
+  overflow-x: auto;
+}
+
+.ProseMirror .noten-code-block .noten-mermaid-preview svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+.ProseMirror .noten-code-block .noten-mermaid-error {
+  margin-top: 0;
+  border-top: 1px solid var(--editor-color-border);
+  padding: 0.7rem 1rem;
+  font-family: var(--editor-font-family-mono);
+  font-size: 0.8em;
+  line-height: 1.4;
+  color: #b42318;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 /* ─── 인용문 ─── */
@@ -296,7 +326,7 @@
   overflow: auto;
 }
 
-.ProseMirror :is(p, pre, blockquote, ul, ol, img, table) + :is(p, pre, blockquote, ul, ol, img, table) {
+.ProseMirror :is(p, pre, blockquote, ul, ol, img, table, .noten-code-block) + :is(p, pre, blockquote, ul, ol, img, table, .noten-code-block) {
   margin-top: var(--editor-paragraph-spacing);
 }
 
@@ -400,6 +430,168 @@
   transition: opacity 0.08s ease;
 }
 
+/* ─── 링크 팝오버 ─── */
+.tiptap-link-hover-popover {
+  position: fixed;
+  z-index: 1190;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 8px;
+  border: 1px solid var(--editor-color-border);
+  background: var(--editor-color-bg);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.12);
+}
+
+.tiptap-link-hover-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  width: auto;
+  min-width: 24px;
+  height: 26px;
+  padding: 0 7px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--editor-color-text);
+  cursor: pointer;
+  line-height: 1;
+  outline: none;
+}
+
+.tiptap-link-hover-label {
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.tiptap-link-hover-button:hover {
+  background-color: var(--ui-active-bg);
+  color: var(--editor-color-text);
+}
+
+.tiptap-link-hover-button:focus,
+.tiptap-link-hover-button:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+.tiptap-link-popover {
+  position: fixed;
+  z-index: 1200;
+  width: min(360px, calc(100vw - 16px));
+  padding: 8px;
+  border-radius: 8px;
+  border: 1px solid var(--editor-color-border);
+  background: var(--editor-color-bg);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.12);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tiptap-link-popover-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 6px;
+  background-color: var(--sidebar-search-bg, rgba(0, 0, 0, 0.06));
+}
+
+.tiptap-link-popover-input-prefix {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--editor-color-text-secondary);
+  line-height: 1;
+}
+
+.tiptap-link-popover-input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  color: var(--editor-color-text);
+  font-family: var(--editor-font-family-sans);
+  font-size: 13px;
+  line-height: 28px;
+  outline: none;
+}
+
+.tiptap-link-popover-input::placeholder {
+  color: var(--editor-color-text-secondary);
+}
+
+.tiptap-link-popover-input:focus,
+.tiptap-link-popover-input:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+.tiptap-link-popover-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.tiptap-link-popover-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 6px;
+  border: none;
+  background-color: var(--sidebar-search-bg, rgba(0, 0, 0, 0.06));
+  color: var(--editor-color-text);
+  font-family: var(--editor-font-family-sans);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+  outline: none;
+}
+
+.tiptap-link-popover-button-apply {
+  color: var(--editor-color-text);
+}
+
+.tiptap-link-popover-button:hover {
+  background-color: var(--ui-active-bg);
+}
+
+.tiptap-link-popover-button:focus,
+.tiptap-link-popover-button:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+.tiptap-link-popover-button-danger {
+  color: #d13438;
+}
+
+.tiptap-link-popover-button-danger:hover {
+  background-color: rgba(209, 52, 56, 0.08);
+}
+
+.tiptap-link-popover-button-danger:active {
+  background-color: rgba(209, 52, 56, 0.14);
+}
+
+.tiptap-link-popover-button-danger:focus,
+.tiptap-link-popover-button-danger:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
 /* ═══════════════════════════════════════════
    다크 모드
    ═══════════════════════════════════════════ */
@@ -418,6 +610,16 @@
 [data-theme="dark"] .ProseMirror pre::before {
   background-color: #222222;
   color: #7a7a7a;
+}
+
+[data-theme="dark"] .ProseMirror .noten-code-block .noten-mermaid-preview {
+  border-top-color: #404040;
+  background-color: #202020;
+}
+
+[data-theme="dark"] .ProseMirror .noten-code-block .noten-mermaid-error {
+  border-top-color: #404040;
+  color: #ff8f8f;
 }
 
 [data-theme="dark"] .ProseMirror blockquote {
@@ -479,6 +681,56 @@
 
 [data-theme="dark"] .image-drag-ghost {
   filter: drop-shadow(0 4px 16px rgba(0, 0, 0, 0.4));
+}
+
+[data-theme="dark"] .tiptap-link-popover {
+  border-color: #404040;
+  background: #222222;
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.35);
+}
+
+[data-theme="dark"] .tiptap-link-hover-popover {
+  border-color: #404040;
+  background: #222222;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
+}
+
+[data-theme="dark"] .tiptap-link-hover-button {
+  color: #9e9e9e;
+}
+
+[data-theme="dark"] .tiptap-link-hover-button:hover {
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .tiptap-link-popover-input-wrap {
+  background-color: rgba(255, 255, 255, 0.08);
+}
+
+[data-theme="dark"] .tiptap-link-popover-input-prefix,
+[data-theme="dark"] .tiptap-link-popover-input::placeholder {
+  color: #9e9e9e;
+}
+
+[data-theme="dark"] .tiptap-link-popover-input {
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .tiptap-link-popover-button-apply {
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .tiptap-link-popover-button-danger {
+  color: #ff8f8f;
+}
+
+[data-theme="dark"] .tiptap-link-popover-button-danger:hover {
+  background-color: rgba(255, 143, 143, 0.12);
+  border-color: rgba(255, 143, 143, 0.6);
+}
+
+[data-theme="dark"] .tiptap-link-popover-button-danger:active {
+  background-color: rgba(255, 143, 143, 0.18);
 }
 
 /* ═══════════════════════════════════════════

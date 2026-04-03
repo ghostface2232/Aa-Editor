@@ -32,6 +32,7 @@ import {
   ArrowExportUp20Regular,
   CopySelect20Regular,
   Delete20Regular,
+  Link20Regular,
 } from "@fluentui/react-icons";
 import { getVersion } from "@tauri-apps/api/app";
 import { t } from "../i18n";
@@ -514,6 +515,7 @@ export function SettingsModal({ open, onClose, settings, onUpdate, currentNotesD
                   ["settings.shortcut.showChrome", "Click / Scroll", Code20Regular],
                   ["settings.shortcut.find", "Ctrl+F", Search20Regular],
                   ["settings.shortcut.gotoLine", "Ctrl+G", TextNumberListLtr20Regular],
+                  ["settings.shortcut.link", "Ctrl+K", Link20Regular],
                   ["settings.shortcut.strike", "Ctrl+Shift+X", TextStrikethrough20Regular],
                   ["settings.shortcut.rename", "Ctrl+R / F2", Rename20Regular],
                   ["settings.shortcut.duplicate", "Ctrl+D", DocumentCopy20Regular],

@@ -4,6 +4,7 @@ import {
   forwardRef,
   useRef,
   useCallback,
+  useState,
   type CSSProperties,
 } from "react";
 import { useEditor, EditorContent } from "@tiptap/react";
@@ -12,8 +13,8 @@ import { Plugin, PluginKey, NodeSelection, TextSelection } from "@tiptap/pm/stat
 import { Fragment, Slice } from "@tiptap/pm/model";
 import StarterKit from "@tiptap/starter-kit";
 import Underline from "@tiptap/extension-underline";
+import Link from "@tiptap/extension-link";
 import { Markdown } from "@tiptap/markdown";
-import CodeBlockLowlight from "@tiptap/extension-code-block-lowlight";
 import Image from "@tiptap/extension-image";
 import Placeholder from "@tiptap/extension-placeholder";
 import Typography from "@tiptap/extension-typography";
@@ -23,7 +24,10 @@ import { Table } from "@tiptap/extension-table";
 import { TableRow } from "@tiptap/extension-table-row";
 import { TableCell } from "@tiptap/extension-table-cell";
 import { TableHeader } from "@tiptap/extension-table-header";
+import { autoUpdate, computePosition, flip, offset, shift } from "@floating-ui/dom";
+import { CopySelectRegular, RenameRegular } from "@fluentui/react-icons";
 import { common, createLowlight } from "lowlight";
+import MermaidCodeBlock from "../extensions/MermaidCodeBlock";
 import SlashCommands from "../extensions/SlashCommands";
 import ImageDrop from "../extensions/ImageDrop";
 import { createImageNodeView } from "../extensions/ImageView";
@@ -47,6 +51,9 @@ declare module "@tiptap/core" {
 }
 
 const MD_PATTERN = /^#{1,6}\s|^\s*[-*+]\s|^\s*\d+\.\s|^>\s|^```|^\|.+\||\[.+\]\(.+\)/m;
+type TextRange = { from: number; to: number };
+const LINK_HOVER_CLOSE_DELAY_MS = 300;
+const LINK_HOVER_SAFE_ZONE_PX = 16;
 
 function createPlainTextSlice(editor: Editor, text: string) {
   const normalized = text.replace(/\r\n?/g, "\n");
@@ -126,6 +133,44 @@ function refreshSpellcheckMarkers(editor: Editor, forceFullRefresh = false) {
   if (forceFullRefresh) {
     refreshRenderedContent(editor);
   }
+}
+
+function getSelectionRect(editor: Editor, range: TextRange): DOMRect {
+  try {
+    const start = editor.view.coordsAtPos(range.from);
+    const end = editor.view.coordsAtPos(range.to);
+    const top = Math.min(start.top, end.top);
+    const left = Math.min(start.left, end.left);
+    const right = Math.max(start.right, end.right);
+    const bottom = Math.max(start.bottom, end.bottom);
+    const width = Math.max(1, right - left);
+    const height = Math.max(1, bottom - top);
+
+    return new DOMRect(left, top, width, height);
+  } catch {
+    const rect = editor.view.dom.getBoundingClientRect();
+    return new DOMRect(rect.left, rect.top, Math.max(1, rect.width), Math.max(1, rect.height));
+  }
+}
+
+function normalizeLinkHref(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(trimmed) || trimmed.startsWith("/") || trimmed.startsWith("#")) {
+    return trimmed;
+  }
+
+  return `https://${trimmed}`;
+}
+
+function isPointInExpandedRect(x: number, y: number, rect: DOMRect, expandBy: number): boolean {
+  return (
+    x >= rect.left - expandBy
+    && x <= rect.right + expandBy
+    && y >= rect.top - expandBy
+    && y <= rect.bottom + expandBy
+  );
 }
 
 const MarkdownPaste = Extension.create({
@@ -243,6 +288,7 @@ const TableNodeSelect = Extension.create({
 });
 
 const goToLineCallbackRef: { current: (() => void) | undefined } = { current: undefined };
+const linkPopoverCallbackRef: { current: (() => boolean) | undefined } = { current: undefined };
 
 const GoToLineShortcut = Extension.create({
   name: "goToLineShortcut",
@@ -252,6 +298,18 @@ const GoToLineShortcut = Extension.create({
       "Mod-g": () => {
         goToLineCallbackRef.current?.();
         return true;
+      },
+    };
+  },
+});
+
+const LinkPopoverShortcut = Extension.create({
+  name: "linkPopoverShortcut",
+
+  addKeyboardShortcuts() {
+    return {
+      "Mod-k": () => {
+        return linkPopoverCallbackRef.current?.() ?? false;
       },
     };
   },
@@ -360,6 +418,13 @@ export const TiptapEditor = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
     onGoToLine,
   }, ref) {
     const dirtyRef = useRef(false);
+    const [linkPopoverOpen, setLinkPopoverOpen] = useState(false);
+    const [linkUrl, setLinkUrl] = useState("");
+    const [linkHasValue, setLinkHasValue] = useState(false);
+    const [linkHoverPopoverOpen, setLinkHoverPopoverOpen] = useState(false);
+    const [linkHoverHref, setLinkHoverHref] = useState("");
+    const [linkHoverAnchorEl, setLinkHoverAnchorEl] = useState<HTMLAnchorElement | null>(null);
+    const [linkHoverPos, setLinkHoverPos] = useState<number | null>(null);
     const localeRef = useRef(locale);
     localeRef.current = locale;
     const onGoToLineRef = useRef(onGoToLine);
@@ -367,6 +432,14 @@ export const TiptapEditor = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
     goToLineCallbackRef.current = onGoToLine;
     const spellcheckRef = useRef(spellcheck);
     const spellcheckRefreshFrameRef = useRef<number | null>(null);
+    const linkPopoverRef = useRef<HTMLDivElement | null>(null);
+    const linkInputRef = useRef<HTMLInputElement | null>(null);
+    const linkRangeRef = useRef<TextRange | null>(null);
+    const linkPopoverCleanupRef = useRef<(() => void) | null>(null);
+    const linkHoverPopoverRef = useRef<HTMLDivElement | null>(null);
+    const linkHoverPopoverCleanupRef = useRef<(() => void) | null>(null);
+    const linkHoverCloseTimerRef = useRef<number | null>(null);
+    const linkHoverClientXRef = useRef<number | null>(null);
     const editorStyle = {
       "--editor-paragraph-spacing": `${paragraphSpacing / 50}em`,
     } as CSSProperties;
@@ -395,22 +468,60 @@ export const TiptapEditor = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
       }
     }, [onDirtyChange, scheduleSpellcheckRefresh]);
 
+    const closeLinkPopover = useCallback(() => {
+      setLinkPopoverOpen(false);
+      setLinkHasValue(false);
+      linkRangeRef.current = null;
+      linkPopoverCleanupRef.current?.();
+      linkPopoverCleanupRef.current = null;
+    }, []);
+
+    const closeLinkHoverPopover = useCallback(() => {
+      if (linkHoverCloseTimerRef.current !== null) {
+        window.clearTimeout(linkHoverCloseTimerRef.current);
+        linkHoverCloseTimerRef.current = null;
+      }
+      setLinkHoverPopoverOpen(false);
+      setLinkHoverHref("");
+      setLinkHoverAnchorEl(null);
+      setLinkHoverPos(null);
+      linkHoverClientXRef.current = null;
+      linkHoverPopoverCleanupRef.current?.();
+      linkHoverPopoverCleanupRef.current = null;
+    }, []);
+
+    const scheduleCloseLinkHoverPopover = useCallback(() => {
+      if (linkHoverCloseTimerRef.current !== null) return;
+      linkHoverCloseTimerRef.current = window.setTimeout(() => {
+        closeLinkHoverPopover();
+      }, LINK_HOVER_CLOSE_DELAY_MS);
+    }, [closeLinkHoverPopover]);
+
+    const clearLinkHoverCloseTimer = useCallback(() => {
+      if (linkHoverCloseTimerRef.current !== null) {
+        window.clearTimeout(linkHoverCloseTimerRef.current);
+        linkHoverCloseTimerRef.current = null;
+      }
+    }, []);
+
+    const openLinkPopoverAtRange = useCallback((range: TextRange, href: string) => {
+      linkRangeRef.current = range;
+      setLinkUrl(href);
+      setLinkHasValue(Boolean(href));
+      setLinkPopoverOpen(true);
+    }, []);
+
     const editor = useEditor({
       extensions: [
         StarterKit.configure({ codeBlock: false, underline: false }),
         Markdown,
-        CodeBlockLowlight.extend({
-          renderHTML({ node, HTMLAttributes }) {
-            return [
-              "pre",
-              {
-                ...HTMLAttributes,
-                "data-language": node.attrs.language || "",
-              },
-              ["code", { class: node.attrs.language ? `language-${node.attrs.language}` : null }, 0],
-            ];
-          },
-        }).configure({ lowlight }),
+        Link.configure({
+          autolink: true,
+          linkOnPaste: true,
+          openOnClick: false,
+          defaultProtocol: "https",
+        }),
+        MermaidCodeBlock.configure({ lowlight }),
         Image.configure({ allowBase64: true }).extend({
           renderMarkdown(node) {
             const src = node.attrs?.src ?? "";
@@ -448,6 +559,7 @@ export const TiptapEditor = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
         TextContextMenu,
         SearchHighlight,
         GoToLineShortcut,
+        LinkPopoverShortcut,
       ],
       content: initialMarkdown,
       contentType: "markdown",
@@ -459,6 +571,90 @@ export const TiptapEditor = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
       },
     });
 
+    const triggerLinkPopover = useCallback(() => {
+      if (!editor || !editable) return false;
+
+      if (linkPopoverOpen) {
+        closeLinkPopover();
+        return true;
+      }
+
+      const initialSelection = editor.state.selection;
+      const hasSelection = !initialSelection.empty;
+      const canExpandLink = editor.isActive("link");
+
+      if (!hasSelection && !canExpandLink) {
+        return false;
+      }
+
+      if (!hasSelection && canExpandLink) {
+        editor.chain().focus().extendMarkRange("link").run();
+      }
+
+      const { from, to, empty } = editor.state.selection;
+      if (empty || from === to) {
+        return false;
+      }
+
+      const href = editor.getAttributes("link").href;
+      const currentUrl = typeof href === "string" ? href : "";
+      openLinkPopoverAtRange({ from, to }, currentUrl);
+      return true;
+    }, [closeLinkPopover, editable, editor, linkPopoverOpen, openLinkPopoverAtRange]);
+
+    linkPopoverCallbackRef.current = triggerLinkPopover;
+
+    const applyLinkFromPopover = useCallback(() => {
+      if (!editor) return;
+      const range = linkRangeRef.current;
+      if (!range || range.from === range.to) return;
+
+      const href = normalizeLinkHref(linkUrl);
+      const chain = editor.chain().focus().setTextSelection({ from: range.from, to: range.to });
+      if (href) {
+        chain.setLink({ href }).run();
+      } else {
+        chain.unsetLink().run();
+      }
+
+      closeLinkPopover();
+      editor.commands.focus();
+    }, [closeLinkPopover, editor, linkUrl]);
+
+    const removeLinkFromPopover = useCallback(() => {
+      if (!editor) return;
+      const range = linkRangeRef.current;
+      if (!range || range.from === range.to) return;
+
+      editor.chain().focus().setTextSelection({ from: range.from, to: range.to }).unsetLink().run();
+      closeLinkPopover();
+      editor.commands.focus();
+    }, [closeLinkPopover, editor]);
+
+    const copyHoveredLink = useCallback(async () => {
+      const href = linkHoverHref.trim();
+      if (!href) return;
+      try {
+        await navigator.clipboard.writeText(href);
+      } catch {
+        // no-op
+      }
+      closeLinkHoverPopover();
+    }, [closeLinkHoverPopover, linkHoverHref]);
+
+    const editHoveredLink = useCallback(() => {
+      if (!editor || linkHoverPos == null) return;
+
+      editor.chain().focus().setTextSelection(linkHoverPos).extendMarkRange("link").run();
+      const { from, to, empty } = editor.state.selection;
+      if (empty || from === to) return;
+
+      const href = editor.getAttributes("link").href;
+      const currentUrl = typeof href === "string" ? href : "";
+      closeLinkHoverPopover();
+      openLinkPopoverAtRange({ from, to }, currentUrl);
+    }, [closeLinkHoverPopover, editor, linkHoverPos, openLinkPopoverAtRange]);
+
     useEffect(() => {
       if (editor && onReady) onReady();
     }, [editor, onReady]);
@@ -468,13 +664,15 @@ export const TiptapEditor = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
         editor.storage.readonlyGuard.readonly = !editable;
         if (!editable) {
           dirtyRef.current = false;
+          closeLinkPopover();
+          closeLinkHoverPopover();
           // Note quiet 상태 전환 시 이미지 선택/핸들/아웃라인 해제
           if (editor.state.selection instanceof NodeSelection) {
             editor.commands.setTextSelection(0);
           }
         }
       }
-    }, [editor, editable]);
+    }, [closeLinkHoverPopover, closeLinkPopover, editor, editable]);
 
     useEffect(() => {
       if (editor?.storage.slashCommands) {
@@ -505,7 +703,125 @@ export const TiptapEditor = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
       if (spellcheckRefreshFrameRef.current !== null) {
         cancelAnimationFrame(spellcheckRefreshFrameRef.current);
       }
+      if (linkHoverCloseTimerRef.current !== null) {
+        window.clearTimeout(linkHoverCloseTimerRef.current);
+      }
+      linkHoverPopoverCleanupRef.current?.();
+      linkPopoverCleanupRef.current?.();
     }, []);
+
+    useEffect(() => {
+      if (!linkPopoverOpen) return;
+      const popoverEl = linkPopoverRef.current;
+      const range = linkRangeRef.current;
+      if (!editor || !popoverEl || !range) return;
+
+      const reference = {
+        contextElement: editor.view.dom,
+        getBoundingClientRect: () => getSelectionRect(editor, range),
+      };
+
+      const updatePosition = () => {
+        void computePosition(reference, popoverEl, {
+          strategy: "fixed",
+          placement: "top",
+          middleware: [offset(10), flip(), shift({ padding: 8 })],
+        }).then(({ x, y }) => {
+          popoverEl.style.left = `${x}px`;
+          popoverEl.style.top = `${y}px`;
+        });
+      };
+
+      const cleanup = autoUpdate(reference, popoverEl, updatePosition, { animationFrame: true });
+      linkPopoverCleanupRef.current = cleanup;
+      updatePosition();
+
+      requestAnimationFrame(() => {
+        linkInputRef.current?.focus();
+        linkInputRef.current?.select();
+      });
+
+      return () => {
+        cleanup();
+        if (linkPopoverCleanupRef.current === cleanup) {
+          linkPopoverCleanupRef.current = null;
+        }
+      };
+    }, [editor, linkPopoverOpen]);
+
+    useEffect(() => {
+      if (!linkPopoverOpen) return;
+
+      const handleMouseDown = (event: MouseEvent) => {
+        const target = event.target as Node | null;
+        if (target && linkPopoverRef.current?.contains(target)) {
+          return;
+        }
+        closeLinkPopover();
+      };
+
+      window.addEventListener("mousedown", handleMouseDown, true);
+      return () => window.removeEventListener("mousedown", handleMouseDown, true);
+    }, [closeLinkPopover, linkPopoverOpen]);
+
+    useEffect(() => {
+      if (linkPopoverOpen) {
+        closeLinkHoverPopover();
+      }
+    }, [closeLinkHoverPopover, linkPopoverOpen]);
+
+    useEffect(() => {
+      if (!linkHoverPopoverOpen) return;
+      const popoverEl = linkHoverPopoverRef.current;
+      const anchorEl = linkHoverAnchorEl;
+      if (!editor || !popoverEl || !anchorEl) return;
+
+      const reference = {
+        contextElement: editor.view.dom,
+        getBoundingClientRect: () => {
+          const anchorRect = anchorEl.getBoundingClientRect();
+          const x = linkHoverClientXRef.current ?? (anchorRect.left + anchorRect.right) / 2;
+          return new DOMRect(x, anchorRect.top, 0, Math.max(1, anchorRect.height));
+        },
+      };
+
+      const updatePosition = () => {
+        void computePosition(reference, popoverEl, {
+          strategy: "fixed",
+          placement: "top-start",
+          middleware: [offset(6), flip(), shift({ padding: 8 })],
+        }).then(({ x, y }) => {
+          popoverEl.style.left = `${x}px`;
+          popoverEl.style.top = `${y}px`;
+        });
+      };
+
+      const cleanup = autoUpdate(reference, popoverEl, updatePosition, { animationFrame: true });
+      linkHoverPopoverCleanupRef.current = cleanup;
+      updatePosition();
+
+      return () => {
+        cleanup();
+        if (linkHoverPopoverCleanupRef.current === cleanup) {
+          linkHoverPopoverCleanupRef.current = null;
+        }
+      };
+    }, [editor, linkHoverAnchorEl, linkHoverPopoverOpen]);
+
+    useEffect(() => {
+      if (!linkHoverPopoverOpen) return;
+
+      const handleMouseDown = (event: MouseEvent) => {
+        const target = event.target as Node | null;
+        if (target && linkHoverPopoverRef.current?.contains(target)) {
+          return;
+        }
+        closeLinkHoverPopover();
+      };
+
+      window.addEventListener("mousedown", handleMouseDown, true);
+      return () => window.removeEventListener("mousedown", handleMouseDown, true);
+    }, [closeLinkHoverPopover, linkHoverPopoverOpen]);
 
     useImperativeHandle(
       ref,
@@ -516,6 +832,8 @@ export const TiptapEditor = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
         },
         setContent: (markdown: string) => {
           if (!editor) return;
+          closeLinkPopover();
+          closeLinkHoverPopover();
           const wasReadonly = editor.storage.readonlyGuard.readonly;
           editor.storage.readonlyGuard.readonly = false;
           editor.commands.setContent(markdown, {
@@ -533,11 +851,13 @@ export const TiptapEditor = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
           editor.storage.readonlyGuard.readonly = !value;
           if (!value) {
             dirtyRef.current = false;
+            closeLinkPopover();
+            closeLinkHoverPopover();
           }
         },
         getEditor: () => editor,
       }),
-      [editor],
+      [closeLinkHoverPopover, closeLinkPopover, editor, scheduleSpellcheckRefresh],
     );
 
     return (
@@ -568,8 +888,152 @@ export const TiptapEditor = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
             createTiptapTextContextMenuContext(editor),
           );
         }}
+        onMouseMoveCapture={(event) => {
+          if (!editor || linkPopoverOpen) return;
+          const mouseX = event.clientX;
+          const mouseY = event.clientY;
+
+          if (linkHoverPopoverOpen) {
+            const popoverRect = linkHoverPopoverRef.current?.getBoundingClientRect();
+            if (popoverRect && isPointInExpandedRect(mouseX, mouseY, popoverRect, LINK_HOVER_SAFE_ZONE_PX)) {
+              clearLinkHoverCloseTimer();
+              return;
+            }
+          }
+
+          const target = event.target as HTMLElement | null;
+          const anchor = target?.closest("a") as HTMLAnchorElement | null;
+          if (!anchor || !editor.view.dom.contains(anchor)) {
+            if (linkHoverPopoverOpen) {
+              scheduleCloseLinkHoverPopover();
+            }
+            return;
+          }
+
+          const href = (anchor.getAttribute("href") ?? "").trim();
+          if (!href) {
+            if (linkHoverPopoverOpen) {
+              scheduleCloseLinkHoverPopover();
+            }
+            return;
+          }
+
+          const pos = editor.view.posAtCoords({ left: mouseX, top: mouseY })?.pos;
+          if (typeof pos !== "number") {
+            if (linkHoverPopoverOpen) {
+              scheduleCloseLinkHoverPopover();
+            }
+            return;
+          }
+
+          clearLinkHoverCloseTimer();
+          if (!linkHoverPopoverOpen) {
+            linkHoverClientXRef.current = mouseX;
+            setLinkHoverPopoverOpen(true);
+            setLinkHoverAnchorEl(anchor);
+            setLinkHoverPos(pos);
+            setLinkHoverHref(href);
+            return;
+          }
+
+          if (linkHoverAnchorEl !== anchor) {
+            scheduleCloseLinkHoverPopover();
+            return;
+          }
+
+          if (linkHoverPos == null) {
+            setLinkHoverPos(pos);
+          }
+        }}
+        onMouseLeave={() => {
+          if (linkHoverPopoverOpen) {
+            scheduleCloseLinkHoverPopover();
+          }
+        }}
       >
         <EditorContent editor={editor} />
+        {linkHoverPopoverOpen && !linkPopoverOpen && (
+          <div
+            ref={linkHoverPopoverRef}
+            className="tiptap-link-hover-popover"
+            role="toolbar"
+            aria-label={t("link.popover.title", locale)}
+            onMouseDown={(event) => event.stopPropagation()}
+            onMouseEnter={clearLinkHoverCloseTimer}
+            onMouseLeave={scheduleCloseLinkHoverPopover}
+          >
+            <button
+              type="button"
+              className="tiptap-link-hover-button"
+              aria-label={t("link.hover.copy", locale)}
+              onClick={() => {
+                void copyHoveredLink();
+              }}
+            >
+              <CopySelectRegular fontSize={16} />
+              <span className="tiptap-link-hover-label">{t("link.hover.copyShort", locale)}</span>
+            </button>
+            <button
+              type="button"
+              className="tiptap-link-hover-button"
+              aria-label={t("link.hover.edit", locale)}
+              onClick={editHoveredLink}
+            >
+              <RenameRegular fontSize={16} />
+              <span className="tiptap-link-hover-label">{t("link.hover.editShort", locale)}</span>
+            </button>
+          </div>
+        )}
+        {linkPopoverOpen && (
+          <div
+            ref={linkPopoverRef}
+            className="tiptap-link-popover"
+            role="dialog"
+            aria-label={t("link.popover.title", locale)}
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="tiptap-link-popover-input-wrap">
+              <span className="tiptap-link-popover-input-prefix">URL</span>
+              <input
+                ref={linkInputRef}
+                className="tiptap-link-popover-input"
+                type="text"
+                value={linkUrl}
+                onChange={(event) => setLinkUrl(event.target.value)}
+                placeholder={t("link.popover.placeholder", locale)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    applyLinkFromPopover();
+                  }
+                  if (event.key === "Escape") {
+                    event.preventDefault();
+                    closeLinkPopover();
+                    editor?.commands.focus();
+                  }
+                }}
+              />
+            </div>
+            <div className="tiptap-link-popover-actions">
+              <button
+                type="button"
+                className="tiptap-link-popover-button tiptap-link-popover-button-apply"
+                onClick={applyLinkFromPopover}
+              >
+                {t("link.popover.apply", locale)}
+              </button>
+              {linkHasValue && (
+                <button
+                  type="button"
+                  className="tiptap-link-popover-button tiptap-link-popover-button-danger"
+                  onClick={removeLinkFromPopover}
+                >
+                  {t("link.popover.remove", locale)}
+                </button>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     );
   },

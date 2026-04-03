@@ -8,6 +8,7 @@ import {
   type SlashCommandListRef,
 } from "../components/SlashCommand";
 import { pickAndInsertImage } from "./ImageDrop";
+import { insertMermaidCodeBlock } from "./mermaidCommands";
 import { t, type I18nKey } from "../i18n";
 import type { Locale } from "../hooks/useSettings";
 
@@ -67,6 +68,7 @@ const SlashCommands = Extension.create({
               popup = document.createElement("div");
               popup.style.position = "fixed";
               popup.style.zIndex = "50";
+              applyPopupTheme(popup);
               popup.appendChild(component.element);
               document.body.appendChild(popup);
 
@@ -75,7 +77,10 @@ const SlashCommands = Extension.create({
 
             onUpdate: (props: SuggestionProps) => {
               component?.updateProps(props);
-              if (popup) updatePosition(popup, props);
+              if (popup) {
+                applyPopupTheme(popup);
+                updatePosition(popup, props);
+              }
             },
 
             onKeyDown: (props: { event: KeyboardEvent }) => {
@@ -104,6 +109,14 @@ const SlashCommands = Extension.create({
 
 const MENU_MAX_HEIGHT = 320;
 const GAP = 4;
+
+function getCurrentTheme(): "light" | "dark" {
+  return document.querySelector("[data-theme='dark']") ? "dark" : "light";
+}
+
+function applyPopupTheme(popup: HTMLDivElement) {
+  popup.setAttribute("data-theme", getCurrentTheme());
+}
 
 function updatePosition(popup: HTMLDivElement, props: SuggestionProps) {
   const { clientRect } = props;
@@ -157,6 +170,8 @@ const SLASH_DEFS: SlashItemDef[] = [
     command: ({ editor, range }) => { editor.chain().focus().deleteRange(range).toggleBlockquote().run(); } },
   { titleKey: "slash.codeBlock", descKey: "slash.codeBlock.desc", searchTerms: ["code", "codeblock", "코드"], icon: "CodeBlock",
     command: ({ editor, range }) => { editor.chain().focus().deleteRange(range).toggleCodeBlock().run(); } },
+  { titleKey: "slash.mermaid", descKey: "slash.mermaid.desc", searchTerms: ["mermaid", "diagram", "flowchart", "다이어그램"], icon: "CodeBlock",
+    command: ({ editor, range }) => { editor.chain().focus().deleteRange(range).run(); insertMermaidCodeBlock(editor); } },
   { titleKey: "slash.hr", descKey: "slash.hr.desc", searchTerms: ["hr", "divider", "horizontal", "구분"], icon: "LineHorizontal1",
     command: ({ editor, range }) => { editor.chain().focus().deleteRange(range).setHorizontalRule().run(); } },
   { titleKey: "slash.image", descKey: "slash.image.desc", searchTerms: ["image", "img", "사진", "이미지"], icon: "ImageAdd",

@@ -31,6 +31,7 @@ import {
 } from "@fluentui/react-icons";
 import { PillSelector } from "./PillSelector";
 import { pickAndInsertImage } from "../extensions/ImageDrop";
+import { insertMermaidCodeBlock } from "../extensions/mermaidCommands";
 import { t } from "../i18n";
 import type { EditorSurface } from "../hooks/useMarkdownState";
 import type { Editor } from "@tiptap/react";
@@ -364,6 +365,9 @@ export function EditorToolbar({
               {tb(i("tool.codeBlock"), <CodeBlockRegular />,
                 () => editor?.chain().focus().toggleCodeBlock().run(),
                 editor?.isActive("codeBlock") ?? false)}
+              {tb(i("tool.mermaid"), <CodeBlockRegular />,
+                () => { if (editor) insertMermaidCodeBlock(editor); },
+                editor?.isActive("codeBlock", { language: "mermaid" }) ?? false)}
 
               <Divider vertical className={styles.divider} />
 
