@@ -15,6 +15,7 @@ const EDGE_LABEL_PILL_MIN_SIDE_CAP_PX = 14;
 const MERMAID_TOGGLE_ICON_UP = '<svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path fill="currentColor" d="M10.53 7.22a.75.75 0 0 0-1.06 0L5.22 11.47a.75.75 0 1 0 1.06 1.06L10 8.81l3.72 3.72a.75.75 0 0 0 1.06-1.06l-4.25-4.25Z"/></svg>';
 const MERMAID_TOGGLE_ICON_DOWN = '<svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path fill="currentColor" d="M5.22 8.53a.75.75 0 0 1 1.06-1.06L10 11.19l3.72-3.72a.75.75 0 0 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 8.53Z"/></svg>';
 type MermaidApi = typeof import("mermaid")["default"];
+type Rect = { x: number; y: number; width: number; height: number };
 
 let mermaidInitialized = false;
 let mermaidRenderCount = 0;
@@ -227,7 +228,6 @@ class MermaidCodeBlockView implements NodeView {
 
     this.codeCollapsed = next;
     this.dom.classList.toggle("is-code-collapsed", next);
-    this.preElement.classList.toggle("is-code-collapsed", next);
     this.codeElement.hidden = next;
     this.syncToggleButton();
   }
@@ -249,40 +249,7 @@ class MermaidCodeBlockView implements NodeView {
       group.querySelectorAll<SVGElement>(".noten-edge-pill").forEach((pill) => pill.remove());
 
       const labelGroup = group.querySelector<SVGGElement>(".label") ?? group;
-      let labelBox: DOMRect | SVGRect | null = null;
-      const contentCandidates = [
-        ...Array.from(labelGroup.querySelectorAll<SVGGraphicsElement>("text, foreignObject")),
-      ];
-
-      for (const target of contentCandidates) {
-        try {
-          const box = this.getBBoxInAncestorCoords(target, group);
-          if (Number.isFinite(box.x) && Number.isFinite(box.y) && box.width > 0 && box.height > 0) {
-            if (!labelBox) {
-              labelBox = box;
-            } else {
-              const minX = Math.min(labelBox.x, box.x);
-              const minY = Math.min(labelBox.y, box.y);
-              const maxX = Math.max(labelBox.x + labelBox.width, box.x + box.width);
-              const maxY = Math.max(labelBox.y + labelBox.height, box.y + box.height);
-              labelBox = { x: minX, y: minY, width: maxX - minX, height: maxY - minY } as SVGRect;
-            }
-          }
-        } catch {
-          // Ignore non-measurable target.
-        }
-      }
-
-      if (!labelBox) {
-        try {
-          const direct = this.getBBoxInAncestorCoords(labelGroup, group);
-          if (Number.isFinite(direct.x) && Number.isFinite(direct.y) && direct.width > 0 && direct.height > 0) {
-            labelBox = direct;
-          }
-        } catch {
-          // Keep null and skip.
-        }
-      }
+      const labelBox = this.resolveLabelBox(labelGroup, group);
 
       if (!labelBox) {
         return;
@@ -302,9 +269,7 @@ class MermaidCodeBlockView implements NodeView {
       const pillY = labelBox.y - EDGE_LABEL_PILL_PADDING_Y;
       const pillRadius = pillHeight / 2;
 
-      for (const oldBg of Array.from(group.querySelectorAll<SVGElement>(".noten-edge-pill, .labelBkg, .background, .label rect"))) {
-        oldBg.remove();
-      }
+      this.clearLegacyEdgeLabelBackgrounds(group);
 
       const pill = document.createElementNS(svgNs, "rect");
       pill.setAttribute("class", "noten-edge-pill");
@@ -319,23 +284,78 @@ class MermaidCodeBlockView implements NodeView {
     });
   }
 
+  private resolveLabelBox(labelGroup: SVGGraphicsElement, group: SVGGraphicsElement): Rect | null {
+    let labelBox: Rect | null = null;
+    const contentCandidates = labelGroup.querySelectorAll<SVGGraphicsElement>("text, foreignObject");
+
+    for (const target of contentCandidates) {
+      const box = this.getBBoxInAncestorCoordsSafe(target, group);
+      labelBox = this.mergeRects(labelBox, box);
+    }
+
+    if (labelBox) {
+      return labelBox;
+    }
+
+    return this.getBBoxInAncestorCoordsSafe(labelGroup, group);
+  }
+
+  private clearLegacyEdgeLabelBackgrounds(group: SVGGraphicsElement) {
+    const oldBackgrounds = group.querySelectorAll<SVGElement>(".noten-edge-pill, .labelBkg, .background, .label rect");
+    oldBackgrounds.forEach((element) => element.remove());
+  }
+
+  private mergeRects(base: Rect | null, candidate: Rect | null): Rect | null {
+    if (!candidate) {
+      return base;
+    }
+    if (!base) {
+      return candidate;
+    }
+
+    const minX = Math.min(base.x, candidate.x);
+    const minY = Math.min(base.y, candidate.y);
+    const maxX = Math.max(base.x + base.width, candidate.x + candidate.width);
+    const maxY = Math.max(base.y + base.height, candidate.y + candidate.height);
+    return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+  }
+
+  private getBBoxInAncestorCoordsSafe(
+    element: SVGGraphicsElement,
+    ancestor: SVGGraphicsElement,
+  ): Rect | null {
+    try {
+      const rect = this.getBBoxInAncestorCoords(element, ancestor);
+      if (!this.isValidRect(rect)) {
+        return null;
+      }
+      return rect;
+    } catch {
+      return null;
+    }
+  }
+
+  private isValidRect(rect: Rect): boolean {
+    return Number.isFinite(rect.x) && Number.isFinite(rect.y) && rect.width > 0 && rect.height > 0;
+  }
+
   private getBBoxInAncestorCoords(
     element: SVGGraphicsElement,
     ancestor: SVGGraphicsElement,
-  ): SVGRect {
+  ): Rect {
     const box = element.getBBox();
     const elementCtm = element.getCTM();
     const ancestorCtm = ancestor.getCTM();
 
     if (!elementCtm || !ancestorCtm) {
-      return box as SVGRect;
+      return { x: box.x, y: box.y, width: box.width, height: box.height };
     }
 
     let ancestorInverse: DOMMatrix;
     try {
       ancestorInverse = ancestorCtm.inverse();
     } catch {
-      return box as SVGRect;
+      return { x: box.x, y: box.y, width: box.width, height: box.height };
     }
 
     const toAncestor = ancestorInverse.multiply(elementCtm);
@@ -358,7 +378,7 @@ class MermaidCodeBlockView implements NodeView {
       y: minY,
       width: Math.max(0, maxX - minX),
       height: Math.max(0, maxY - minY),
-    } as SVGRect;
+    };
   }
 
   private applyEdgeLabelPillShapeToCurrentPreview() {
