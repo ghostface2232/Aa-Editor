@@ -618,19 +618,25 @@ export function SettingsModal({ open, onClose, settings, onUpdate, currentNotesD
                     <div style={{ fontSize: "12px", color: tokens.colorNeutralForeground3, lineHeight: "1.6" }}>
                       {locale === "ko" ? (
                         <>
-                          · Note surface를 상시 편집 구조로 정리<br />
-                          · Note / Markdown 모두 동일한 상단 chrome 표시 규칙 적용<br />
-                          · 초기 로딩 중 문서 준비 전 입력 유실 방지<br />
-                          · Markdown과 호환되지 않는 TextAlign 확장 제거<br />
-                          · 하단 스크롤 구간의 상태바 떨림 현상 완화
+                          · 사이드바 그룹 기능 추가 (드래그 앤 드롭, 제목 정렬, 단축키)<br />
+                          · Mermaid 다이어그램 렌더링 및 소스 토글 지원<br />
+                          · 링크 팝오버 및 테마 연동 UI 개선<br />
+                          · Ctrl+G 행 이동 단축키 지원<br />
+                          · 자동 저장 시 그룹 데이터 유실 방지<br />
+                          · 사이드바 토글, 툴바 레이아웃, 상태바 안정성 개선<br />
+                          · 설정 모달 업데이트 버튼 레이아웃 수정<br />
+                          · 내부 코드 구조 리팩토링 (App, Sidebar 모듈 분리)
                         </>
                       ) : (
                         <>
-                          · Simplified the Note surface to stay always editable<br />
-                          · Unified top chrome visibility behavior across Note and Markdown<br />
-                          · Prevented input loss before the first document is ready<br />
-                          · Removed the markdown-incompatible TextAlign extension<br />
-                          · Reduced status bar jitter near the bottom scroll boundary
+                          · Added sidebar group feature (drag-and-drop, title sort, shortcuts)<br />
+                          · Mermaid diagram rendering with source toggle support<br />
+                          · Link popover and theme-aligned UI refinements<br />
+                          · Ctrl+G go-to-line shortcut support<br />
+                          · Fixed group data loss during auto-save<br />
+                          · Improved sidebar toggle, toolbar layout, and status bar stability<br />
+                          · Fixed settings modal update button layout<br />
+                          · Internal code refactoring (App, Sidebar module extraction)
                         </>
                       )}
                     </div>
