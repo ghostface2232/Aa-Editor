@@ -412,11 +412,9 @@ function App() {
   }, [fs.newNote, state.setSurface]);
 
   const handleToggleGoToLine = useCallback(() => {
-    if (state.surface === "markdown") {
-      setDocSearchOpen(false);
-      setDocGoToLineOpen((o) => !o);
-    }
-  }, [state.surface]);
+    setDocSearchOpen(false);
+    setDocGoToLineOpen((o) => !o);
+  }, []);
 
   useKeyboardShortcuts({
     activeCmView,
@@ -445,11 +443,6 @@ function App() {
     return () => window.removeEventListener("wheel", handleWheel);
   }, []);
 
-  useEffect(() => {
-    if (state.surface !== "markdown" && docGoToLineOpen) {
-      setDocGoToLineOpen(false);
-    }
-  }, [docGoToLineOpen, state.surface]);
 
   // 마우스 클릭 후 버튼류 요소 자동 blur → Esc/Space 시 포커스 링 방지
   const settingsOpenRef = useRef(settingsOpen);
@@ -742,7 +735,9 @@ function App() {
                     />
                   ) : (
                     <GoToLineBar
+                      editor={noteEditor}
                       cmView={activeCmView}
+                      isCmMode={showCodeMirror}
                       onClose={() => setDocGoToLineOpen(false)}
                       locale={locale}
                     />

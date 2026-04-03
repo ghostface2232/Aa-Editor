@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { makeStyles, tokens } from "@fluentui/react-components";
 import { DismissRegular } from "@fluentui/react-icons";
+import type { Editor } from "@tiptap/core";
 import type { EditorView as CmEditorView } from "@codemirror/view";
 import { t } from "../i18n";
 import type { Locale } from "../hooks/useSettings";
@@ -18,7 +19,7 @@ const useStyles = makeStyles({
     borderRadius: "8px",
     padding: "4px 4px 4px 10px",
     boxShadow: tokens.shadow8,
-    width: "220px",
+    width: "170px",
     pointerEvents: "auto",
   },
   input: {
@@ -63,19 +64,26 @@ const useStyles = makeStyles({
 });
 
 interface GoToLineBarProps {
+  editor: Editor | null;
   cmView: CmEditorView | null;
+  isCmMode: boolean;
   onClose: () => void;
   locale: Locale;
 }
 
-export function GoToLineBar({ cmView, onClose, locale }: GoToLineBarProps) {
+export function GoToLineBar({ editor, cmView, isCmMode, onClose, locale }: GoToLineBarProps) {
   const styles = useStyles();
   const inputRef = useRef<HTMLInputElement>(null);
   const i = (key: Parameters<typeof t>[0]) => t(key, locale);
-  const totalLines = cmView?.state.doc.lines ?? 0;
-  const currentLine = cmView
-    ? cmView.state.doc.lineAt(cmView.state.selection.main.head).number
-    : 1;
+
+  const totalLines = isCmMode
+    ? (cmView?.state.doc.lines ?? 0)
+    : (editor?.state.doc.childCount ?? 0);
+
+  const currentLine = isCmMode
+    ? (cmView ? cmView.state.doc.lineAt(cmView.state.selection.main.head).number : 1)
+    : (editor ? editor.state.doc.resolve(editor.state.selection.from).index(0) + 1 : 1);
+
   const [lineValue, setLineValue] = useState(String(currentLine));
 
   useEffect(() => {
@@ -88,26 +96,46 @@ export function GoToLineBar({ cmView, onClose, locale }: GoToLineBarProps) {
   }, []);
 
   const jumpToLine = useCallback((rawValue: string) => {
-    if (!cmView) return;
     const trimmed = rawValue.trim();
     if (!/^\d+$/.test(trimmed)) return;
     const parsed = Number.parseInt(trimmed, 10);
-    const clamped = Math.max(1, Math.min(cmView.state.doc.lines, parsed));
-    const line = cmView.state.doc.line(clamped);
-    cmView.dispatch({
-      selection: { anchor: line.from },
-      scrollIntoView: true,
-    });
-    cmView.focus();
-    if (String(clamped) !== rawValue) {
-      setLineValue(String(clamped));
+
+    if (isCmMode) {
+      if (!cmView) return;
+      const clamped = Math.max(1, Math.min(cmView.state.doc.lines, parsed));
+      const line = cmView.state.doc.line(clamped);
+      cmView.dispatch({
+        selection: { anchor: line.from },
+        scrollIntoView: true,
+      });
+      cmView.focus();
+      if (String(clamped) !== rawValue) {
+        setLineValue(String(clamped));
+      }
+    } else {
+      if (!editor) return;
+      const total = editor.state.doc.childCount;
+      const clamped = Math.max(1, Math.min(total, parsed));
+      const targetIndex = clamped - 1;
+      let targetPos = 0;
+      for (let idx = 0; idx < targetIndex; idx++) {
+        targetPos += editor.state.doc.child(idx).nodeSize;
+      }
+      editor.chain().focus().setTextSelection(targetPos + 1).run();
+      if (String(clamped) !== rawValue) {
+        setLineValue(String(clamped));
+      }
     }
-  }, [cmView]);
+  }, [isCmMode, cmView, editor]);
 
   const handleClose = useCallback(() => {
-    cmView?.focus();
+    if (isCmMode) {
+      cmView?.focus();
+    } else {
+      editor?.commands.focus();
+    }
     onClose();
-  }, [cmView, onClose]);
+  }, [isCmMode, cmView, editor, onClose]);
 
   return (
     <div className={styles.wrapper}>
