@@ -654,6 +654,13 @@ function App() {
     state.setSurface("note");
   }, [fs.newNote, state.setSurface]);
 
+  const handleToggleGoToLine = useCallback(() => {
+    if (state.surface === "markdown") {
+      setDocSearchOpen(false);
+      setDocGoToLineOpen((o) => !o);
+    }
+  }, [state.surface]);
+
   // 단축키
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -697,10 +704,7 @@ function App() {
       }
       if (ctrl && !e.shiftKey && key === "g") {
         e.preventDefault();
-        if (state.surface === "markdown") {
-          setDocSearchOpen(false);
-          setDocGoToLineOpen((o) => !o);
-        }
+        handleToggleGoToLine();
         return;
       }
       if (ctrl && e.shiftKey && key === "x" && isEditorShortcutTarget(e.target)) {
@@ -729,6 +733,7 @@ function App() {
     fs.importFile,
     fs.saveFile,
     handleNewNote,
+    handleToggleGoToLine,
     handleToggleSurface,
     noteEditor,
     state.surface,
@@ -1155,6 +1160,7 @@ function App() {
                   onDirtyChange={handleTiptapDirty}
                   onReady={syncEditorRef}
                   onChromeActivate={!showCodeMirror && docReady ? handleShowEditorChrome : undefined}
+                  onGoToLine={handleToggleGoToLine}
                 />
               </div>
 
@@ -1173,6 +1179,7 @@ function App() {
                     wordWrap={settings.wordWrap}
                     onViewReady={(view) => handleMarkdownViewReady(activeDoc?.id ?? null, view)}
                     onChromeActivate={docReady ? handleShowEditorChrome : undefined}
+                    onGoToLine={handleToggleGoToLine}
                   />
                 </div>
               )}
