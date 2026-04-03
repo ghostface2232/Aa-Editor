@@ -452,14 +452,38 @@ export function useNotesLoader(
   return { docs, setDocs, activeIndex, setActiveIndex, groups, setGroups, trashedNotes, setTrashedNotes, isLoading };
 }
 
+function stripInlineMarkdown(text: string): string {
+  let s = text;
+  // links: [text](url) → text
+  s = s.replace(/\[([^\]]*)\]\([^)]*\)/g, "$1");
+  // inline code
+  s = s.replace(/`([^`]*)`/g, "$1");
+  // bold/italic (order matters: longest markers first)
+  s = s.replace(/\*{1,3}(.*?)\*{1,3}/g, "$1");
+  s = s.replace(/_{1,3}(.*?)_{1,3}/g, "$1");
+  // strikethrough
+  s = s.replace(/~~(.*?)~~/g, "$1");
+  // HTML entities
+  s = s.replace(/&[a-zA-Z]+;|&#\d+;/g, " ");
+  return s.trim();
+}
+
 export function deriveTitle(content: string): string {
   if (!content) return "";
   const lines = content.trimStart().split("\n");
   for (const raw of lines) {
     const line = raw.trim();
     if (!line) continue;
-    if (line.startsWith("![") || line.startsWith("<img")) continue;
-    const heading = line.replace(/^#+\s*/, "").replace(/&[a-zA-Z]+;|&#\d+;/g, " ").trim();
+    // skip images and code fences
+    if (line.startsWith("![") || line.startsWith("<img") || line.startsWith("```")) continue;
+    const stripped = line
+      // headings
+      .replace(/^#+\s*/, "")
+      // block quotes (possibly nested)
+      .replace(/^(?:>\s*)+/, "")
+      // unordered list markers
+      .replace(/^[-*+]\s+/, "");
+    const heading = stripInlineMarkdown(stripped);
     if (heading) return heading.slice(0, 20);
   }
   return "";
