@@ -145,7 +145,7 @@ const dict = {
   "settings.shortcut.newFile": { en: "New document", ko: "새 문서" },
   "settings.shortcut.newWindow": { en: "New window", ko: "새 창" },
   "settings.shortcut.find": { en: "Find in document", ko: "문서에서 찾기" },
-  "settings.shortcut.gotoLine": { en: "Go to line (Markdown)", ko: "줄 이동 (Markdown)" },
+  "settings.shortcut.gotoLine": { en: "Go to line", ko: "줄 이동" },
   "settings.shortcut.link": { en: "Insert or edit link", ko: "링크 삽입 / 편집" },
   "settings.shortcut.strike": { en: "Strikethrough", ko: "취소선" },
   "settings.shortcut.rename": { en: "Rename", ko: "이름 바꾸기" },
