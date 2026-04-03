@@ -17,6 +17,7 @@ import {
   TaskListLtrRegular,
   TextQuoteOpeningRegular,
   CodeBlockRegular,
+  FlowchartRegular,
   LineHorizontal1Regular,
   ImageAddRegular,
 } from "@fluentui/react-icons";
@@ -50,6 +51,7 @@ const ICON_MAP: Record<string, React.ReactElement> = {
   TaskListLtr: <TaskListLtrRegular />,
   TextQuoteOpening: <TextQuoteOpeningRegular />,
   CodeBlock: <CodeBlockRegular />,
+  Flowchart: <FlowchartRegular />,
   LineHorizontal1: <LineHorizontal1Regular />,
   ImageAdd: <ImageAddRegular />,
 };

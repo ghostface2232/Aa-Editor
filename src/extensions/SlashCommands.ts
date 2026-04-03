@@ -170,7 +170,7 @@ const SLASH_DEFS: SlashItemDef[] = [
     command: ({ editor, range }) => { editor.chain().focus().deleteRange(range).toggleBlockquote().run(); } },
   { titleKey: "slash.codeBlock", descKey: "slash.codeBlock.desc", searchTerms: ["code", "codeblock", "코드"], icon: "CodeBlock",
     command: ({ editor, range }) => { editor.chain().focus().deleteRange(range).toggleCodeBlock().run(); } },
-  { titleKey: "slash.mermaid", descKey: "slash.mermaid.desc", searchTerms: ["mermaid", "diagram", "flowchart", "다이어그램"], icon: "CodeBlock",
+  { titleKey: "slash.mermaid", descKey: "slash.mermaid.desc", searchTerms: ["mermaid", "diagram", "flowchart", "다이어그램"], icon: "Flowchart",
     command: ({ editor, range }) => { editor.chain().focus().deleteRange(range).run(); insertMermaidCodeBlock(editor); } },
   { titleKey: "slash.hr", descKey: "slash.hr.desc", searchTerms: ["hr", "divider", "horizontal", "구분"], icon: "LineHorizontal1",
     command: ({ editor, range }) => { editor.chain().focus().deleteRange(range).setHorizontalRule().run(); } },

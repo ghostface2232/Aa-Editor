@@ -19,6 +19,7 @@ import {
   TextStrikethroughRegular,
   CodeRegular,
   CodeBlockRegular,
+  FlowchartRegular,
   TextBulletListRegular,
   TextNumberListLtrRegular,
   TaskListLtrRegular,
@@ -365,7 +366,7 @@ export function EditorToolbar({
               {tb(i("tool.codeBlock"), <CodeBlockRegular />,
                 () => editor?.chain().focus().toggleCodeBlock().run(),
                 editor?.isActive("codeBlock") ?? false)}
-              {tb(i("tool.mermaid"), <CodeBlockRegular />,
+              {tb(i("tool.mermaid"), <FlowchartRegular />,
                 () => { if (editor) insertMermaidCodeBlock(editor); },
                 editor?.isActive("codeBlock", { language: "mermaid" }) ?? false)}
 
