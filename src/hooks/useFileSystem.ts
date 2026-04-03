@@ -163,11 +163,11 @@ export function useFileSystem(
     ));
   }, []);
 
-  /** Remove the current doc if it's empty (no content, no customName, not the last doc).
+  /** Remove the leaving doc if it's empty (no content, no customName, not the last doc).
    *  Returns the cleaned docs array. */
-  const pruneEmptyCurrentDoc = useCallback((baseDocs: NoteDoc[]): NoteDoc[] => {
-    const currentActiveIndex = activeIndexRef.current;
-    const leaving = baseDocs[currentActiveIndex];
+  const pruneEmptyCurrentDoc = useCallback((baseDocs: NoteDoc[], leavingDocId: string | null): NoteDoc[] => {
+    if (!leavingDocId) return baseDocs;
+    const leaving = baseDocs.find((d) => d.id === leavingDocId);
     if (!leaving) return baseDocs;
     const currentContent = leaving.content.trim();
     if (currentContent || leaving.customName || baseDocs.length <= 1) return baseDocs;
@@ -181,7 +181,7 @@ export function useFileSystem(
         .filter((g) => g.noteIds.length > 0));
     cancelDocSaveRef?.current?.(leavingId);
 
-    const pruned = baseDocs.filter((_, i) => i !== currentActiveIndex);
+    const pruned = baseDocs.filter((d) => d.id !== leavingDocId);
     setDocs(pruned);
     return pruned;
   }, [cancelDocSaveRef, setDocs, setGroups]);
@@ -286,7 +286,7 @@ export function useFileSystem(
     if (importedDocs.length === 0) return;
 
     const lastImported = importedDocs[importedDocs.length - 1];
-    const prunedDocs = pruneEmptyCurrentDoc(baseDocs);
+    const prunedDocs = pruneEmptyCurrentDoc(baseDocs, activeDocId);
     const nextDocs = [...prunedDocs, ...importedDocs];
     sortAndPersistDocs(nextDocs, lastImported.id, notesSortOrder, setDocs, setActiveIndex, groupsRef.current);
     importedDocs.forEach((doc) => emitDocCreated(doc));
@@ -325,7 +325,7 @@ export function useFileSystem(
       setGroups?.((prev) =>
         prev.map((g) => ({ ...g, noteIds: g.noteIds.filter((id) => id !== leavingId) }))
           .filter((g) => g.noteIds.length > 0));
-      prunedDocs = baseDocs.filter((_, i) => i !== currentActiveIndex);
+      prunedDocs = baseDocs.filter((d) => d.id !== currentDoc.id);
       setDocs(prunedDocs);
     }
 
@@ -379,9 +379,10 @@ export function useFileSystem(
     const didPersistCurrentDoc = await leaveCurrentDoc();
     const baseDocs = didPersistCurrentDoc ? markDocClean(liveDocs, activeDocId) : liveDocs;
 
-    const nextDocs = pruneEmptyCurrentDoc(baseDocs);
-    let targetIndex = index;
-    if (nextDocs.length < baseDocs.length && index > currentActiveIndex) targetIndex = index - 1;
+    const targetDoc = baseDocs[index];
+    const nextDocs = pruneEmptyCurrentDoc(baseDocs, activeDocId);
+    let targetIndex = nextDocs.findIndex((d) => d.id === targetDoc.id);
+    if (targetIndex < 0) targetIndex = 0;
 
     const target = nextDocs[targetIndex];
     setDocs(nextDocs);
@@ -542,7 +543,7 @@ export function useFileSystem(
       }
     }
 
-    const prunedDocs = pruneEmptyCurrentDoc(baseDocs);
+    const prunedDocs = pruneEmptyCurrentDoc(baseDocs, activeDocId);
     const nextDocs = [...prunedDocs, newDoc];
     sortAndPersistDocs(nextDocs, newDoc.id, notesSortOrder, setDocs, setActiveIndex, groupsRef.current);
     loadIntoEditor(tiptapRef, content);
@@ -638,7 +639,7 @@ export function useFileSystem(
       }
     }
 
-    const prunedDocs = pruneEmptyCurrentDoc(baseDocs);
+    const prunedDocs = pruneEmptyCurrentDoc(baseDocs, activeDocId);
     const nextDocs = [...prunedDocs, restoredDoc];
     sortAndPersistDocs(nextDocs, restoredDoc.id, notesSortOrder, setDocs, setActiveIndex, restoredGroups);
     emitDocCreated(restoredDoc);
