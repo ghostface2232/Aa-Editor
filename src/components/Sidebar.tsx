@@ -174,9 +174,10 @@ export function Sidebar({
     onToggleGroupCollapsed,
   });
 
-  // Focus sidebar search input when opened
+  // Focus sidebar search input and scroll to top when opened
   useEffect(() => {
     if (sidebarSearchOpen) {
+      sidebarBodyRef.current?.scrollTo({ top: 0 });
       searchInputRef.current?.focus();
     }
   }, [sidebarSearchOpen]);

@@ -363,6 +363,7 @@ export const useStyles = makeStyles({
     justifyContent: "flex-end",
   },
   searchBoxWrapper: {
+    flexShrink: 0,
     overflow: "hidden",
     maxHeight: "0px",
     opacity: 0,
