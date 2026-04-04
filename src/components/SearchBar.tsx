@@ -13,26 +13,6 @@ import { setCmSearch } from "../extensions/cmSearchHighlight";
 import { t } from "../i18n";
 import type { Locale } from "../hooks/useSettings";
 
-/* ─── inline SVG icons for replace actions ─── */
-
-const ReplaceIcon = () => (
-  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M11 1l3 3-3 3" />
-    <path d="M2 7V5a2 2 0 0 1 2-2h10" />
-    <path d="M5 15l-3-3 3-3" />
-    <path d="M14 9v2a2 2 0 0 1-2 2H2" />
-  </svg>
-);
-
-const ReplaceAllIcon = () => (
-  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M11 1l3 3-3 3" />
-    <path d="M2 4h12" />
-    <path d="M5 15l-3-3 3-3" />
-    <path d="M14 12H2" />
-  </svg>
-);
-
 const useStyles = makeStyles({
   wrapper: {
     position: "absolute",
@@ -51,13 +31,13 @@ const useStyles = makeStyles({
     display: "flex",
     alignItems: "center",
     gap: "2px",
-    padding: "4px 4px 4px 10px",
+    padding: "6px 5px 6px 12px",
   },
   replaceRow: {
     display: "flex",
     alignItems: "center",
     gap: "2px",
-    padding: "0 4px 4px 10px",
+    padding: "0 5px 6px 12px",
     overflow: "hidden",
   },
   input: {
@@ -69,9 +49,10 @@ const useStyles = makeStyles({
     backgroundColor: "transparent",
     color: tokens.colorNeutralForeground1,
     minWidth: 0,
-    lineHeight: "24px",
+    lineHeight: "28px",
     "::placeholder": {
       color: tokens.colorNeutralForeground4,
+      opacity: 0.55,
     },
   },
   count: {
@@ -86,8 +67,8 @@ const useStyles = makeStyles({
     display: "inline-flex",
     alignItems: "center",
     justifyContent: "center",
-    width: "24px",
-    height: "24px",
+    width: "28px",
+    height: "28px",
     border: "none",
     borderRadius: "4px",
     backgroundColor: "transparent",
@@ -101,6 +82,25 @@ const useStyles = makeStyles({
   },
   btnActive: {
     backgroundColor: tokens.colorNeutralBackground1Pressed,
+  },
+  textBtn: {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    height: "28px",
+    border: "none",
+    borderRadius: "4px",
+    backgroundColor: "transparent",
+    color: tokens.colorNeutralForeground2,
+    cursor: "pointer",
+    flexShrink: 0,
+    padding: "0 8px",
+    fontSize: "12px",
+    fontFamily: "inherit",
+    whiteSpace: "nowrap",
+    ":hover": {
+      backgroundColor: tokens.colorNeutralBackground1Hover,
+    },
   },
 });
 
@@ -391,18 +391,18 @@ export function SearchBar({ editor, cmView, isCmMode, onClose, replaceOpen, onTo
           className={mergeClasses(styles.btn, replaceOpen && styles.btnActive)}
           onClick={() => onToggleReplace(!replaceOpen)}
           tabIndex={-1}
-          title={i("search.replacePlaceholder")}
+          title={i("search.replace")}
         >
-          <ArrowSwapRegular fontSize={14} />
+          <ArrowSwapRegular fontSize={16} />
         </button>
         <button className={styles.btn} onClick={goPrev} tabIndex={-1}>
-          <ArrowUpRegular fontSize={14} />
+          <ArrowUpRegular fontSize={16} />
         </button>
         <button className={styles.btn} onClick={goNext} tabIndex={-1}>
-          <ArrowDownRegular fontSize={14} />
+          <ArrowDownRegular fontSize={16} />
         </button>
         <button className={styles.btn} onClick={handleClose} tabIndex={-1}>
-          <DismissRegular fontSize={14} />
+          <DismissRegular fontSize={16} />
         </button>
       </div>
 
@@ -418,11 +418,11 @@ export function SearchBar({ editor, cmView, isCmMode, onClose, replaceOpen, onTo
             placeholder={i("search.replacePlaceholder")}
             spellCheck={false}
           />
-          <button className={styles.btn} onClick={handleReplace} tabIndex={-1} title="Replace">
-            <ReplaceIcon />
+          <button className={styles.textBtn} onClick={handleReplace} tabIndex={-1}>
+            {i("search.replace")}
           </button>
-          <button className={styles.btn} onClick={handleReplaceAll} tabIndex={-1} title="Replace All">
-            <ReplaceAllIcon />
+          <button className={styles.textBtn} onClick={handleReplaceAll} tabIndex={-1}>
+            {i("search.replaceAll")}
           </button>
         </div>
       )}
