@@ -67,6 +67,7 @@ export interface UseKeyboardShortcutsParams {
   docSearchOpen: boolean;
   docGoToLineOpen: boolean;
   setDocSearchOpen: Dispatch<SetStateAction<boolean>>;
+  setDocSearchReplace: Dispatch<SetStateAction<boolean>>;
   setDocGoToLineOpen: Dispatch<SetStateAction<boolean>>;
   onToggleSurface: () => void;
   onToggleGoToLine: () => void;
@@ -82,6 +83,7 @@ export function useKeyboardShortcuts({
   docSearchOpen,
   docGoToLineOpen,
   setDocSearchOpen,
+  setDocSearchReplace,
   setDocGoToLineOpen,
   onToggleSurface,
   onToggleGoToLine,
@@ -126,7 +128,15 @@ export function useKeyboardShortcuts({
       if (ctrl && !e.shiftKey && key === "f") {
         e.preventDefault();
         setDocGoToLineOpen(false);
+        setDocSearchReplace(false);
         setDocSearchOpen((o) => !o);
+        return;
+      }
+      if (ctrl && !e.shiftKey && key === "h") {
+        e.preventDefault();
+        setDocGoToLineOpen(false);
+        setDocSearchOpen(true);
+        setDocSearchReplace(true);
         return;
       }
       if (ctrl && !e.shiftKey && key === "g") {
@@ -164,6 +174,7 @@ export function useKeyboardShortcuts({
     onToggleSurface,
     setDocGoToLineOpen,
     setDocSearchOpen,
+    setDocSearchReplace,
     surface,
     tiptapRef,
   ]);

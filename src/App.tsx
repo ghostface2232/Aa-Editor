@@ -63,6 +63,7 @@ function App() {
   const [sidebarResizing, setSidebarResizing] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [docSearchOpen, setDocSearchOpen] = useState(false);
+  const [docSearchReplace, setDocSearchReplace] = useState(false);
   const [docGoToLineOpen, setDocGoToLineOpen] = useState(false);
   const [sidebarSearchOpen, setSidebarSearchOpen] = useState(false);
   const [sidebarSearchQuery, setSidebarSearchQuery] = useState("");
@@ -433,6 +434,7 @@ function App() {
     docSearchOpen,
     docGoToLineOpen,
     setDocSearchOpen,
+    setDocSearchReplace,
     setDocGoToLineOpen,
     onToggleSurface: handleToggleSurface,
     onToggleGoToLine: handleToggleGoToLine,
@@ -739,7 +741,9 @@ function App() {
                       editor={noteEditor}
                       cmView={activeCmView}
                       isCmMode={showCodeMirror}
-                      onClose={() => setDocSearchOpen(false)}
+                      onClose={() => { setDocSearchOpen(false); setDocSearchReplace(false); }}
+                      replaceOpen={docSearchReplace}
+                      onToggleReplace={setDocSearchReplace}
                       locale={locale}
                     />
                   ) : (

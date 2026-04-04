@@ -145,6 +145,7 @@ const dict = {
   "settings.shortcut.newFile": { en: "New document", ko: "새 문서" },
   "settings.shortcut.newWindow": { en: "New window", ko: "새 창" },
   "settings.shortcut.find": { en: "Find in document", ko: "문서에서 찾기" },
+  "settings.shortcut.replace": { en: "Find and replace", ko: "찾기 및 바꾸기" },
   "settings.shortcut.gotoLine": { en: "Go to line", ko: "줄 이동" },
   "settings.shortcut.link": { en: "Insert or edit link", ko: "링크 삽입 / 편집" },
   "settings.shortcut.strike": { en: "Strikethrough", ko: "취소선" },
@@ -209,6 +210,7 @@ const dict = {
 
   /* ─── Search ─── */
   "search.placeholder": { en: "Find in document", ko: "문서에서 찾기" },
+  "search.replacePlaceholder": { en: "Replace", ko: "바꾸기" },
   "search.gotoLinePlaceholder": { en: "Go to line", ko: "줄 이동" },
   "search.sidebarPlaceholder": { en: "Search notes", ko: "노트 검색" },
   "search.noResults": { en: "No matching notes", ko: "일치하는 노트 없음" },
