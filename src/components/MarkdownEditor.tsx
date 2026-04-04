@@ -2,7 +2,7 @@ import { useMemo, useCallback, useRef } from "react";
 import CodeMirror from "@uiw/react-codemirror";
 import { markdown as cmMarkdown } from "@codemirror/lang-markdown";
 import { languages } from "@codemirror/language-data";
-import { EditorView, keymap } from "@codemirror/view";
+import { EditorView } from "@codemirror/view";
 import { EditorState } from "@codemirror/state";
 import { cmSearchField } from "../extensions/cmSearchHighlight";
 import {
@@ -164,7 +164,6 @@ interface MarkdownEditorProps {
   wordWrap: WordWrap;
   onViewReady?: (view: EditorView) => void;
   onChromeActivate?: () => void;
-  onGoToLine?: () => void;
 }
 
 export function MarkdownEditor({
@@ -176,14 +175,10 @@ export function MarkdownEditor({
   wordWrap,
   onViewReady,
   onChromeActivate,
-  onGoToLine,
 }: MarkdownEditorProps) {
   const localeRef = useRef(locale);
   localeRef.current = locale;
   const viewRef = useRef<EditorView | null>(null);
-  const onGoToLineRef = useRef(onGoToLine);
-  onGoToLineRef.current = onGoToLine;
-
   const extensions = useMemo(() => {
     const hl = buildHighlightStyle(isDarkMode);
     const theme = buildEditorTheme(isDarkMode);
@@ -205,16 +200,7 @@ export function MarkdownEditor({
       },
     });
 
-    const goToLineKeymap = keymap.of([{
-      key: "Mod-g",
-      run: () => {
-        onGoToLineRef.current?.();
-        return true;
-      },
-    }]);
-
     return [
-      goToLineKeymap,
       cmMarkdown({ codeLanguages: languages }),
       syntaxHighlighting(hl),
       EditorView.lineWrapping,

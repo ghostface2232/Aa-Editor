@@ -70,7 +70,6 @@ export interface UseKeyboardShortcutsParams {
   setDocSearchReplace: Dispatch<SetStateAction<boolean>>;
   setDocGoToLineOpen: Dispatch<SetStateAction<boolean>>;
   onToggleSurface: () => void;
-  onToggleGoToLine: () => void;
   onNewNote: () => Promise<void>;
   onImportFile: () => void;
   onSaveFile: () => void;
@@ -86,7 +85,6 @@ export function useKeyboardShortcuts({
   setDocSearchReplace,
   setDocGoToLineOpen,
   onToggleSurface,
-  onToggleGoToLine,
   onNewNote,
   onImportFile,
   onSaveFile,
@@ -141,7 +139,9 @@ export function useKeyboardShortcuts({
       }
       if (ctrl && !e.shiftKey && key === "g") {
         e.preventDefault();
-        onToggleGoToLine();
+        setDocSearchOpen(false);
+        setDocSearchReplace(false);
+        setDocGoToLineOpen((o) => !o);
         return;
       }
       if (ctrl && e.shiftKey && key === "x" && isEditorShortcutTarget(e.target)) {
@@ -170,7 +170,6 @@ export function useKeyboardShortcuts({
     onImportFile,
     onNewNote,
     onSaveFile,
-    onToggleGoToLine,
     onToggleSurface,
     setDocGoToLineOpen,
     setDocSearchOpen,

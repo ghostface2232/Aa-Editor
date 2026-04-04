@@ -422,11 +422,6 @@ function App() {
     state.setSurface("note");
   }, [fs.newNote, state.setSurface]);
 
-  const handleToggleGoToLine = useCallback(() => {
-    setDocSearchOpen(false);
-    setDocGoToLineOpen((o) => !o);
-  }, []);
-
   useKeyboardShortcuts({
     activeCmView,
     tiptapRef,
@@ -437,7 +432,6 @@ function App() {
     setDocSearchReplace,
     setDocGoToLineOpen,
     onToggleSurface: handleToggleSurface,
-    onToggleGoToLine: handleToggleGoToLine,
     onNewNote: handleNewNote,
     onImportFile: fs.importFile,
     onSaveFile: fs.saveFile,
@@ -774,7 +768,6 @@ function App() {
                   onDirtyChange={handleTiptapDirty}
                   onReady={syncEditorRef}
                   onChromeActivate={!showCodeMirror && docReady ? handleShowEditorChrome : undefined}
-                  onGoToLine={handleToggleGoToLine}
                 />
               </div>
 
@@ -793,7 +786,6 @@ function App() {
                     wordWrap={settings.wordWrap}
                     onViewReady={(view) => handleMarkdownViewReady(activeDoc?.id ?? null, view)}
                     onChromeActivate={docReady ? handleShowEditorChrome : undefined}
-                    onGoToLine={handleToggleGoToLine}
                   />
                 </div>
               )}
