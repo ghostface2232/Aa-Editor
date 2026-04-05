@@ -498,7 +498,6 @@ export function SettingsModal({ open, onClose, settings, onUpdate, currentNotesD
                   ["settings.shortcut.newWindow", "Ctrl+Shift+N", WindowNew20Regular],
                   ["settings.shortcut.save", "Ctrl+S", Save20Regular],
                   ["settings.shortcut.import", "Ctrl+O", ArrowDownload20Regular],
-                  ["settings.shortcut.switchSurface", "Ctrl+/", Code20Regular],
                   ["settings.shortcut.showChrome", "Click / Scroll", Code20Regular],
                   ["settings.shortcut.find", "Ctrl+F", Search20Regular],
                   ["settings.shortcut.replace", "Ctrl+H", ArrowSwap20Regular],

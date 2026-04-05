@@ -82,7 +82,8 @@ export function useAutoSave(
     const target = activeDocRef.current;
     if (!target?.filePath) return null;
 
-    const content = getCurrentMarkdown(latestState, latestEditorRef);
+    const content = getCurrentMarkdown(latestEditorRef);
+    latestState.primeMarkdown(content);
     const revision = (latestRevisionByDocRef.current.get(target.id) ?? 0) + 1;
     latestRevisionByDocRef.current.set(target.id, revision);
 
@@ -113,7 +114,7 @@ export function useAutoSave(
       const live = stateRef.current;
       const currentActiveId = live.docs[live.activeIndex]?.id ?? null;
       const currentMarkdown = currentActiveId === snapshot.docId
-        ? getCurrentMarkdown(live.state, live.tiptapRef)
+        ? getCurrentMarkdown(live.tiptapRef)
         : null;
       const activeDocStillMatches = currentActiveId === snapshot.docId
         ? currentMarkdown === snapshot.content
@@ -154,7 +155,6 @@ export function useAutoSave(
 
       if (activeDocStillMatches) {
         live.state.setIsDirty(false);
-        live.state.setTiptapDirty(false);
       }
       return true;
     } catch (err) {

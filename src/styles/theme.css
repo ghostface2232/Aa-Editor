@@ -1,6 +1,6 @@
 /*
  * theme.css
- * Tiptap 에디터와 CodeMirror 에디터가 공유하는 CSS 변수.
+ * Tiptap 에디터가 사용하는 공유 CSS 변수.
  *
  * 색상은 Fluent UI v9 FluentProvider가 DOM에 주입하는 CSS 변수를 직접 참조하므로,
  * webLightTheme ↔ webDarkTheme 전환 시 별도 다크모드 오버라이드 없이 자동 반영된다.

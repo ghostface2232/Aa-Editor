@@ -7,13 +7,6 @@ export const useStyles = makeStyles({
     height: "100vh",
     color: tokens.colorNeutralForeground1,
     position: "relative",
-    transitionProperty: "filter",
-    transitionDuration: "0.2s",
-    transitionTimingFunction: "ease",
-  },
-  rootBlurred: {
-    filter: "blur(4px)",
-    willChange: "filter",
   },
   micaOverlay: {
     position: "absolute",
@@ -180,12 +173,5 @@ export const useStyles = makeStyles({
     transitionDuration: "0.15s",
     transitionTimingFunction: "ease",
     height: "100%",
-  },
-  editorPaneHidden: {
-    opacity: 0,
-    position: "absolute",
-    pointerEvents: "none",
-    height: 0,
-    overflow: "hidden",
   },
 });

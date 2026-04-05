@@ -49,31 +49,22 @@ function sortAndPersistDocs(
 }
 
 export function getCurrentMarkdown(
-  state: MarkdownState,
   tiptapRef: React.RefObject<TiptapEditorHandle | null>,
 ): string {
-  if (state.readCurrentEditor) return state.readCurrentEditor();
-
   const editor = tiptapRef.current?.getEditor();
-  return editor ? editor.getMarkdown() : state.markdown;
-}
-
-function loadIntoEditor(
-  tiptapRef: React.RefObject<TiptapEditorHandle | null>,
-  content: string,
-) {
-  tiptapRef.current?.setContent(content);
+  return editor ? editor.getMarkdown() : "";
 }
 
 function resetDocState(
   state: MarkdownState,
+  tiptapRef: React.RefObject<TiptapEditorHandle | null>,
   filePath: string | null,
   content: string,
 ) {
-  state.setMarkdownRaw(content);
+  tiptapRef.current?.setContent(content);
+  state.primeMarkdown(content);
   state.setFilePath(filePath);
   state.setIsDirty(false);
-  state.setTiptapDirty(false);
 }
 
 export interface FileSystemActions {
@@ -132,7 +123,7 @@ export function useFileSystem(
       return { docs: baseDocs, activeDocId: null as string | null, activeIndex: currentActiveIndex };
     }
 
-    const content = getCurrentMarkdown(state, tiptapRef);
+    const content = getCurrentMarkdown(tiptapRef);
     const fileName = activeDoc.customName
       ? activeDoc.fileName
       : deriveTitle(content) || activeDoc.fileName || getDefaultDocumentTitle(locale, baseDocs.map((doc) => doc.fileName));
@@ -191,7 +182,7 @@ export function useFileSystem(
     const doc = docs[activeIndex];
     if (!doc) return;
 
-    const markdown = getCurrentMarkdown(state, tiptapRef);
+    const markdown = getCurrentMarkdown(tiptapRef);
 
     let targetPath = doc.filePath;
     if (!targetPath) {
@@ -221,18 +212,18 @@ export function useFileSystem(
 
     sortAndPersistDocs(nextDocs, doc.id, notesSortOrder, locale, setDocs, setActiveIndex, groupsRef.current);
     state.setIsDirty(false);
-    state.setTiptapDirty(false);
+    state.primeMarkdown(markdown);
   }, [activeIndex, docs, locale, notesSortOrder, setActiveIndex, setDocs, state, tiptapRef]);
 
   const saveFileAs = useCallback(async () => {
-    const markdown = getCurrentMarkdown(state, tiptapRef);
+    const markdown = getCurrentMarkdown(tiptapRef);
     const doc = docs[activeIndex];
     const defaultName = doc?.filePath ? getFileName(doc.filePath) : "untitled.md";
     const selected = await save({ title: t("dialog.export", locale), filters: MD_FILTERS, defaultPath: defaultName });
     if (!selected) return;
     markOwnWrite(selected);
     await writeTextFile(selected, markdown);
-  }, [activeIndex, docs, state, tiptapRef]);
+  }, [activeIndex, docs, locale, tiptapRef]);
 
   const importFiles = useCallback(async (paths: string[]) => {
     const sourcePaths = paths.filter(Boolean);
@@ -292,8 +283,7 @@ export function useFileSystem(
     sortAndPersistDocs(nextDocs, lastImported.id, notesSortOrder, locale, setDocs, setActiveIndex, groupsRef.current);
     importedDocs.forEach((doc) => emitDocCreated(doc));
 
-    loadIntoEditor(tiptapRef, lastImported.content);
-    resetDocState(state, lastImported.filePath, lastImported.content);
+    resetDocState(state, tiptapRef, lastImported.filePath, lastImported.content);
     notifyActiveDocRef?.current?.(lastImported.id, lastImported.filePath);
   }, [getLiveDocsSnapshot, leaveCurrentDoc, markDocClean, notesSortOrder, setActiveIndex, setDocs, state, tiptapRef, pruneEmptyCurrentDoc]);
 
@@ -355,8 +345,7 @@ export function useFileSystem(
       const nextDocs = [...prunedDocs, newDoc];
       sortAndPersistDocs(nextDocs, newDoc.id, notesSortOrder, locale, setDocs, setActiveIndex, groupsRef.current);
       emitDocCreated(newDoc);
-      loadIntoEditor(tiptapRef, "");
-      resetDocState(state, filePath, "");
+      resetDocState(state, tiptapRef, filePath, "");
       notifyActiveDocRef?.current?.(id, filePath);
       if (filePath) {
         markOwnWrite(filePath);
@@ -387,8 +376,7 @@ export function useFileSystem(
 
     const target = nextDocs[targetIndex];
     setDocs(nextDocs);
-    loadIntoEditor(tiptapRef, target.content);
-    resetDocState(state, target.filePath, target.content);
+    resetDocState(state, tiptapRef, target.filePath, target.content);
     notifyActiveDocRef?.current?.(target.id, target.filePath);
     setActiveIndex(targetIndex);
     void saveManifest(nextDocs, target.id, groupsRef.current).catch(() => {});
@@ -481,8 +469,7 @@ export function useFileSystem(
 
       setDocs([newDoc]);
       setActiveIndex(0);
-      loadIntoEditor(tiptapRef, "");
-      resetDocState(state, filePath, "");
+      resetDocState(state, tiptapRef, filePath, "");
       notifyActiveDocRef?.current?.(id, filePath);
       void saveManifest([newDoc], newDoc.id, cleanedGroups).catch(() => {});
       return;
@@ -495,8 +482,7 @@ export function useFileSystem(
     if (wasActive) {
       const target = nextDocs[Math.min(index, nextDocs.length - 1)];
       nextActiveId = target.id;
-      loadIntoEditor(tiptapRef, target.content);
-      resetDocState(state, target.filePath, target.content);
+      resetDocState(state, tiptapRef, target.filePath, target.content);
       notifyActiveDocRef?.current?.(target.id, target.filePath);
     } else {
       nextActiveId = baseDocs[currentActiveIndex].id;
@@ -547,8 +533,7 @@ export function useFileSystem(
     const prunedDocs = pruneEmptyCurrentDoc(baseDocs, activeDocId);
     const nextDocs = [...prunedDocs, newDoc];
     sortAndPersistDocs(nextDocs, newDoc.id, notesSortOrder, locale, setDocs, setActiveIndex, groupsRef.current);
-    loadIntoEditor(tiptapRef, content);
-    resetDocState(state, filePath, content);
+    resetDocState(state, tiptapRef, filePath, content);
     notifyActiveDocRef?.current?.(newDoc.id, filePath);
   }, [getLiveDocsSnapshot, leaveCurrentDoc, markDocClean, notesSortOrder, setActiveIndex, setDocs, state, tiptapRef, pruneEmptyCurrentDoc]);
 
@@ -560,9 +545,9 @@ export function useFileSystem(
     const selected = await save({ title: t("dialog.export", locale), filters: MD_FILTERS, defaultPath: defaultName });
     if (!selected) return;
 
-    const content = index === activeIndex ? getCurrentMarkdown(state, tiptapRef) : doc.content;
+    const content = index === activeIndex ? getCurrentMarkdown(tiptapRef) : doc.content;
     await writeTextFile(selected, content);
-  }, [activeIndex, docs, state, tiptapRef]);
+  }, [activeIndex, docs, locale, tiptapRef]);
 
   const renameNote = useCallback(async (index: number, newName: string) => {
     const { docs: liveDocs } = getLiveDocsSnapshot();
@@ -645,8 +630,7 @@ export function useFileSystem(
     sortAndPersistDocs(nextDocs, restoredDoc.id, notesSortOrder, locale, setDocs, setActiveIndex, restoredGroups);
     emitDocCreated(restoredDoc);
 
-    loadIntoEditor(tiptapRef, content);
-    resetDocState(state, restoredPath, content);
+    resetDocState(state, tiptapRef, restoredPath, content);
     notifyActiveDocRef?.current?.(restoredDoc.id, restoredPath);
   }, [getLiveDocsSnapshot, leaveCurrentDoc, markDocClean, notesSortOrder, setActiveIndex, setDocs, setGroups, setTrashedNotes, state, tiptapRef, pruneEmptyCurrentDoc]);
 

@@ -191,8 +191,7 @@ body {
 
 /* ─── 다크 모드 전환: 대상 한정 트랜지션 ─── */
 .fui-FluentProvider,
-.ProseMirror,
-.cm-editor {
+.ProseMirror {
   transition: color 0.3s ease, background-color 0.3s ease;
 }
 

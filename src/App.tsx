@@ -28,14 +28,12 @@ import {
 } from "./components/TiptapEditor";
 import { TitleBar } from "./components/TitleBar";
 import { Sidebar } from "./components/Sidebar";
-import { MarkdownEditor } from "./components/MarkdownEditor";
 import { EditorToolbar } from "./components/EditorToolbar";
 import { StatusBar } from "./components/StatusBar";
 import { SettingsModal } from "./components/SettingsModal";
 import { SearchBar } from "./components/SearchBar";
 import { GoToLineBar } from "./components/GoToLineBar";
 import { searchPluginKey, type SearchPluginState } from "./extensions/SearchHighlight";
-import { setCmSearch } from "./extensions/cmSearchHighlight";
 import { t } from "./i18n";
 import { exportAsMarkdown, exportAsPdf, exportAsRtf } from "./utils/exportHandlers";
 import { migrateNotesDir, hasManifest } from "./utils/migrateNotesDir";
@@ -67,7 +65,6 @@ function App() {
   const [docGoToLineOpen, setDocGoToLineOpen] = useState(false);
   const [sidebarSearchOpen, setSidebarSearchOpen] = useState(false);
   const [sidebarSearchQuery, setSidebarSearchQuery] = useState("");
-  const [cmView, setCmView] = useState<import("@codemirror/view").EditorView | null>(null);
   const { settings, update: updateSetting, isLoaded: settingsLoaded } = useSettings();
   const isDarkMode = settings.themeMode === "dark";
   const locale = settings.locale;
@@ -107,8 +104,6 @@ function App() {
   // Refs for values read (but not triggering) in effects
   const activeIndexRef = useRef(activeIndex);
   activeIndexRef.current = activeIndex;
-  const activeDocIdRef = useRef<string | null>(docs[activeIndex]?.id ?? null);
-  activeDocIdRef.current = docs[activeIndex]?.id ?? null;
   const groupsRef = useRef(groups);
   groupsRef.current = groups;
 
@@ -132,7 +127,7 @@ function App() {
       const doc = docs[activeIndex];
       if (doc) {
         tiptapRef.current?.setContent(doc.content);
-        state.setMarkdownRaw(doc.content);
+        state.primeMarkdown(doc.content);
         state.setFilePath(doc.filePath);
         state.setIsDirty(false);
       }
@@ -199,10 +194,9 @@ function App() {
 
   // 창 간 동기화 (Tauri 이벤트)
   const handleActiveDocChanged = useCallback((doc: { filePath: string; content: string }) => {
-    state.setMarkdownRaw(doc.content);
+    state.primeMarkdown(doc.content);
     state.setFilePath(doc.filePath);
     state.setIsDirty(false);
-    state.setTiptapDirty(false);
   }, [state]);
   useWindowSync(setDocs, activeIndex, tiptapRef, setActiveIndex, setGroups, setTrashedNotes, handleActiveDocChanged);
 
@@ -237,12 +231,11 @@ function App() {
   const syncEditorRef = useCallback(() => {
     if (tiptapRef.current) {
       const editor = tiptapRef.current.getEditor();
-      state.editorRef.current = editor ?? null;
       if (editor && editor !== tiptapEditor) {
         setTiptapEditor(editor);
       }
     }
-  }, [tiptapEditor, state.editorRef]);
+  }, [tiptapEditor]);
 
   useEffect(syncEditorRef, [syncEditorRef]);
 
@@ -281,11 +274,8 @@ function App() {
   }, [state.isDirty, activeIndex]);
 
   const activeDoc = docs[activeIndex];
-  const isNoteSurface = state.surface === "note";
   const docReady = !isLoading && !!activeDoc;
   const noteEditor = docReady ? tiptapEditor : null;
-  const activeCmView = docReady ? cmView : null;
-  const showCodeMirror = state.surface === "markdown";
 
   const handleToggleTheme = useCallback(() => {
     updateSetting("themeMode", isDarkMode ? "light" : "dark");
@@ -293,9 +283,9 @@ function App() {
 
   const handleExportMd = useCallback(() => {
     const name = activeDoc?.fileName ?? "untitled";
-    const md = getCurrentMarkdown(state, tiptapRef);
+    const md = getCurrentMarkdown(tiptapRef);
     exportAsMarkdown(md, name, locale);
-  }, [activeDoc?.fileName, locale, state]);
+  }, [activeDoc?.fileName, locale]);
 
   const handleExportPdf = useCallback(() => {
     const el = document.querySelector(".ProseMirror") as HTMLElement | null;
@@ -316,7 +306,7 @@ function App() {
   const getSidebarDocumentContent = useCallback((index: number) => {
     const doc = docs[index];
     if (!doc) return "";
-    return index === activeIndex ? getCurrentMarkdown(state, tiptapRef) : doc.content;
+    return index === activeIndex ? state.getCachedMarkdown() : doc.content;
   }, [activeIndex, docs, state]);
 
   // 노트 저장 위치 변경
@@ -388,51 +378,22 @@ function App() {
     setReloadKey((k) => k + 1);
   }, [locale, settings.notesDirectory, updateSetting]);
 
-  const handleSelectSurface = useCallback((nextSurface: "note" | "markdown") => {
-    const el = contentRef.current;
-    const scrollRatio = el && el.scrollHeight > el.clientHeight
-      ? el.scrollTop / (el.scrollHeight - el.clientHeight)
-      : 0;
-
-    state.setSurface(nextSurface);
-
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        if (el && el.scrollHeight > el.clientHeight) {
-          el.scrollTop = scrollRatio * (el.scrollHeight - el.clientHeight);
-        }
-      });
-    });
-  }, [state.setSurface]);
-
-  const handleToggleSurface = useCallback(() => {
-    handleSelectSurface(state.surface === "note" ? "markdown" : "note");
-  }, [handleSelectSurface, state.surface]);
-
   const {
     chromeVisible,
     toolbarHeight,
     editorTopOffset,
     handleShowEditorChrome,
     handleBarHeight,
-  } = useChromeVisibility(contentRef, activeDoc?.id, state.surface);
-
-  const handleNewNote = useCallback(async () => {
-    await fs.newNote();
-    state.setSurface("note");
-  }, [fs.newNote, state.setSurface]);
+  } = useChromeVisibility(contentRef, activeDoc?.id);
 
   useKeyboardShortcuts({
-    activeCmView,
     tiptapRef,
-    surface: state.surface,
     docSearchOpen,
     docGoToLineOpen,
     setDocSearchOpen,
     setDocSearchReplace,
     setDocGoToLineOpen,
-    onToggleSurface: handleToggleSurface,
-    onNewNote: handleNewNote,
+    onNewNote: fs.newNote,
     onImportFile: fs.importFile,
     onSaveFile: fs.saveFile,
   });
@@ -462,8 +423,7 @@ function App() {
           el.tagName !== "INPUT" &&
           el.tagName !== "TEXTAREA" &&
           !el.isContentEditable &&
-          !el.closest(".ProseMirror") &&
-          !el.closest(".cm-content")
+          !el.closest(".ProseMirror")
         ) {
           el.blur();
         }
@@ -492,17 +452,12 @@ function App() {
 
   // 검색 닫힐 때 하이라이트 정리
   useEffect(() => {
-    if (!docSearchOpen) {
-      if (tiptapEditor) {
-        const { tr } = tiptapEditor.state;
-        tr.setMeta(searchPluginKey, { query: "", activeIndex: 0, matches: [] } satisfies SearchPluginState);
-        tiptapEditor.view.dispatch(tr);
-      }
-      if (cmView) {
-        cmView.dispatch({ effects: setCmSearch.of({ query: "", activeIndex: 0 }) });
-      }
+    if (!docSearchOpen && tiptapEditor) {
+      const { tr } = tiptapEditor.state;
+      tr.setMeta(searchPluginKey, { query: "", activeIndex: 0, matches: [] } satisfies SearchPluginState);
+      tiptapEditor.view.dispatch(tr);
     }
-  }, [docSearchOpen, tiptapEditor, cmView]);
+  }, [docSearchOpen, tiptapEditor]);
 
   // 문서 전환 시 검색/바꾸기/행이동 바 닫기
   useEffect(() => {
@@ -522,33 +477,15 @@ function App() {
 
   const handleTiptapDirty = useCallback(
     (dirty: boolean) => {
-      state.setTiptapDirty(dirty);
-      if (dirty) {
-        state.setIsDirty(true);
-        scheduleAutoSave();
-      }
-    },
-    [state.setTiptapDirty, state.setIsDirty, scheduleAutoSave],
-  );
-
-  const handleCodemirrorChange = useCallback(
-    (sourceDocId: string | null, value: string) => {
-      if (!sourceDocId || sourceDocId !== activeDocIdRef.current) return;
-      state.updateMarkdown(value);
+      if (!dirty) return;
+      state.setIsDirty(true);
       scheduleAutoSave();
     },
-    [state.updateMarkdown, scheduleAutoSave],
+    [state, scheduleAutoSave],
   );
 
-  const handleMarkdownViewReady = useCallback((sourceDocId: string | null, view: import("@codemirror/view").EditorView) => {
-    if (!sourceDocId || sourceDocId !== activeDocIdRef.current) return;
-    setCmView(view);
-  }, []);
-
   useDragDrop({
-    activeCmView,
     tiptapRef,
-    surface: state.surface,
     docReady,
     importFiles: fs.importFiles,
     setIsDirty: state.setIsDirty,
@@ -588,10 +525,10 @@ function App() {
         <TitleBar
           isDark={isDarkMode}
           locale={locale}
-          editor={showCodeMirror ? null : noteEditor}
+          editor={noteEditor}
           paragraphSpacing={settings.paragraphSpacing}
           documentTitle={activeDoc?.fileName}
-          onNewNote={handleNewNote}
+          onNewNote={fs.newNote}
           onImportFile={fs.importFile}
           onToggleTheme={handleToggleTheme}
           onOpenSettings={() => setSettingsOpen(true)}
@@ -662,7 +599,7 @@ function App() {
               activeIndex={activeIndex}
               getDocumentContent={getSidebarDocumentContent}
               onSwitchDocument={fs.switchDocument}
-              onNewNote={handleNewNote}
+              onNewNote={fs.newNote}
               onDeleteNote={fs.deleteNote}
 
               onDuplicateNote={fs.duplicateNote}
@@ -722,14 +659,21 @@ function App() {
             <div ref={contentRef} className={`${styles.content} editor-scroll-area`} style={toolbarHeight > 0 ? { "--scrollbar-offset": `${toolbarHeight}px` } as React.CSSProperties : undefined}>
               <div className={styles.toolbarAnchor}>
                 <EditorToolbar
-                  surface={state.surface}
-                  onSelectSurface={handleSelectSurface}
                   editor={noteEditor}
-                  cmView={activeCmView}
                   sidebarOpen={sidebarOpen}
                   hidden={hideToolbar}
                   locale={locale}
                   onBarHeight={handleBarHeight}
+                  onOpenSearch={() => {
+                    setDocGoToLineOpen(false);
+                    setDocSearchReplace(false);
+                    setDocSearchOpen(true);
+                  }}
+                  onOpenGoToLine={() => {
+                    setDocSearchOpen(false);
+                    setDocSearchReplace(false);
+                    setDocGoToLineOpen(true);
+                  }}
                 />
               </div>
               {(docSearchOpen || docGoToLineOpen) && (
@@ -740,8 +684,6 @@ function App() {
                   {docSearchOpen ? (
                     <SearchBar
                       editor={noteEditor}
-                      cmView={activeCmView}
-                      isCmMode={showCodeMirror}
                       onClose={() => { setDocSearchOpen(false); setDocSearchReplace(false); }}
                       replaceOpen={docSearchReplace}
                       onToggleReplace={setDocSearchReplace}
@@ -750,8 +692,6 @@ function App() {
                   ) : (
                     <GoToLineBar
                       editor={noteEditor}
-                      cmView={activeCmView}
-                      isCmMode={showCodeMirror}
                       onClose={() => setDocGoToLineOpen(false)}
                       locale={locale}
                     />
@@ -759,13 +699,13 @@ function App() {
                 </div>
               )}
               <div
-                className={showCodeMirror ? styles.editorPaneHidden : styles.editorPane}
+                className={styles.editorPane}
                 style={editorTopOffset > 0 ? { "--editor-top-offset": `${editorTopOffset}px` } as React.CSSProperties : undefined}
               >
                 <TiptapEditor
                   ref={tiptapRef}
                   initialMarkdown={activeDoc?.content ?? ""}
-                  editable={isNoteSurface && docReady}
+                  editable={docReady}
                   isDarkMode={isDarkMode}
                   locale={locale}
                   paragraphSpacing={settings.paragraphSpacing}
@@ -774,35 +714,13 @@ function App() {
                   spellcheck={settings.spellcheck}
                   onDirtyChange={handleTiptapDirty}
                   onReady={syncEditorRef}
-                  onChromeActivate={!showCodeMirror && docReady ? handleShowEditorChrome : undefined}
+                  onChromeActivate={docReady ? handleShowEditorChrome : undefined}
                 />
               </div>
-
-              {showCodeMirror && (
-                <div
-                  className={styles.editorPane}
-                  style={editorTopOffset > 0 ? { "--editor-top-offset": `${editorTopOffset}px` } as React.CSSProperties : undefined}
-                >
-                  <MarkdownEditor
-                    key={activeDoc?.id ?? "markdown-editor"}
-                    value={state.markdown}
-                    onChange={(value) => handleCodemirrorChange(activeDoc?.id ?? null, value)}
-                    editable={docReady}
-                    isDarkMode={isDarkMode}
-                    locale={locale}
-                    wordWrap={settings.wordWrap}
-                    onViewReady={(view) => handleMarkdownViewReady(activeDoc?.id ?? null, view)}
-                    onChromeActivate={docReady ? handleShowEditorChrome : undefined}
-                  />
-                </div>
-              )}
             </div>
 
             <StatusBar
-              markdown={state.markdown}
-              surface={state.surface}
-              editor={showCodeMirror ? null : noteEditor}
-              cmView={showCodeMirror ? activeCmView : null}
+              editor={noteEditor}
               hidden={hideStatusBar}
               locale={locale}
             />

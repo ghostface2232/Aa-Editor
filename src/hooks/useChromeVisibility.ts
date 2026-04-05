@@ -6,7 +6,6 @@ const CHROME_LOCK_MS = 300;
 export function useChromeVisibility(
   contentRef: RefObject<HTMLDivElement | null>,
   activeDocId: string | undefined,
-  surface: "note" | "markdown",
 ) {
   const [chromeVisible, setChromeVisible] = useState(true);
   const chromeLockUntilRef = useRef(0);
@@ -65,7 +64,7 @@ export function useChromeVisibility(
     return () => el.removeEventListener("scroll", updateChromeVisibility);
   }, []);
 
-  // 문서 전환/surface 변경 시 리셋
+  // 문서 전환 시 리셋
   useEffect(() => {
     requestAnimationFrame(() => {
       const el = contentRef.current;
@@ -76,7 +75,7 @@ export function useChromeVisibility(
       chromeVisibleRef.current = next;
       setChromeVisible(next);
     });
-  }, [activeDocId, surface]);
+  }, [activeDocId]);
 
   return {
     chromeVisible,

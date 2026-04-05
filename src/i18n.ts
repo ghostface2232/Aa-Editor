@@ -3,8 +3,6 @@ import type { Locale } from "./hooks/useSettings";
 const dict = {
   /* ─── TitleBar ─── */
   "app.name": { en: "Noten", ko: "Noten" },
-  "surface.note": { en: "Note", ko: "노트" },
-  "surface.markdown": { en: "Markdown", ko: "마크다운" },
   "theme.light": { en: "Light", ko: "라이트" },
   "theme.dark": { en: "Dark", ko: "다크" },
 
@@ -28,6 +26,8 @@ const dict = {
   "tool.image": { en: "Insert image", ko: "이미지 삽입" },
   "tool.undo": { en: "Undo (Ctrl+Z)", ko: "실행취소 (Ctrl+Z)" },
   "tool.redo": { en: "Redo (Ctrl+Y)", ko: "다시실행 (Ctrl+Y)" },
+  "tool.search": { en: "Search (Ctrl+F)", ko: "검색 (Ctrl+F)" },
+  "tool.gotoLine": { en: "Go to line (Ctrl+G)", ko: "줄 이동 (Ctrl+G)" },
   "link.popover.title": { en: "Edit link", ko: "링크 편집" },
   "link.popover.placeholder": { en: "Paste URL", ko: "URL 입력" },
   "link.popover.apply": { en: "Apply", ko: "적용" },
@@ -138,7 +138,6 @@ const dict = {
   "settings.paragraphSpacing": { en: "Paragraph Spacing", ko: "문단 간격" },
   "settings.keepFormat": { en: "Keep formatting on paste", ko: "붙여넣기 시 원문 서식 유지" },
   "settings.shortcuts": { en: "Keyboard Shortcuts", ko: "단축키 안내" },
-  "settings.shortcut.switchSurface": { en: "Switch Note / Markdown", ko: "노트 / 마크다운 전환" },
   "settings.shortcut.showChrome": { en: "Show or hide editor chrome", ko: "편집 막대 표시 / 숨기기" },
   "settings.shortcut.import": { en: "Open file", ko: "파일 열기" },
   "settings.shortcut.save": { en: "Save now", ko: "즉시 저장" },

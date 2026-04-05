@@ -1,15 +1,12 @@
 import { useEffect, type RefObject } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { TiptapEditorHandle } from "../components/TiptapEditor";
-import type { EditorView } from "@codemirror/view";
-import { buildImageMarkdownFromPaths, insertImagesAtPosition, isImagePath } from "../extensions/ImageDrop";
+import { insertImagesAtPosition, isImagePath } from "../extensions/ImageDrop";
 
 const MARKDOWN_FILE_PATTERN = /\.(md|markdown|mdx|txt)$/i;
 
 export interface UseDragDropParams {
-  activeCmView: EditorView | null;
   tiptapRef: RefObject<TiptapEditorHandle | null>;
-  surface: "note" | "markdown";
   docReady: boolean;
   importFiles: (paths: string[]) => Promise<void>;
   setIsDirty: (v: boolean) => void;
@@ -17,9 +14,7 @@ export interface UseDragDropParams {
 }
 
 export function useDragDrop({
-  activeCmView,
   tiptapRef,
-  surface,
   docReady,
   importFiles,
   setIsDirty,
@@ -47,19 +42,7 @@ export function useDragDrop({
       const clientX = payload.position.x / scale;
       const clientY = payload.position.y / scale;
 
-      if (surface === "markdown" && activeCmView) {
-        const pos = activeCmView.posAtCoords({ x: clientX, y: clientY }) ?? activeCmView.state.doc.length;
-        const markdown = await buildImageMarkdownFromPaths(imagePaths);
-        const insert = pos > 0 ? `\n\n${markdown}\n\n` : `${markdown}\n\n`;
-        activeCmView.dispatch({
-          changes: { from: pos, to: pos, insert },
-          selection: { anchor: pos + insert.length },
-          scrollIntoView: true,
-        });
-        return;
-      }
-
-      if (surface !== "note" || !docReady) return;
+      if (!docReady) return;
 
       const editor = tiptapRef.current?.getEditor();
       if (!editor) return;
@@ -79,5 +62,5 @@ export function useDragDrop({
       disposed = true;
       unlisten?.();
     };
-  }, [activeCmView, docReady, importFiles, scheduleAutoSave, setIsDirty, surface, tiptapRef]);
+  }, [docReady, importFiles, scheduleAutoSave, setIsDirty, tiptapRef]);
 }

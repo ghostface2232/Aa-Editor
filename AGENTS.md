@@ -4,26 +4,23 @@ Windows-native Markdown editor built with Tauri v2, React, and TypeScript.
 
 ## Core Architecture
 
-- Markdown string is the single source of truth.
-- Note surface uses one persistent Tiptap instance and stays mounted across surface switches.
-- Markdown source editing uses CodeMirror and is mounted only while `surface === "markdown"`.
+- Markdown string is the serialization format and single source of truth on disk.
+- Editing uses a single persistent Tiptap v3 instance with `@tiptap/markdown`. The user always edits WYSIWYM.
+- `Tiptap editable: true` whenever a document is ready; the editor remains readonly until the first document loads.
 
-## Editing Modes
+## Editor Chrome Visibility
 
-- Note: `Tiptap editable: true` whenever a document is ready
-- Markdown: CodeMirror 6 with `@codemirror/lang-markdown`
-- Toolbar and status bar are chrome visibility state, not editor mode
-- At the top of the document, editor chrome is visible by default
-- Scrolling down past a short threshold hides editor chrome
-- Scrolling up or clicking inside the editor shows editor chrome again
-- Before the first document is ready during loading, both editors must remain readonly
+- Toolbar and status bar visibility is driven by scroll position, not editor mode.
+- At the top of the document, editor chrome is visible by default.
+- Scrolling down past a short threshold hides editor chrome.
+- Scrolling up or clicking inside the editor shows editor chrome again.
 
 ## Editor Synchronization
 
-- `flushCurrentEditor()` reads from whichever editor is currently active (Tiptap or CodeMirror) and syncs to state.
-- It does not rely on dirty flags — always reads the current value directly, and only updates state if the value changed.
-- `loadIntoTiptap(md)` loads content into Tiptap with `emitUpdate: false` to avoid feedback loops.
-- Surface switching always calls `flushCurrentEditor()` before transitioning.
+- Markdown is cached in `useMarkdownState.markdownRef` via `getCachedMarkdown` / `readAndCacheMarkdown`.
+- Tiptap's `onUpdate` marks the cache stale; `scheduleAutoSave`'s `createSnapshot` refreshes it via `editor.getMarkdown()` + `primeMarkdown()`.
+- `primeMarkdown(md)` is called whenever content is loaded imperatively (initial load, switchDocument, newNote, handleActiveDocChanged, etc.).
+- `TiptapEditorHandle.setContent(md)` loads content with `emitUpdate: false` to avoid feedback loops; callers also call `primeMarkdown(md)` to keep the cache in sync (handled centrally by `resetDocState`).
 
 ## Persistence
 
@@ -64,7 +61,7 @@ Windows-native Markdown editor built with Tauri v2, React, and TypeScript.
 - When `width`/`height` are set, `renderMarkdown` outputs `<img>` HTML tags to preserve dimensions through markdown round-trips.
 - On insert (pick, drop, paste), images are capped to 560px width with aspect ratio preserved. Clamping uses `clampImageDimensions` from `imageUtils.ts`.
 - Image height is always `auto` (CSS) — only width is set as px to prevent aspect ratio distortion on narrow viewports.
-- In the Note surface, images show `move` cursor and can be dragged to reorder via `ImageReorder.ts`.
+- Images in the editor show `move` cursor and can be dragged to reorder via `ImageReorder.ts`.
 - Image drag reorder: `ImageView.ts` detects a 6px threshold on `pointerdown`, then delegates to `startReorder()` which creates a ghost preview, drop indicator, and handles the transaction in a single undo step.
 - Ctrl+C on a selected image copies the image blob to clipboard (not HTML).
 
@@ -75,7 +72,7 @@ Windows-native Markdown editor built with Tauri v2, React, and TypeScript.
 - All menus are clamped to the viewport via `clampMenuToViewport()`, accounting for the 25px status bar at the bottom.
 - Image context menu: save, copy, replace, delete.
 - Text context menu: cut, copy, paste, paste plain text, select all, emoji. All context menu items have Fluent UI icons.
-- Both Tiptap and CodeMirror editors share the same context menu interface (`TextContextMenuContext`).
+- Tiptap uses `TextContextMenuContext` as the shared text context menu interface.
 
 ## Tiptap Markdown Rules
 
@@ -91,11 +88,11 @@ Do not use old community-package APIs such as `editor.storage.markdown.getMarkdo
 
 - Use Fluent UI v9 components for app chrome.
 - Use only `@fluentui/react-icons`.
-- Editor surfaces (`.ProseMirror`, `.cm-editor`) should read shared colors from CSS variables in `src/styles/theme.css`.
+- The editor surface (`.ProseMirror`) should read shared colors from CSS variables in `src/styles/theme.css`.
 - Preserve the existing visual language; do not introduce unrelated icon sets or browser-style controls.
 - All user-visible strings must go through the i18n system (`src/i18n.ts`). Do not hardcode locale checks inline.
-- Toolbar and status bar should share the same visibility behavior across Note and Markdown surfaces.
-- Toolbar formatting controls on the Note/Markdown switch use a fade transition instead of appearing/disappearing abruptly.
+- Toolbar and status bar share the same scroll-driven visibility behavior.
+- Toolbar layout: Undo/Redo in column 1, formatting tools centered in column 2, Search and Go-to-line in column 3; when width < 740px the formatting tools wrap to row 2.
 - Browser/WebView shortcuts that would interfere with app behavior are blocked. This includes reload, DevTools, print, source view, caret browsing, zoom, and browser back/forward. Ctrl+R is unblocked when sidebar has focus (used for rename).
 - Sidebar shortcuts (Ctrl+D, Ctrl+R, F2, Ctrl+Alt+C, Delete) are active when last mousedown was inside the sidebar. Tracked via `data-sidebar-active` attribute on `document.documentElement`.
 - Editor shortcuts include `Ctrl+Shift+X` for strike-through, `Ctrl+G` for Go to Line, and `Ctrl+H` for Find and Replace. All are handled at the window level via `useKeyboardShortcuts`, not inside individual editor keymaps.

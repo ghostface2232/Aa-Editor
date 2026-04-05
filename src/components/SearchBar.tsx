@@ -7,9 +7,8 @@ import {
   DismissRegular,
 } from "@fluentui/react-icons";
 import type { Editor } from "@tiptap/core";
-import type { EditorView as CmEditorView } from "@codemirror/view";
 import { searchPluginKey, type SearchPluginState } from "../extensions/SearchHighlight";
-import { setCmSearch } from "../extensions/cmSearchHighlight";
+import { scrollToPos } from "../utils/scrollToPos";
 import { t } from "../i18n";
 import type { Locale } from "../hooks/useSettings";
 
@@ -104,60 +103,17 @@ const useStyles = makeStyles({
   },
 });
 
-/* ─── helpers ─── */
-
-function findCmMatches(text: string, query: string): { from: number; to: number }[] {
-  const results: { from: number; to: number }[] = [];
-  if (!query) return results;
-  const lower = query.toLowerCase();
-  const haystack = text.toLowerCase();
-  let idx = haystack.indexOf(lower);
-  while (idx !== -1) {
-    results.push({ from: idx, to: idx + query.length });
-    idx = haystack.indexOf(lower, idx + 1);
-  }
-  return results;
-}
-
-function scrollToPos(dom: HTMLElement, getCoords: () => { top: number } | null) {
-  requestAnimationFrame(() => {
-    try {
-      const coords = getCoords();
-      if (!coords) return;
-      let scrollParent: HTMLElement | null = dom.parentElement;
-      while (scrollParent) {
-        const { overflowY } = window.getComputedStyle(scrollParent);
-        if (overflowY === "auto" || overflowY === "scroll") break;
-        scrollParent = scrollParent.parentElement;
-      }
-      if (scrollParent) {
-        const rect = scrollParent.getBoundingClientRect();
-        const relativeTop = coords.top - rect.top;
-        const padding = 80;
-        if (relativeTop < padding || relativeTop > rect.height - padding) {
-          scrollParent.scrollTo({
-            top: scrollParent.scrollTop + relativeTop - rect.height / 3,
-            behavior: "smooth",
-          });
-        }
-      }
-    } catch { /* no-op */ }
-  });
-}
-
 /* ─── component ─── */
 
 interface SearchBarProps {
   editor: Editor | null;
-  cmView: CmEditorView | null;
-  isCmMode: boolean;
   onClose: () => void;
   replaceOpen: boolean;
   onToggleReplace: (open: boolean) => void;
   locale: Locale;
 }
 
-export function SearchBar({ editor, cmView, isCmMode, onClose, replaceOpen, onToggleReplace, locale }: SearchBarProps) {
+export function SearchBar({ editor, onClose, replaceOpen, onToggleReplace, locale }: SearchBarProps) {
   const styles = useStyles();
   const inputRef = useRef<HTMLInputElement>(null);
   const replaceInputRef = useRef<HTMLInputElement>(null);
@@ -206,36 +162,15 @@ export function SearchBar({ editor, cmView, isCmMode, onClose, replaceOpen, onTo
     [editor],
   );
 
-  /* ── CodeMirror search ── */
-
-  const dispatchCm = useCallback(
-    (q: string, activeIdx: number) => {
-      if (!cmView) return { count: 0, clamped: 0 };
-      const matches = findCmMatches(cmView.state.doc.toString(), q);
-      const clamped = matches.length > 0
-        ? ((activeIdx % matches.length) + matches.length) % matches.length
-        : 0;
-
-      cmView.dispatch({ effects: setCmSearch.of({ query: q, activeIndex: clamped }) });
-
-      if (matches.length > 0) {
-        const match = matches[clamped];
-        scrollToPos(cmView.dom, () => cmView.coordsAtPos(match.from));
-      }
-      return { count: matches.length, clamped };
-    },
-    [cmView],
-  );
-
-  /* ── unified dispatch ── */
+  /* ── dispatch ── */
 
   const dispatchSearch = useCallback(
     (q: string, idx: number) => {
-      const result = isCmMode ? dispatchCm(q, idx) : dispatchTiptap(q, idx);
+      const result = dispatchTiptap(q, idx);
       setMatchCount(result.count);
       setActiveIndex(result.clamped);
     },
-    [isCmMode, dispatchCm, dispatchTiptap],
+    [dispatchTiptap],
   );
 
   const handleQueryChange = useCallback(
@@ -247,22 +182,19 @@ export function SearchBar({ editor, cmView, isCmMode, onClose, replaceOpen, onTo
   const goPrev = useCallback(() => dispatchSearch(query, activeIndex - 1), [dispatchSearch, query, activeIndex]);
 
   const handleClose = useCallback(() => {
-    if (editor && !isCmMode) {
+    if (editor) {
       const { tr } = editor.state;
       tr.setMeta(searchPluginKey, { query: "", activeIndex: 0, matches: [] } satisfies SearchPluginState);
       editor.view.dispatch(tr);
     }
-    if (cmView && isCmMode) {
-      cmView.dispatch({ effects: setCmSearch.of({ query: "", activeIndex: 0 }) });
-    }
     setReplaceText("");
     onToggleReplace(false);
     onClose();
-  }, [editor, cmView, isCmMode, onClose, onToggleReplace]);
+  }, [editor, onClose, onToggleReplace]);
 
-  /* ── Tiptap: sync React state from plugin after content dispatch ── */
+  /* ── sync React state from plugin after content dispatch ── */
 
-  const syncAfterTiptapReplace = useCallback(
+  const syncAfterReplace = useCallback(
     (desiredIndex: number) => {
       if (!editor) return;
       // Plugin already recomputed matches in apply() — read directly, no doc traversal
@@ -288,9 +220,9 @@ export function SearchBar({ editor, cmView, isCmMode, onClose, replaceOpen, onTo
     [editor, query],
   );
 
-  /* ── replace — Tiptap ── */
+  /* ── replace ── */
 
-  const handleReplaceTiptap = useCallback(() => {
+  const handleReplace = useCallback(() => {
     if (!editor || !query || matchCount === 0) return;
     const ps = searchPluginKey.getState(editor.state) as SearchPluginState;
     const match = ps.matches[ps.activeIndex];
@@ -299,10 +231,10 @@ export function SearchBar({ editor, cmView, isCmMode, onClose, replaceOpen, onTo
     const { tr } = editor.state;
     tr.insertText(replaceText, match.from, match.to);
     editor.view.dispatch(tr);
-    syncAfterTiptapReplace(activeIndex);
-  }, [editor, query, replaceText, matchCount, activeIndex, syncAfterTiptapReplace]);
+    syncAfterReplace(activeIndex);
+  }, [editor, query, replaceText, matchCount, activeIndex, syncAfterReplace]);
 
-  const handleReplaceAllTiptap = useCallback(() => {
+  const handleReplaceAll = useCallback(() => {
     if (!editor || !query || matchCount === 0) return;
     const ps = searchPluginKey.getState(editor.state) as SearchPluginState;
     const { matches } = ps;
@@ -312,45 +244,8 @@ export function SearchBar({ editor, cmView, isCmMode, onClose, replaceOpen, onTo
       tr.insertText(replaceText, matches[idx].from, matches[idx].to);
     }
     editor.view.dispatch(tr);
-    syncAfterTiptapReplace(0);
-  }, [editor, query, replaceText, matchCount, syncAfterTiptapReplace]);
-
-  /* ── replace — CodeMirror ── */
-
-  const handleReplaceCm = useCallback(() => {
-    if (!cmView || !query) return;
-    const matches = findCmMatches(cmView.state.doc.toString(), query);
-    if (matches.length === 0) return;
-    const idx = ((activeIndex % matches.length) + matches.length) % matches.length;
-    const match = matches[idx];
-
-    cmView.dispatch({
-      changes: { from: match.from, to: match.to, insert: replaceText },
-    });
-    dispatchSearch(query, idx);
-  }, [cmView, query, replaceText, activeIndex, dispatchSearch]);
-
-  const handleReplaceAllCm = useCallback(() => {
-    if (!cmView || !query) return;
-    const matches = findCmMatches(cmView.state.doc.toString(), query);
-    if (matches.length === 0) return;
-
-    const changes = [...matches]
-      .reverse()
-      .map(m => ({ from: m.from, to: m.to, insert: replaceText }));
-    cmView.dispatch({ changes });
-    dispatchSearch(query, 0);
-  }, [cmView, query, replaceText, dispatchSearch]);
-
-  /* ── unified replace ── */
-
-  const handleReplace = useCallback(() => {
-    isCmMode ? handleReplaceCm() : handleReplaceTiptap();
-  }, [isCmMode, handleReplaceCm, handleReplaceTiptap]);
-
-  const handleReplaceAll = useCallback(() => {
-    isCmMode ? handleReplaceAllCm() : handleReplaceAllTiptap();
-  }, [isCmMode, handleReplaceAllCm, handleReplaceAllTiptap]);
+    syncAfterReplace(0);
+  }, [editor, query, replaceText, matchCount, syncAfterReplace]);
 
   /* ── keyboard ── */
 

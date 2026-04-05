@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import { undo as undoCodeMirror, redo as redoCodeMirror } from "@codemirror/commands";
 import {
   Button,
   Tooltip,
@@ -29,12 +28,12 @@ import {
   ArrowUndoRegular,
   ArrowRedoRegular,
   ChevronDownRegular,
+  SearchRegular,
+  ArrowEnterRegular,
 } from "@fluentui/react-icons";
-import { PillSelector } from "./PillSelector";
 import { pickAndInsertImage } from "../extensions/ImageDrop";
 import { insertMermaidCodeBlock } from "../extensions/mermaidCommands";
 import { t } from "../i18n";
-import type { EditorSurface } from "../hooks/useMarkdownState";
 import type { Editor } from "@tiptap/react";
 import type { Locale } from "../hooks/useSettings";
 
@@ -79,19 +78,16 @@ const useStyles = makeStyles({
     justifySelf: "center",
     overflow: "hidden",
     maxWidth: "1600px",
-    opacity: 1,
-    transform: "translateY(0)",
-    transitionProperty: "opacity, transform, max-width",
-    transitionDuration: "0.2s",
-    transitionTimingFunction: "cubic-bezier(0.4, 0, 0.2, 1)",
-  },
-  toolsHidden: {
-    maxWidth: "0px",
-    opacity: 0,
-    transform: "translateY(-6px)",
-    pointerEvents: "none",
   },
   undo: {
+    gridColumn: "1",
+    gridRow: "1",
+    justifySelf: "start",
+    display: "flex",
+    alignItems: "center",
+    gap: "2px",
+  },
+  search: {
     gridColumn: "3",
     gridRow: "1",
     justifySelf: "end",
@@ -155,35 +151,26 @@ function getHeadingLabel(editor: Editor | null, locale: Locale): string {
 }
 
 interface EditorToolbarProps {
-  surface: EditorSurface;
-  onSelectSurface: (surface: EditorSurface) => void;
   editor: Editor | null;
-  cmView: import("@codemirror/view").EditorView | null;
   sidebarOpen: boolean;
   hidden: boolean;
   locale: Locale;
   onBarHeight?: (height: number) => void;
+  onOpenSearch: () => void;
+  onOpenGoToLine: () => void;
 }
 
 export function EditorToolbar({
-  surface,
-  onSelectSurface,
   editor,
-  cmView,
   sidebarOpen,
   hidden,
   locale,
   onBarHeight,
+  onOpenSearch,
+  onOpenGoToLine,
 }: EditorToolbarProps) {
   const styles = useStyles();
   const i = (key: Parameters<typeof t>[0]) => t(key, locale);
-  const surfaceItems = [
-    { key: "note", label: i("surface.note") },
-    { key: "markdown", label: i("surface.markdown") },
-  ];
-  const showFormattingTools = !!editor;
-  const formattingVisible = surface === "note" && !!editor;
-  const showUndo = surface === "note" ? !!editor : !!cmView;
 
   const gridRef = useRef<HTMLDivElement>(null);
   const toolsRef = useRef<HTMLDivElement>(null);
@@ -227,7 +214,7 @@ export function EditorToolbar({
     if (!g) return;
 
     if (t) {
-      const needs = formattingVisible && g.clientWidth < BREAKPOINT;
+      const needs = !!editor && g.clientWidth < BREAKPOINT;
       isTwoRows.current = needs;
       applyLayout(t, needs);
     }
@@ -235,7 +222,7 @@ export function EditorToolbar({
     const h = g.offsetHeight;
     setBarHeight(h);
     onBarHeight?.(h);
-  }, [applyLayout, formattingVisible, onBarHeight]);
+  }, [applyLayout, editor, onBarHeight]);
 
   useEffect(() => {
     const el = gridRef.current;
@@ -248,7 +235,7 @@ export function EditorToolbar({
   // toolbar content 변경 시 DOM 렌더 완료 후 measure (이중 rAF로 레이아웃 확정 보장)
   useEffect(() => {
     requestAnimationFrame(() => requestAnimationFrame(measure));
-  }, [measure, formattingVisible, showFormattingTools, showUndo]);
+  }, [measure]);
 
   const isHeading = editor?.isActive("heading") ?? false;
   const headingLabel = getHeadingLabel(editor, locale);
@@ -285,19 +272,28 @@ export function EditorToolbar({
         className={hidden ? `${styles.grid} ${styles.gridHidden}` : styles.grid}
         style={!sidebarOpen ? { paddingLeft: "46px" } : undefined}
       >
-        <div>
-          <PillSelector
-            items={surfaceItems}
-            activeKey={surface}
-            onSelect={(key) => onSelectSurface(key as EditorSurface)}
-          />
+        <div className={styles.undo}>
+          {tb(
+            i("tool.undo"),
+            <ArrowUndoRegular />,
+            () => editor?.chain().focus().undo().run(),
+            false,
+            !editor,
+          )}
+          {tb(
+            i("tool.redo"),
+            <ArrowRedoRegular />,
+            () => editor?.chain().focus().redo().run(),
+            false,
+            !editor,
+          )}
         </div>
 
-        {showFormattingTools && (
+        {editor && (
           <>
             <div
               ref={toolsRef}
-              className={formattingVisible ? styles.tools : `${styles.tools} ${styles.toolsHidden}`}
+              className={styles.tools}
             >
               <Menu>
                 <MenuTrigger>
@@ -380,36 +376,10 @@ export function EditorToolbar({
           </>
         )}
 
-        {showUndo && (
-          <div className={styles.undo}>
-            {tb(
-              i("tool.undo"),
-              <ArrowUndoRegular />,
-              () => {
-                if (surface === "markdown") {
-                  if (cmView) undoCodeMirror(cmView);
-                  return;
-                }
-                editor?.chain().focus().undo().run();
-              },
-              false,
-              surface === "markdown" ? !cmView : !editor,
-            )}
-            {tb(
-              i("tool.redo"),
-              <ArrowRedoRegular />,
-              () => {
-                if (surface === "markdown") {
-                  if (cmView) redoCodeMirror(cmView);
-                  return;
-                }
-                editor?.chain().focus().redo().run();
-              },
-              false,
-              surface === "markdown" ? !cmView : !editor,
-            )}
-          </div>
-        )}
+        <div className={styles.search}>
+          {tb(i("tool.search"), <SearchRegular />, onOpenSearch, false)}
+          {tb(i("tool.gotoLine"), <ArrowEnterRegular />, onOpenGoToLine, false)}
+        </div>
       </div>
     </div>
   );

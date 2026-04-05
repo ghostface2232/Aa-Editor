@@ -3,7 +3,7 @@ import { makeStyles, tokens } from "@fluentui/react-components";
 import { DismissRegular } from "@fluentui/react-icons";
 import type { Editor } from "@tiptap/core";
 import { TextSelection } from "@tiptap/pm/state";
-import type { EditorView as CmEditorView } from "@codemirror/view";
+import { scrollToPos } from "../utils/scrollToPos";
 import { t } from "../i18n";
 import type { Locale } from "../hooks/useSettings";
 
@@ -67,25 +67,20 @@ const useStyles = makeStyles({
 
 interface GoToLineBarProps {
   editor: Editor | null;
-  cmView: CmEditorView | null;
-  isCmMode: boolean;
   onClose: () => void;
   locale: Locale;
 }
 
-export function GoToLineBar({ editor, cmView, isCmMode, onClose, locale }: GoToLineBarProps) {
+export function GoToLineBar({ editor, onClose, locale }: GoToLineBarProps) {
   const styles = useStyles();
   const inputRef = useRef<HTMLInputElement>(null);
   const indicatorRef = useRef<HTMLDivElement | null>(null);
   const i = (key: Parameters<typeof t>[0]) => t(key, locale);
 
-  const totalLines = isCmMode
-    ? (cmView?.state.doc.lines ?? 0)
-    : (editor?.state.doc.childCount ?? 0);
-
-  const currentLine = isCmMode
-    ? (cmView ? cmView.state.doc.lineAt(cmView.state.selection.main.head).number : 1)
-    : (editor ? editor.state.doc.resolve(editor.state.selection.from).index(0) + 1 : 1);
+  const totalLines = editor?.state.doc.childCount ?? 0;
+  const currentLine = editor
+    ? editor.state.doc.resolve(editor.state.selection.from).index(0) + 1
+    : 1;
 
   const [lineValue, setLineValue] = useState(String(currentLine));
 
@@ -138,75 +133,37 @@ export function GoToLineBar({ editor, cmView, isCmMode, onClose, locale }: GoToL
     const trimmed = rawValue.trim();
     if (!/^\d+$/.test(trimmed)) return;
     const parsed = Number.parseInt(trimmed, 10);
+    if (!editor) return;
 
-    if (isCmMode) {
-      if (!cmView) return;
-      const clamped = Math.max(1, Math.min(cmView.state.doc.lines, parsed));
-      const line = cmView.state.doc.line(clamped);
-      cmView.dispatch({
-        selection: { anchor: line.from },
-        scrollIntoView: true,
-      });
-      requestAnimationFrame(() => {
-        try {
-          const coords = cmView.coordsAtPos(line.from);
-          if (coords) showIndicator(cmView.dom, coords);
-        } catch { /* no-op */ }
-      });
-      if (String(clamped) !== rawValue) {
-        setLineValue(String(clamped));
-      }
-    } else {
-      if (!editor) return;
-      const total = editor.state.doc.childCount;
-      const clamped = Math.max(1, Math.min(total, parsed));
-      const targetIndex = clamped - 1;
-      let targetPos = 0;
-      for (let idx = 0; idx < targetIndex; idx++) {
-        targetPos += editor.state.doc.child(idx).nodeSize;
-      }
-      const pos = targetPos + 1;
-      const { tr } = editor.state;
-      tr.setSelection(TextSelection.create(editor.state.doc, pos));
-      editor.view.dispatch(tr);
-      requestAnimationFrame(() => {
-        try {
-          const coords = editor.view.coordsAtPos(pos);
-          showIndicator(editor.view.dom, coords);
-          // scroll manually — scrollIntoView requires focus
-          let scrollParent: HTMLElement | null = editor.view.dom.parentElement;
-          while (scrollParent) {
-            const { overflowY } = window.getComputedStyle(scrollParent);
-            if (overflowY === "auto" || overflowY === "scroll") break;
-            scrollParent = scrollParent.parentElement;
-          }
-          if (scrollParent) {
-            const rect = scrollParent.getBoundingClientRect();
-            const relativeTop = coords.top - rect.top;
-            if (relativeTop < 80 || relativeTop > rect.height - 80) {
-              scrollParent.scrollTo({
-                top: scrollParent.scrollTop + relativeTop - rect.height / 3,
-                behavior: "smooth",
-              });
-            }
-          }
-        } catch { /* no-op */ }
-      });
-      if (String(clamped) !== rawValue) {
-        setLineValue(String(clamped));
-      }
+    const total = editor.state.doc.childCount;
+    const clamped = Math.max(1, Math.min(total, parsed));
+    const targetIndex = clamped - 1;
+    let targetPos = 0;
+    for (let idx = 0; idx < targetIndex; idx++) {
+      targetPos += editor.state.doc.child(idx).nodeSize;
     }
-  }, [isCmMode, cmView, editor, showIndicator]);
+    const pos = targetPos + 1;
+    const { tr } = editor.state;
+    tr.setSelection(TextSelection.create(editor.state.doc, pos));
+    editor.view.dispatch(tr);
+    // scrollIntoView requires focus, so we drive scroll manually via scrollToPos
+    scrollToPos(editor.view.dom, () => editor.view.coordsAtPos(pos));
+    requestAnimationFrame(() => {
+      try {
+        const coords = editor.view.coordsAtPos(pos);
+        showIndicator(editor.view.dom, coords);
+      } catch { /* no-op */ }
+    });
+    if (String(clamped) !== rawValue) {
+      setLineValue(String(clamped));
+    }
+  }, [editor, showIndicator]);
 
   const handleClose = useCallback(() => {
     hideIndicator();
-    if (isCmMode) {
-      cmView?.focus();
-    } else {
-      editor?.commands.focus();
-    }
+    editor?.commands.focus();
     onClose();
-  }, [isCmMode, cmView, editor, onClose, hideIndicator]);
+  }, [editor, onClose, hideIndicator]);
 
   return (
     <div className={styles.wrapper}>

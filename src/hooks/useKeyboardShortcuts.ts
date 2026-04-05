@@ -1,5 +1,4 @@
 import { useEffect, type Dispatch, type RefObject, type SetStateAction } from "react";
-import type { EditorView } from "@codemirror/view";
 import type { TiptapEditorHandle } from "../components/TiptapEditor";
 import { openNewWindow } from "../utils/newWindow";
 
@@ -11,7 +10,7 @@ function shortcutTargetElement(target: EventTarget | null): HTMLElement | null {
 
 function isEditorShortcutTarget(target: EventTarget | null) {
   const element = shortcutTargetElement(target);
-  return !!element?.closest(".ProseMirror, .cm-editor");
+  return !!element?.closest(".ProseMirror");
 }
 
 function isDialogTarget(target: EventTarget | null) {
@@ -19,72 +18,25 @@ function isDialogTarget(target: EventTarget | null) {
   return !!element?.closest('[role="dialog"]');
 }
 
-function toggleMarkdownStrike(cmView: EditorView) {
-  const { state } = cmView;
-  const selection = state.selection.main;
-  if (selection.empty) {
-    cmView.dispatch({
-      changes: { from: selection.from, to: selection.to, insert: "~~~~" },
-      selection: { anchor: selection.from + 2 },
-      scrollIntoView: true,
-    });
-    cmView.focus();
-    return;
-  }
-
-  const before = selection.from >= 2 ? state.doc.sliceString(selection.from - 2, selection.from) : "";
-  const after = selection.to + 2 <= state.doc.length
-    ? state.doc.sliceString(selection.to, selection.to + 2)
-    : "";
-
-  if (before === "~~" && after === "~~") {
-    cmView.dispatch({
-      changes: [
-        { from: selection.from - 2, to: selection.from, insert: "" },
-        { from: selection.to, to: selection.to + 2, insert: "" },
-      ],
-      selection: { anchor: selection.from - 2, head: selection.to - 2 },
-      scrollIntoView: true,
-    });
-  } else {
-    cmView.dispatch({
-      changes: [
-        { from: selection.from, to: selection.from, insert: "~~" },
-        { from: selection.to, to: selection.to, insert: "~~" },
-      ],
-      selection: { anchor: selection.from + 2, head: selection.to + 2 },
-      scrollIntoView: true,
-    });
-  }
-
-  cmView.focus();
-}
-
 export interface UseKeyboardShortcutsParams {
-  activeCmView: EditorView | null;
   tiptapRef: RefObject<TiptapEditorHandle | null>;
-  surface: "note" | "markdown";
   docSearchOpen: boolean;
   docGoToLineOpen: boolean;
   setDocSearchOpen: Dispatch<SetStateAction<boolean>>;
   setDocSearchReplace: Dispatch<SetStateAction<boolean>>;
   setDocGoToLineOpen: Dispatch<SetStateAction<boolean>>;
-  onToggleSurface: () => void;
   onNewNote: () => Promise<void>;
   onImportFile: () => void;
   onSaveFile: () => void;
 }
 
 export function useKeyboardShortcuts({
-  activeCmView,
   tiptapRef,
-  surface,
   docSearchOpen,
   docGoToLineOpen,
   setDocSearchOpen,
   setDocSearchReplace,
   setDocGoToLineOpen,
-  onToggleSurface,
   onNewNote,
   onImportFile,
   onSaveFile,
@@ -96,16 +48,9 @@ export function useKeyboardShortcuts({
       const key = e.key.toLowerCase();
 
       if (e.key === "Tab" && !isDialogTarget(e.target)) {
-        if (surface === "markdown") {
-          e.preventDefault();
-          activeCmView?.focus();
-          return;
-        }
-        if (surface === "note") {
-          e.preventDefault();
-          tiptapRef.current?.getEditor()?.commands.focus();
-          return;
-        }
+        e.preventDefault();
+        tiptapRef.current?.getEditor()?.commands.focus();
+        return;
       }
 
       // 브라우저/WebView 단축키 차단 — 사이드바 포커스 시 Ctrl+R은 rename으로 사용
@@ -118,7 +63,6 @@ export function useKeyboardShortcuts({
       if (e.altKey && (e.key === "ArrowLeft" || e.key === "ArrowRight")) { e.preventDefault(); return; }
       if (e.key === "BrowserBack" || e.key === "BrowserForward") { e.preventDefault(); return; }
 
-      if (ctrl && key === "/") { e.preventDefault(); onToggleSurface(); }
       if (ctrl && key === "o") { e.preventDefault(); onImportFile(); }
       if (ctrl && !e.shiftKey && key === "s") { e.preventDefault(); onSaveFile(); }
       if (ctrl && !e.shiftKey && key === "n") { e.preventDefault(); void onNewNote(); }
@@ -146,11 +90,7 @@ export function useKeyboardShortcuts({
       }
       if (ctrl && e.shiftKey && key === "x" && isEditorShortcutTarget(e.target)) {
         e.preventDefault();
-        if (surface === "markdown" && activeCmView) {
-          toggleMarkdownStrike(activeCmView);
-        } else if (surface === "note") {
-          tiptapRef.current?.getEditor()?.chain().focus().toggleStrike().run();
-        }
+        tiptapRef.current?.getEditor()?.chain().focus().toggleStrike().run();
         return;
       }
       if (e.key === "Escape" && docGoToLineOpen) {
@@ -164,17 +104,14 @@ export function useKeyboardShortcuts({
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [
-    activeCmView,
     docGoToLineOpen,
     docSearchOpen,
     onImportFile,
     onNewNote,
     onSaveFile,
-    onToggleSurface,
     setDocGoToLineOpen,
     setDocSearchOpen,
     setDocSearchReplace,
-    surface,
     tiptapRef,
   ]);
 }
