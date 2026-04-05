@@ -41,6 +41,7 @@ import { SearchHighlight } from "../extensions/SearchHighlight";
 import { t } from "../i18n";
 import type { Locale, WordWrap } from "../hooks/useSettings";
 import "../styles/tiptap-editor.css";
+import "../styles/mermaid-theme.css";
 
 declare module "@tiptap/core" {
   interface Storage {
