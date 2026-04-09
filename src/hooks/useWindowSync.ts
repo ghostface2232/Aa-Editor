@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { flushSync } from "react-dom";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { emit, listen } from "@tauri-apps/api/event";
@@ -102,6 +102,10 @@ export function useWindowSync(
   activeDocIdRef.current = activeDocId;
   const onActiveDocChangedRef = useRef(onActiveDocChanged);
   onActiveDocChangedRef.current = onActiveDocChanged;
+  const getRoutedActiveDocId = useCallback(() => {
+    const editorDocId = tiptapRef.current?.getEditor?.()?.storage.documentContext.noteId ?? null;
+    return editorDocId ?? activeDocIdRef.current;
+  }, [tiptapRef]);
 
   useEffect(() => {
     let mounted = true;
@@ -124,7 +128,7 @@ export function useWindowSync(
             const updated = [...prev];
             updated[idx] = { ...updated[idx], content, fileName, updatedAt, isDirty: false };
 
-            if (updated[idx].id === activeDocIdRef.current) {
+            if (updated[idx].id === getRoutedActiveDocId()) {
               needsSyncMarkdown = true;
               syncFilePath = updated[idx].filePath;
             }
@@ -171,7 +175,7 @@ export function useWindowSync(
           }
 
           const currentActive = activeIndexRef.current;
-          const deletedActiveDoc = activeDocIdRef.current === docId;
+          const deletedActiveDoc = getRoutedActiveDocId() === docId;
 
           if (deletedActiveDoc) {
             // Deleted doc is the active doc — load new active doc's content
@@ -227,5 +231,5 @@ export function useWindowSync(
     });
 
     return () => { mounted = false; unlisteners.forEach((fn) => fn()); };
-  }, [setDocs, setActiveIndex, tiptapRef, setGroups, setTrashedNotes, onActiveDocChanged]);
+  }, [getRoutedActiveDocId, setDocs, setActiveIndex, tiptapRef, setGroups, setTrashedNotes, onActiveDocChanged]);
 }

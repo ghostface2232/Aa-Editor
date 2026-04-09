@@ -58,6 +58,10 @@ export function useFileWatcher(
   activeDocIdRef.current = activeDocId;
   const onActiveDocChangedRef = useRef(onActiveDocChanged);
   onActiveDocChangedRef.current = onActiveDocChanged;
+  const getRoutedActiveDocId = useCallback(() => {
+    const editorDocId = tiptapRef.current?.getEditor?.()?.storage.documentContext.noteId ?? null;
+    return editorDocId ?? activeDocIdRef.current;
+  }, [tiptapRef]);
 
   const handleWatchEvent = useCallback(async (event: WatchEvent) => {
     if (migrationInProgress) return;
@@ -178,7 +182,7 @@ export function useFileWatcher(
               isDirty: false,
             };
 
-            if (updated[idx].id === activeDocIdRef.current) {
+            if (updated[idx].id === getRoutedActiveDocId()) {
               needsSyncMarkdown = true;
             }
 
@@ -219,7 +223,7 @@ export function useFileWatcher(
       const activeDoc = reconciledDocs[activeIndexRef.current];
       await saveManifest(reconciledDocs, activeDoc?.id ?? null, reconciledGroups).catch(() => {});
     }
-  }, [locale, setDocs, setGroups, setActiveIndex, tiptapRef]);
+  }, [getRoutedActiveDocId, locale, setDocs, setGroups, setActiveIndex, tiptapRef]);
 
   useEffect(() => {
     if (!enabled) return;
