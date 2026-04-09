@@ -37,6 +37,13 @@
   outline: none;
 }
 
+/* NodeSelection (e.g. image focus) → hide native caret. PM toggles this class
+   automatically based on selection.visible, so it restores when the user moves
+   to text via click or arrow keys. */
+.ProseMirror.ProseMirror-hideselection {
+  caret-color: transparent;
+}
+
 /* ─── GapCursor: 가로 커서 → 세로 캐럿으로 변경 ─── */
 .ProseMirror .ProseMirror-gapcursor {
   position: relative;
@@ -348,6 +355,12 @@
 
 .ProseMirror :is(p, pre, blockquote, ul, ol, img, table, .noten-code-block) + :is(p, pre, blockquote, ul, ol, img, table, .noten-code-block) {
   margin-top: var(--editor-paragraph-spacing);
+}
+
+/* 이미지(블록 NodeView)는 위·아래의 다른 블록과 더 넉넉한 간격을 갖는다 */
+.ProseMirror :is(p, pre, blockquote, ul, ol, table, .noten-code-block) + .tiptap-image-node,
+.ProseMirror .tiptap-image-node + :is(p, pre, blockquote, ul, ol, table, .noten-code-block, .tiptap-image-node) {
+  margin-top: calc(var(--editor-paragraph-spacing) * 1.5);
 }
 
 .ProseMirror th,

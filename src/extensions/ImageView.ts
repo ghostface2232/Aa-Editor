@@ -114,7 +114,11 @@ export function createImageNodeView(editor: Editor) {
     let activeDragCleanup: (() => void) | null = null;
 
     const dom = document.createElement("div");
-    dom.style.cssText = "position:relative;display:inline-block;max-width:100%;line-height:0;";
+    dom.className = "tiptap-image-node";
+    // border-radius / outline-offset are set up-front so a session-restored
+    // NodeSelection (which only triggers selectNode, not selectionUpdate) still
+    // paints a rounded outline.
+    dom.style.cssText = "position:relative;display:inline-block;max-width:100%;line-height:0;border-radius:var(--editor-radius, 4px);outline-offset:2px;";
     dom.draggable = false;
 
     const img = document.createElement("img");
@@ -196,8 +200,6 @@ export function createImageNodeView(editor: Editor) {
         && selection instanceof NodeSelection
         && selection.from === pos;
       dom.style.outline = selected ? "2px solid var(--editor-color-accent, #0078d4)" : "none";
-      dom.style.outlineOffset = "2px";
-      dom.style.borderRadius = "var(--editor-radius, 4px)";
       if (selected) showHandles();
     };
 
@@ -327,7 +329,6 @@ export function createImageNodeView(editor: Editor) {
       },
       selectNode: () => {
         dom.style.outline = "2px solid var(--editor-color-accent, #0078d4)";
-        dom.style.outlineOffset = "2px";
         showHandles();
       },
       deselectNode: () => { dom.style.outline = "none"; hideHandles(); },
