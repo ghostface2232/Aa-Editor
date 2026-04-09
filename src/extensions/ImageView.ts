@@ -1,4 +1,5 @@
 import { type Editor } from "@tiptap/core";
+import { NodeSelection } from "@tiptap/pm/state";
 import { startReorder } from "./ImageReorder";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { readFile, writeFile } from "@tauri-apps/plugin-fs";
@@ -190,8 +191,10 @@ export function createImageNodeView(editor: Editor) {
       syncDragState();
       if (isReadonly()) { dom.style.outline = "none"; hideHandles(); return; }
       const pos = getPos();
-      if (pos === undefined) return;
-      const selected = editor.state.selection.from === pos;
+      const { selection } = editor.state;
+      const selected = pos !== undefined
+        && selection instanceof NodeSelection
+        && selection.from === pos;
       dom.style.outline = selected ? "2px solid var(--editor-color-accent, #0078d4)" : "none";
       dom.style.outlineOffset = "2px";
       dom.style.borderRadius = "var(--editor-radius, 4px)";
@@ -200,7 +203,17 @@ export function createImageNodeView(editor: Editor) {
 
     const selectImageNode = () => {
       const pos = getPos();
-      if (pos !== undefined) editor.chain().focus().setNodeSelection(pos).run();
+      if (pos === undefined) return;
+      const view = editor.view;
+      if (!view) return;
+      // Ensure view.dom owns native focus before changing selection. When the editor
+      // had been blurred (e.g. user clicked sidebar/titlebar to deselect), Tiptap's
+      // chain().focus() defers focus via requestAnimationFrame, which can race with
+      // the subsequent setNodeSelection and leave PM's selection-sync bookkeeping in
+      // a state where selectNode() is never re-run on the same NodeView. Focusing
+      // synchronously and dispatching the NodeSelection directly avoids that race.
+      if (!view.hasFocus()) view.focus();
+      view.dispatch(view.state.tr.setSelection(NodeSelection.create(view.state.doc, pos)));
     };
 
     img.addEventListener("pointerdown", (e) => {
@@ -291,7 +304,10 @@ export function createImageNodeView(editor: Editor) {
     });
 
     editor.on("selectionUpdate", updateSelection);
-    editor.on("transaction", syncDragState);
+    // Also re-sync on every transaction so outline state never lags behind PM state,
+    // even when PM's selection-sync bookkeeping (lastSelectedViewDesc) skips firing
+    // selectNode/deselectNode (e.g. on rapid select → deselect → re-select sequences).
+    editor.on("transaction", updateSelection);
     syncDragState();
 
     return {
@@ -318,7 +334,7 @@ export function createImageNodeView(editor: Editor) {
       destroy: () => {
         imageSourceToken += 1;
         editor.off("selectionUpdate", updateSelection);
-        editor.off("transaction", syncDragState);
+        editor.off("transaction", updateSelection);
         activeDragCleanup?.();
       },
     };

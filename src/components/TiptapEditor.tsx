@@ -221,47 +221,81 @@ function createSelectionAfterImage(editor: Editor, imageAfterPos: number): Selec
   return TextSelection.near(resolved, -1);
 }
 
+function clearAllImageOutlines(editor: Editor): void {
+  const view = editor.view;
+  if (!view) return;
+  view.state.doc.descendants((node, pos) => {
+    if (node.type.name !== "image") return true;
+    const dom = view.nodeDOM(pos) as HTMLElement | null;
+    if (dom) {
+      dom.style.outline = "none";
+      dom.classList.remove("ProseMirror-selectednode");
+      dom.querySelectorAll("[data-corner]").forEach((handle) => {
+        const el = handle as HTMLElement;
+        el.style.opacity = "0";
+        el.style.pointerEvents = "none";
+      });
+    }
+    return true;
+  });
+}
+
 function moveSelectionAfterSelectedImage(editor: Editor): boolean {
   const { state, view } = editor;
   const { selection } = state;
-  if (!isImageNodeSelection(selection)) return false;
+  if (!isImageNodeSelection(selection)) {
+    // Even if PM state doesn't reflect a NodeSelection, defensively clear any stale
+    // outline left on image NodeViews so the UI never appears stuck.
+    clearAllImageOutlines(editor);
+    return false;
+  }
 
   const imageAfterPos = Math.min(selection.from + selection.node.nodeSize, state.doc.content.size);
   const nextSelection = createSelectionAfterImage(editor, imageAfterPos);
   view.dispatch(state.tr.setSelection(nextSelection));
+  clearAllImageOutlines(editor);
   return true;
 }
 
-function moveSelectionAfterAdjacentImageAtCoords(editor: Editor, x: number, y: number): boolean {
+function selectAdjacentImageAtCoords(editor: Editor, x: number, y: number): boolean {
   const targetPos = editor.view.posAtCoords({ left: x, top: y })?.pos;
   if (typeof targetPos !== "number") return false;
 
   const resolved = editor.state.doc.resolve(targetPos);
-  const imageBefore = resolved.nodeBefore?.type.name === "image" ? resolved.nodeBefore : null;
-  const imageAfter = resolved.nodeAfter?.type.name === "image" ? resolved.nodeAfter : null;
+  const imageBeforeNode = resolved.nodeBefore?.type.name === "image" ? resolved.nodeBefore : null;
+  const imageAfterNode = resolved.nodeAfter?.type.name === "image" ? resolved.nodeAfter : null;
+  if (!imageBeforeNode && !imageAfterNode) return false;
 
-  let imagePos: number | null = null;
-  let imageNodeSize = 0;
-  if (imageBefore) {
-    imageNodeSize = imageBefore.nodeSize;
-    imagePos = targetPos - imageNodeSize;
-  } else if (imageAfter) {
-    imageNodeSize = imageAfter.nodeSize;
-    imagePos = targetPos;
-  } else {
-    return false;
+  // Candidates in priority order: prefer the image BEFORE the click position so that
+  // clicking in the blank space to the right of an image selects that image (not the next).
+  const candidates: { pos: number }[] = [];
+  if (imageBeforeNode) candidates.push({ pos: targetPos - imageBeforeNode.nodeSize });
+  if (imageAfterNode) candidates.push({ pos: targetPos });
+
+  // If the click landed strictly inside any image rect, let the image NodeView's own
+  // pointerdown handler deal with it (direct click selection).
+  for (const cand of candidates) {
+    const dom = editor.view.nodeDOM(cand.pos) as HTMLElement | null;
+    if (!dom) continue;
+    const rect = dom.getBoundingClientRect();
+    if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
+      return false;
+    }
   }
 
-  const imageDom = editor.view.nodeDOM(imagePos) as HTMLElement | null;
-  if (!imageDom) return false;
-  const rect = imageDom.getBoundingClientRect();
-  const clickedInsideImage = x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
-  if (clickedInsideImage) return false;
+  // Pick the first candidate that shares the click's vertical row, and select it.
+  for (const cand of candidates) {
+    const dom = editor.view.nodeDOM(cand.pos) as HTMLElement | null;
+    if (!dom) continue;
+    const rect = dom.getBoundingClientRect();
+    if (y >= rect.top && y <= rect.bottom) {
+      const selection = NodeSelection.create(editor.state.doc, cand.pos);
+      editor.view.dispatch(editor.state.tr.setSelection(selection));
+      return true;
+    }
+  }
 
-  const cursorPos = Math.min(imagePos + imageNodeSize, editor.state.doc.content.size);
-  const nextSelection = createSelectionAfterImage(editor, cursorPos);
-  editor.view.dispatch(editor.state.tr.setSelection(nextSelection));
-  return true;
+  return false;
 }
 
 const MarkdownPaste = Extension.create({
@@ -460,6 +494,45 @@ const DocumentContext = Extension.create({
 
   addStorage() {
     return { noteId: null, filePath: null };
+  },
+});
+
+const ImageFocusGuard = Extension.create({
+  name: "imageFocusGuard",
+
+  addKeyboardShortcuts() {
+    return {
+      Escape: () => {
+        return moveSelectionAfterSelectedImage(this.editor);
+      },
+    };
+  },
+
+  addProseMirrorPlugins() {
+    return [
+      new Plugin({
+        key: new PluginKey("imageFocusGuard"),
+        props: {
+          handleDOMEvents: {
+            blur: (view) => {
+              const { selection } = view.state;
+              if (!(selection instanceof NodeSelection)) return false;
+              if (selection.node.type.name !== "image") return false;
+              const afterPos = Math.min(
+                selection.from + selection.node.nodeSize,
+                view.state.doc.content.size,
+              );
+              const resolved = view.state.doc.resolve(afterPos);
+              const nextSelection = resolved.parent.inlineContent
+                ? TextSelection.create(view.state.doc, afterPos)
+                : TextSelection.near(resolved, -1);
+              view.dispatch(view.state.tr.setSelection(nextSelection));
+              return false;
+            },
+          },
+        },
+      }),
+    ];
   },
 });
 
@@ -686,6 +759,7 @@ export const TiptapEditor = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
         ReadonlyGuard,
         SlashCommands,
         ImageDrop,
+        ImageFocusGuard,
         TextContextMenu,
         SearchHighlight,
         LinkPopoverShortcut,
@@ -1141,24 +1215,32 @@ export const TiptapEditor = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
     useEffect(() => {
       if (!editor) return;
 
+      // Window-level ESC as a backup to the Tiptap keymap. The Tiptap keymap only fires
+      // when view.dom has native focus (e.g. focus-stealing Fluent buttons with
+      // preventDefault can leave focus ambiguous). The window handler fires regardless.
       const handleKeyDown = (event: KeyboardEvent) => {
         if (event.key !== "Escape") return;
-        if (!editor.isFocused) return;
-        if (!moveSelectionAfterSelectedImage(editor)) return;
-        event.preventDefault();
+        if (!isImageNodeSelection(editor.state.selection)) return;
+        if (moveSelectionAfterSelectedImage(editor)) {
+          event.preventDefault();
+          event.stopPropagation();
+        }
       };
 
-      const handleMouseDown = (event: MouseEvent) => {
+      // Fallback for pointerdown on non-focusable targets (e.g. Tauri drag-region title
+      // bar, Fluent sidebar buttons that preventDefault() mousedown and so never blur
+      // view.dom).
+      const handlePointerDown = (event: PointerEvent) => {
         const target = event.target as Node | null;
         if (target && editor.view.dom.contains(target)) return;
         moveSelectionAfterSelectedImage(editor);
       };
 
       window.addEventListener("keydown", handleKeyDown, true);
-      window.addEventListener("mousedown", handleMouseDown, true);
+      window.addEventListener("pointerdown", handlePointerDown, true);
       return () => {
         window.removeEventListener("keydown", handleKeyDown, true);
-        window.removeEventListener("mousedown", handleMouseDown, true);
+        window.removeEventListener("pointerdown", handlePointerDown, true);
       };
     }, [editor]);
 
@@ -1221,8 +1303,8 @@ export const TiptapEditor = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
 
           if (!editable || isLinkClick) return;
           if (!isImageDirectClick) {
-            const moved = moveSelectionAfterAdjacentImageAtCoords(editor, event.clientX, event.clientY);
-            if (moved) {
+            const handled = selectAdjacentImageAtCoords(editor, event.clientX, event.clientY);
+            if (handled) {
               event.preventDefault();
               event.stopPropagation();
               editor.view.focus();

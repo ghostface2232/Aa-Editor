@@ -167,11 +167,15 @@
 /* 코드블럭 상단 타이틀 바 */
 .ProseMirror pre::before {
   content: attr(data-language);
-  display: block;
-  padding: 0.4rem 1rem;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  height: 30px;
+  padding: 0 1rem;
   background-color: var(--editor-color-border);
   font-family: var(--editor-font-family-sans);
   font-size: 0.75em;
+  line-height: 1;
   color: var(--editor-color-text-secondary);
   text-transform: uppercase;
   letter-spacing: 0.05em;
