@@ -29,7 +29,7 @@ import {
   ArrowRedoRegular,
   ChevronDownRegular,
   SearchRegular,
-  ArrowEnterRegular,
+  TextFirstLineRegular,
 } from "@fluentui/react-icons";
 import { pickAndInsertImage } from "../extensions/ImageDrop";
 import { insertMermaidCodeBlock } from "../extensions/mermaidCommands";
@@ -383,7 +383,7 @@ export function EditorToolbar({
 
         <div className={styles.search}>
           {tb(i("tool.search"), <SearchRegular />, onOpenSearch, false)}
-          {tb(i("tool.gotoLine"), <ArrowEnterRegular />, onOpenGoToLine, false)}
+          {tb(i("tool.gotoLine"), <TextFirstLineRegular />, onOpenGoToLine, false)}
         </div>
       </div>
     </div>

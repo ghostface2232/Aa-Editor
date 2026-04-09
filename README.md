@@ -9,12 +9,12 @@
 ![Platform](https://img.shields.io/badge/platform-Windows-blue?style=flat-square)
 
 
-A clean, fast and modern note-taking app for Windows, with Note and Markdown surfaces.
-Powered by [Tiptap](https://tiptap.dev/) and [CodeMirror](https://codemirror.net/).
+A clean, fast and modern Markdown note-taking app for Windows.
+Powered by [Tiptap](https://tiptap.dev/), edited as WYSIWYM with Markdown as the on-disk format.
 
 
 ## Features
-- **Note / Markdown surfaces** - An always-editable Note surface and an explicit Markdown source view switchable with `Ctrl+/`
+- **WYSIWYM Markdown editor** - A single always-editable Tiptap surface backed by Markdown on disk
 - **Slash commands** - Type `/` to insert headings, lists, code blocks, images, and more
 - **Image support** - Drag & drop, paste, resize with corner handles, and drag to reorder
 - **Note management** - Sidebar with grouping, multi-select, drag reorder, full-text search, and context menus
@@ -32,9 +32,8 @@ Powered by [Tiptap](https://tiptap.dev/) and [CodeMirror](https://codemirror.net
 - [Tauri v2](https://v2.tauri.app/) - Rust backend, WebView frontend
 - [React 19](https://react.dev/) - UI framework
 
-### Editors
-- [Tiptap](https://tiptap.dev/) - Rich text editor (Note surface)
-- [CodeMirror](https://codemirror.net/) - Source editor (Markdown surface)
+### Editor
+- [Tiptap](https://tiptap.dev/) v3 with `@tiptap/markdown` - WYSIWYM editor over Markdown
 
 ### Design
 - [Fluent UI v9](https://react.fluentui.dev/) - Component library & design tokens
@@ -51,7 +50,6 @@ Powered by [Tiptap](https://tiptap.dev/) and [CodeMirror](https://codemirror.net
 | New window | `Ctrl+Shift+N` |
 | Open file | `Ctrl+O` |
 | Save now | `Ctrl+S` |
-| Switch Note / Markdown | `Ctrl+/` |
 | Show toolbar / status bar | `Click editor` / scroll up / top of document |
 | Find in document | `Ctrl+F` |
 | Find and replace | `Ctrl+H` |

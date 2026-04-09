@@ -17,7 +17,7 @@ Windows-native Markdown editor built with Tauri v2, React, and TypeScript.
 
 ## Editor Synchronization
 
-- Markdown is cached in `useMarkdownState.markdownRef` via `getCachedMarkdown` / `readAndCacheMarkdown`.
+- Markdown is cached in `useMarkdownState.markdownRef` via `getCachedMarkdown` / `primeMarkdown`.
 - Tiptap's `onUpdate` marks the cache stale; `scheduleAutoSave`'s `createSnapshot` refreshes it via `editor.getMarkdown()` + `primeMarkdown()`.
 - `primeMarkdown(md)` is called whenever content is loaded imperatively (initial load, switchDocument, newNote, handleActiveDocChanged, etc.).
 - `TiptapEditorHandle.setContent(md)` loads content with `emitUpdate: false` to avoid feedback loops; callers also call `primeMarkdown(md)` to keep the cache in sync (handled centrally by `resetDocState`).
@@ -36,7 +36,7 @@ Windows-native Markdown editor built with Tauri v2, React, and TypeScript.
 
 - Internal documents live in the app's `notes` directory and are auto-saved (1s debounce).
 - Auto-save uses `activeDocRef` (sync ref) to track the active document, not React state's `activeIndex`, to prevent wrong-doc writes after rapid switching.
-- `notifyActiveDoc(id, filePath)` must be called in every code path that switches documents (switchDocument, newNote, deleteNote, importFiles, duplicateNote, restoreNote).
+- `notifyActiveDoc(id, filePath)` must be called in every code path that switches the active document (switchDocument, newNote, importFiles, duplicateNote, restoreNote). `deleteNote` does not call it directly because it relies on the subsequent active-index change to flow through normal state.
 - `cancelDocSave(docId)` cancels pending autosave timers for a specific doc. Called in deleteNote to prevent orphan writes.
 - `hasPendingChangesRef` (sync ref) tracks whether `scheduleAutoSave` was called, used by `flushAutoSave` to skip saving view-only documents.
 - `onCloseRequested` handler in App.tsx awaits `flushAutoSave` before window close.
