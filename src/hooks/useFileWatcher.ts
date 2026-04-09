@@ -4,6 +4,7 @@ import { watch, readTextFile } from "@tauri-apps/plugin-fs";
 import type { WatchEvent } from "@tauri-apps/plugin-fs";
 import { getNotesDir, deriveTitle, saveManifest, migrationInProgress, reconcileFolder } from "./useNotesLoader";
 import type { NoteDoc, NoteGroup } from "./useNotesLoader";
+import type { TiptapEditorHandle } from "../components/TiptapEditor";
 import { isOwnWrite, pruneOwnWrites } from "./ownWriteTracker";
 import { getFileTimestamps } from "../utils/fileTimestamps";
 import type { Locale } from "./useSettings";
@@ -40,8 +41,9 @@ export function useFileWatcher(
   groups: NoteGroup[],
   setGroups: React.Dispatch<React.SetStateAction<NoteGroup[]>>,
   activeIndex: number,
+  activeDocId: string | null,
   setActiveIndex: React.Dispatch<React.SetStateAction<number>>,
-  tiptapRef: React.RefObject<{ setContent: (md: string) => void } | null>,
+  tiptapRef: React.RefObject<TiptapEditorHandle | null>,
   locale: Locale,
   enabled: boolean,
   onActiveDocChanged?: (doc: { filePath: string; content: string }) => void,
@@ -52,6 +54,8 @@ export function useFileWatcher(
   groupsRef.current = groups;
   const activeIndexRef = useRef(activeIndex);
   activeIndexRef.current = activeIndex;
+  const activeDocIdRef = useRef(activeDocId);
+  activeDocIdRef.current = activeDocId;
   const onActiveDocChangedRef = useRef(onActiveDocChanged);
   onActiveDocChangedRef.current = onActiveDocChanged;
 
@@ -174,7 +178,7 @@ export function useFileWatcher(
               isDirty: false,
             };
 
-            if (idx === activeIndexRef.current) {
+            if (updated[idx].id === activeDocIdRef.current) {
               needsSyncMarkdown = true;
             }
 
@@ -183,7 +187,12 @@ export function useFileWatcher(
         });
 
         if (needsSyncMarkdown && tiptapRef.current) {
-          tiptapRef.current.setContent(content);
+          tiptapRef.current.openDocument?.({
+            noteId: doc.id,
+            filePath: doc.filePath,
+            markdown: content,
+            reason: "file-watch",
+          });
           onActiveDocChangedRef.current?.({ filePath: doc.filePath, content });
         }
       }

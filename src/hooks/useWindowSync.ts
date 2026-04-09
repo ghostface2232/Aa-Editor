@@ -3,6 +3,7 @@ import { flushSync } from "react-dom";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { emit, listen } from "@tauri-apps/api/event";
 import type { NoteDoc, NoteGroup, TrashedNote } from "./useNotesLoader";
+import type { TiptapEditorHandle } from "../components/TiptapEditor";
 import { setTrashedNotesCache } from "./useNotesLoader";
 
 interface DocUpdatedPayload {
@@ -87,7 +88,8 @@ export function emitTrashUpdated(trashedNotes: TrashedNote[]) {
 export function useWindowSync(
   setDocs: React.Dispatch<React.SetStateAction<NoteDoc[]>>,
   activeIndex: number,
-  tiptapRef: React.RefObject<{ setContent: (md: string) => void } | null>,
+  activeDocId: string | null,
+  tiptapRef: React.RefObject<TiptapEditorHandle | null>,
   setActiveIndex: React.Dispatch<React.SetStateAction<number>>,
   setGroups?: React.Dispatch<React.SetStateAction<NoteGroup[]>>,
   setTrashedNotes?: (updater: TrashedNote[] | ((prev: TrashedNote[]) => TrashedNote[])) => void,
@@ -96,6 +98,8 @@ export function useWindowSync(
   // Refs to avoid stale closures in event listeners
   const activeIndexRef = useRef(activeIndex);
   activeIndexRef.current = activeIndex;
+  const activeDocIdRef = useRef(activeDocId);
+  activeDocIdRef.current = activeDocId;
   const onActiveDocChangedRef = useRef(onActiveDocChanged);
   onActiveDocChangedRef.current = onActiveDocChanged;
 
@@ -120,7 +124,7 @@ export function useWindowSync(
             const updated = [...prev];
             updated[idx] = { ...updated[idx], content, fileName, updatedAt, isDirty: false };
 
-            if (idx === activeIndexRef.current) {
+            if (updated[idx].id === activeDocIdRef.current) {
               needsSyncMarkdown = true;
               syncFilePath = updated[idx].filePath;
             }
@@ -129,7 +133,12 @@ export function useWindowSync(
         });
 
         if (needsSyncMarkdown && tiptapRef.current) {
-          tiptapRef.current.setContent(content);
+          tiptapRef.current.openDocument?.({
+            noteId: docId,
+            filePath: syncFilePath,
+            markdown: content,
+            reason: "window-sync",
+          });
           onActiveDocChangedRef.current?.({ filePath: syncFilePath, content });
         }
       }),
@@ -162,14 +171,20 @@ export function useWindowSync(
           }
 
           const currentActive = activeIndexRef.current;
+          const deletedActiveDoc = activeDocIdRef.current === docId;
 
-          if (idx === currentActive) {
+          if (deletedActiveDoc) {
             // Deleted doc is the active doc — load new active doc's content
             const newIdx = Math.min(idx, filtered.length - 1);
             setActiveIndex(newIdx);
             const newDoc = filtered[newIdx];
             if (tiptapRef.current && newDoc) {
-              tiptapRef.current.setContent(newDoc.content);
+              tiptapRef.current.openDocument?.({
+                noteId: newDoc.id,
+                filePath: newDoc.filePath,
+                markdown: newDoc.content,
+                reason: "window-sync",
+              });
             }
             if (newDoc) {
               onActiveDocChangedRef.current?.({ filePath: newDoc.filePath, content: newDoc.content });

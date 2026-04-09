@@ -186,7 +186,12 @@ function App() {
       initialLoaded.current = true;
       const doc = docs[activeIndex];
       if (doc) {
-        tiptapRef.current?.setContent(doc.content);
+        tiptapRef.current?.openDocument?.({
+          noteId: doc.id,
+          filePath: doc.filePath,
+          markdown: doc.content,
+          reason: "init",
+        });
         state.primeMarkdown(doc.content);
         state.setFilePath(doc.filePath);
         state.setIsDirty(false);
@@ -258,12 +263,12 @@ function App() {
     state.setFilePath(doc.filePath);
     state.setIsDirty(false);
   }, [state]);
-  useWindowSync(setDocs, activeIndex, tiptapRef, setActiveIndex, setGroups, setTrashedNotes, handleActiveDocChanged);
+  useWindowSync(setDocs, activeIndex, docs[activeIndex]?.id ?? null, tiptapRef, setActiveIndex, setGroups, setTrashedNotes, handleActiveDocChanged);
 
   // 파일 시스템 감시 (클라우드 동기화 등 외부 변경 감지)
   useFileWatcher(
     docs, setDocs, groups, setGroups,
-    activeIndex, setActiveIndex, tiptapRef,
+    activeIndex, docs[activeIndex]?.id ?? null, setActiveIndex, tiptapRef,
     locale,
     notesDirReady && !isLoading,
     handleActiveDocChanged,

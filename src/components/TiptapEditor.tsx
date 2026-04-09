@@ -9,8 +9,9 @@ import {
 } from "react";
 import { useEditor, EditorContent } from "@tiptap/react";
 import { Extension, type Editor } from "@tiptap/core";
-import { Plugin, PluginKey, NodeSelection, TextSelection } from "@tiptap/pm/state";
+import { Plugin, PluginKey, NodeSelection, TextSelection, EditorState } from "@tiptap/pm/state";
 import { Fragment, Slice } from "@tiptap/pm/model";
+import { closeHistory } from "@tiptap/pm/history";
 import StarterKit from "@tiptap/starter-kit";
 import Underline from "@tiptap/extension-underline";
 import Link from "@tiptap/extension-link";
@@ -48,6 +49,7 @@ declare module "@tiptap/core" {
     readonlyGuard: { readonly: boolean };
     slashCommands: { locale: string };
     markdownPaste: { keepFormatOnPaste: boolean };
+    documentContext: { noteId: string | null; filePath: string | null };
   }
 }
 
@@ -55,6 +57,22 @@ const MD_PATTERN = /^#{1,6}\s|^\s*[-*+]\s|^\s*\d+\.\s|^>\s|^```|^\|.+\||\[.+\]\(
 type TextRange = { from: number; to: number };
 const LINK_HOVER_CLOSE_DELAY_MS = 300;
 const LINK_HOVER_SAFE_ZONE_PX = 16;
+const DOC_SESSION_CACHE_LIMIT = 20;
+
+function computeMarkdownSignature(markdown: string): string {
+  let hash = 2166136261;
+  for (let i = 0; i < markdown.length; i += 1) {
+    hash ^= markdown.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `${markdown.length}:${hash >>> 0}`;
+}
+
+function buildDocumentSessionKey(noteId: string | null, filePath: string | null): string | null {
+  if (noteId) return `id:${noteId}`;
+  if (!filePath) return null;
+  return `path:${filePath.replace(/\\/g, "/").toLowerCase()}`;
+}
 
 function createPlainTextSlice(editor: Editor, text: string) {
   const normalized = text.replace(/\r\n?/g, "\n");
@@ -365,11 +383,27 @@ const ReadonlyGuard = Extension.create({
   },
 });
 
+const DocumentContext = Extension.create({
+  name: "documentContext",
+
+  addStorage() {
+    return { noteId: null, filePath: null };
+  },
+});
+
 const lowlight = createLowlight(common);
 
 export interface TiptapEditorHandle {
   getMarkdown: () => string;
   setContent: (markdown: string) => void;
+  setDocumentContext: (noteId: string | null, filePath: string | null, refresh?: boolean) => void;
+  openDocument: (params: {
+    noteId: string | null;
+    filePath: string | null;
+    markdown: string;
+    reason?: "init" | "switch" | "window-sync" | "file-watch" | "fallback";
+  }) => void;
+  invalidateDocumentSession: (noteId: string | null, filePath: string | null) => void;
   setEditable: (editable: boolean) => void;
   getEditor: () => ReturnType<typeof useEditor> | null;
 }
@@ -388,6 +422,13 @@ interface TiptapEditorProps {
   onChromeActivate?: () => void;
 }
 
+type DocumentSession = {
+  state: EditorState;
+  markdownSignature: string;
+  noteId: string | null;
+  filePath: string | null;
+};
+
 export const TiptapEditor = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
   function TiptapEditor({
     initialMarkdown,
@@ -403,6 +444,8 @@ export const TiptapEditor = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
     onChromeActivate,
   }, ref) {
     const dirtyRef = useRef(false);
+    const documentSessionsRef = useRef<Map<string, DocumentSession>>(new Map());
+    const currentSessionKeyRef = useRef<string | null>(null);
     const [linkPopoverOpen, setLinkPopoverOpen] = useState(false);
     const [linkUrl, setLinkUrl] = useState("");
     const [linkHasValue, setLinkHasValue] = useState(false);
@@ -428,6 +471,17 @@ export const TiptapEditor = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
       "--editor-paragraph-spacing": `${paragraphSpacing / 50}em`,
     } as CSSProperties;
     const wrapClass = wordWrap === "char" ? "tiptap-wrap-char" : "tiptap-wrap-word";
+
+    const touchDocumentSession = useCallback((key: string, session: DocumentSession) => {
+      const cache = documentSessionsRef.current;
+      cache.delete(key);
+      cache.set(key, session);
+      while (cache.size > DOC_SESSION_CACHE_LIMIT) {
+        const oldestKey = cache.keys().next().value as string | undefined;
+        if (!oldestKey) break;
+        cache.delete(oldestKey);
+      }
+    }, []);
     const scheduleSpellcheckRefresh = useCallback((currentEditor: Editor, forceFullRefresh = false) => {
       if (!spellcheckRef.current) return;
 
@@ -556,6 +610,7 @@ export const TiptapEditor = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
         TableHeader,
         TableNodeSelect,
         MarkdownPaste,
+        DocumentContext,
         ReadonlyGuard,
         SlashCommands,
         ImageDrop,
@@ -572,6 +627,163 @@ export const TiptapEditor = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
         handleUpdate(currentEditor, isPaste);
       },
     });
+
+    const storeCurrentDocumentSession = useCallback(() => {
+      if (!editor) return;
+      const contextNoteId = editor.storage.documentContext.noteId;
+      const contextFilePath = editor.storage.documentContext.filePath;
+      const key = currentSessionKeyRef.current ?? buildDocumentSessionKey(contextNoteId, contextFilePath);
+      if (!key) return;
+      const markdown = editor.getMarkdown();
+      touchDocumentSession(key, {
+        state: editor.state,
+        markdownSignature: computeMarkdownSignature(markdown),
+        noteId: contextNoteId,
+        filePath: contextFilePath,
+      });
+    }, [editor, touchDocumentSession]);
+
+    const parseMarkdownToState = useCallback((markdown: string): EditorState | null => {
+      if (!editor?.markdown) return null;
+      try {
+        const parsed = editor.markdown.parse(markdown);
+        const doc = editor.schema.nodeFromJSON(parsed);
+        return EditorState.create({
+          doc,
+          plugins: editor.state.plugins,
+        });
+      } catch {
+        return null;
+      }
+    }, [editor]);
+
+    const replaceCurrentDocumentContent = useCallback((markdown: string, addToHistory: boolean) => {
+      if (!editor?.markdown) return false;
+      const wasReadonly = editor.storage.readonlyGuard.readonly;
+      editor.storage.readonlyGuard.readonly = false;
+      try {
+        const parsed = editor.markdown.parse(markdown);
+        const doc = editor.schema.nodeFromJSON(parsed);
+
+        const replaceTr = closeHistory(editor.state.tr);
+        replaceTr.replaceWith(0, editor.state.doc.content.size, doc.content);
+        replaceTr.setMeta("preventUpdate", true);
+        replaceTr.setMeta("addToHistory", addToHistory);
+        editor.view.dispatch(replaceTr);
+
+        const boundaryTr = closeHistory(editor.state.tr);
+        boundaryTr.setMeta("preventUpdate", true);
+        boundaryTr.setMeta("addToHistory", false);
+        editor.view.dispatch(boundaryTr);
+        return true;
+      } catch {
+        return false;
+      } finally {
+        editor.storage.readonlyGuard.readonly = wasReadonly;
+      }
+    }, [editor]);
+
+    const openDocument = useCallback((params: {
+      noteId: string | null;
+      filePath: string | null;
+      markdown: string;
+      reason?: "init" | "switch" | "window-sync" | "file-watch" | "fallback";
+    }) => {
+      if (!editor) return;
+      closeLinkPopover();
+      closeLinkHoverPopover();
+
+      const {
+        noteId,
+        filePath,
+        markdown,
+        reason = "switch",
+      } = params;
+      const nextKey = buildDocumentSessionKey(noteId, filePath);
+      const currentKey = currentSessionKeyRef.current;
+      const sameSession = !!nextKey && nextKey === currentKey;
+
+      if (!sameSession) {
+        storeCurrentDocumentSession();
+      }
+
+      const expectedSignature = computeMarkdownSignature(markdown);
+      const cachedSession = nextKey ? documentSessionsRef.current.get(nextKey) : null;
+      const shouldRestoreCachedSession = !!cachedSession && cachedSession.markdownSignature === expectedSignature;
+      let applied = false;
+
+      if (sameSession) {
+        const currentSignature = computeMarkdownSignature(editor.getMarkdown());
+        if (currentSignature !== expectedSignature) {
+          const shouldTrackInHistory = reason === "window-sync" || reason === "file-watch";
+          applied = replaceCurrentDocumentContent(markdown, shouldTrackInHistory);
+        } else {
+          applied = true;
+        }
+      } else if (shouldRestoreCachedSession && cachedSession) {
+        const wasReadonly = editor.storage.readonlyGuard.readonly;
+        editor.storage.readonlyGuard.readonly = false;
+        editor.view.updateState(cachedSession.state);
+        editor.storage.readonlyGuard.readonly = wasReadonly;
+        applied = true;
+      } else {
+        const nextState = parseMarkdownToState(markdown);
+        if (nextState) {
+          const wasReadonly = editor.storage.readonlyGuard.readonly;
+          editor.storage.readonlyGuard.readonly = false;
+          editor.view.updateState(nextState);
+          editor.storage.readonlyGuard.readonly = wasReadonly;
+          applied = true;
+        }
+      }
+
+      if (!applied) {
+        const wasReadonly = editor.storage.readonlyGuard.readonly;
+        editor.storage.readonlyGuard.readonly = false;
+        editor.commands.setContent(markdown, {
+          emitUpdate: false,
+          contentType: "markdown",
+        });
+        editor.storage.readonlyGuard.readonly = wasReadonly;
+      }
+
+      editor.storage.documentContext.noteId = noteId;
+      editor.storage.documentContext.filePath = filePath;
+      dirtyRef.current = false;
+
+      const resolvedKey = nextKey ?? buildDocumentSessionKey(noteId, filePath);
+      currentSessionKeyRef.current = resolvedKey;
+      if (resolvedKey) {
+        touchDocumentSession(resolvedKey, {
+          state: editor.state,
+          markdownSignature: expectedSignature,
+          noteId,
+          filePath,
+        });
+      }
+
+      if (spellcheckRef.current) {
+        scheduleSpellcheckRefresh(editor);
+      }
+    }, [
+      closeLinkHoverPopover,
+      closeLinkPopover,
+      editor,
+      parseMarkdownToState,
+      replaceCurrentDocumentContent,
+      scheduleSpellcheckRefresh,
+      storeCurrentDocumentSession,
+      touchDocumentSession,
+    ]);
+
+    const invalidateDocumentSession = useCallback((noteId: string | null, filePath: string | null) => {
+      const key = buildDocumentSessionKey(noteId, filePath);
+      if (!key) return;
+      documentSessionsRef.current.delete(key);
+      if (currentSessionKeyRef.current === key) {
+        currentSessionKeyRef.current = null;
+      }
+    }, []);
 
     const triggerLinkPopover = useCallback(() => {
       if (!editor || !editable) return false;
@@ -860,20 +1072,25 @@ export const TiptapEditor = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
         },
         setContent: (markdown: string) => {
           if (!editor) return;
-          closeLinkPopover();
-          closeLinkHoverPopover();
-          const wasReadonly = editor.storage.readonlyGuard.readonly;
-          editor.storage.readonlyGuard.readonly = false;
-          editor.commands.setContent(markdown, {
-            emitUpdate: false,
-            contentType: "markdown",
+          openDocument({
+            noteId: editor.storage.documentContext.noteId,
+            filePath: editor.storage.documentContext.filePath,
+            markdown,
+            reason: "fallback",
           });
-          editor.storage.readonlyGuard.readonly = wasReadonly;
-          dirtyRef.current = false;
-          if (spellcheckRef.current) {
-            scheduleSpellcheckRefresh(editor, true);
+        },
+        setDocumentContext: (noteId: string | null, filePath: string | null, refresh = true) => {
+          if (!editor) return;
+          const prevNoteId = editor.storage.documentContext.noteId;
+          const prevFilePath = editor.storage.documentContext.filePath;
+          editor.storage.documentContext.noteId = noteId;
+          editor.storage.documentContext.filePath = filePath;
+          if (refresh && (prevNoteId !== noteId || prevFilePath !== filePath)) {
+            scheduleSpellcheckRefresh(editor);
           }
         },
+        openDocument,
+        invalidateDocumentSession,
         setEditable: (value: boolean) => {
           if (!editor) return;
           editor.storage.readonlyGuard.readonly = !value;
@@ -885,7 +1102,7 @@ export const TiptapEditor = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
         },
         getEditor: () => editor,
       }),
-      [closeLinkHoverPopover, closeLinkPopover, editor, scheduleSpellcheckRefresh],
+      [closeLinkHoverPopover, closeLinkPopover, editor, invalidateDocumentSession, openDocument, scheduleSpellcheckRefresh],
     );
 
     return (

@@ -58,10 +58,22 @@ export function getCurrentMarkdown(
 function resetDocState(
   state: MarkdownState,
   tiptapRef: React.RefObject<TiptapEditorHandle | null>,
+  docId: string | null,
   filePath: string | null,
   content: string,
+  reason: "init" | "switch" | "window-sync" | "file-watch" | "fallback" = "switch",
 ) {
-  tiptapRef.current?.setContent(content);
+  if (tiptapRef.current?.openDocument) {
+    tiptapRef.current.openDocument({
+      noteId: docId,
+      filePath,
+      markdown: content,
+      reason,
+    });
+  } else {
+    tiptapRef.current?.setDocumentContext(docId, filePath, false);
+    tiptapRef.current?.setContent(content);
+  }
   state.primeMarkdown(content);
   state.setFilePath(filePath);
   state.setIsDirty(false);
@@ -172,11 +184,12 @@ export function useFileSystem(
       prev.map((g) => ({ ...g, noteIds: g.noteIds.filter((id) => id !== leavingId) }))
         .filter((g) => g.noteIds.length > 0));
     cancelDocSaveRef?.current?.(leavingId);
+    tiptapRef.current?.invalidateDocumentSession?.(leavingId, leaving.filePath);
 
     const pruned = baseDocs.filter((d) => d.id !== leavingDocId);
     setDocs(pruned);
     return pruned;
-  }, [cancelDocSaveRef, setDocs, setGroups]);
+  }, [cancelDocSaveRef, setDocs, setGroups, tiptapRef]);
 
   const saveFile = useCallback(async () => {
     const doc = docs[activeIndex];
@@ -283,7 +296,7 @@ export function useFileSystem(
     sortAndPersistDocs(nextDocs, lastImported.id, notesSortOrder, locale, setDocs, setActiveIndex, groupsRef.current);
     importedDocs.forEach((doc) => emitDocCreated(doc));
 
-    resetDocState(state, tiptapRef, lastImported.filePath, lastImported.content);
+    resetDocState(state, tiptapRef, lastImported.id, lastImported.filePath, lastImported.content);
     notifyActiveDocRef?.current?.(lastImported.id, lastImported.filePath);
   }, [getLiveDocsSnapshot, leaveCurrentDoc, markDocClean, notesSortOrder, setActiveIndex, setDocs, state, tiptapRef, pruneEmptyCurrentDoc]);
 
@@ -369,7 +382,7 @@ export function useFileSystem(
       }
       sortAndPersistDocs(nextDocs, newDoc.id, notesSortOrder, locale, setDocs, setActiveIndex, nextGroups);
       emitDocCreated(newDoc);
-      resetDocState(state, tiptapRef, filePath, "");
+      resetDocState(state, tiptapRef, id, filePath, "");
       notifyActiveDocRef?.current?.(id, filePath);
       if (filePath) {
         markOwnWrite(filePath);
@@ -400,7 +413,7 @@ export function useFileSystem(
 
     const target = nextDocs[targetIndex];
     setDocs(nextDocs);
-    resetDocState(state, tiptapRef, target.filePath, target.content);
+    resetDocState(state, tiptapRef, target.id, target.filePath, target.content);
     notifyActiveDocRef?.current?.(target.id, target.filePath);
     setActiveIndex(targetIndex);
     void saveManifest(nextDocs, target.id, groupsRef.current).catch(() => {});
@@ -458,6 +471,7 @@ export function useFileSystem(
     }
 
     const nextDocs = baseDocs.filter((_, i) => i !== index);
+    tiptapRef.current?.invalidateDocumentSession?.(doc.id, doc.filePath);
     emitDocDeleted(doc.id);
 
     // Compute cleaned groups atomically (remove note from all groups)
@@ -493,7 +507,7 @@ export function useFileSystem(
 
       setDocs([newDoc]);
       setActiveIndex(0);
-      resetDocState(state, tiptapRef, filePath, "");
+      resetDocState(state, tiptapRef, id, filePath, "");
       notifyActiveDocRef?.current?.(id, filePath);
       void saveManifest([newDoc], newDoc.id, cleanedGroups).catch(() => {});
       return;
@@ -506,7 +520,7 @@ export function useFileSystem(
     if (wasActive) {
       const target = nextDocs[Math.min(index, nextDocs.length - 1)];
       nextActiveId = target.id;
-      resetDocState(state, tiptapRef, target.filePath, target.content);
+      resetDocState(state, tiptapRef, target.id, target.filePath, target.content);
       notifyActiveDocRef?.current?.(target.id, target.filePath);
     } else {
       nextActiveId = baseDocs[currentActiveIndex].id;
@@ -557,7 +571,7 @@ export function useFileSystem(
     const prunedDocs = pruneEmptyCurrentDoc(baseDocs, activeDocId);
     const nextDocs = [...prunedDocs, newDoc];
     sortAndPersistDocs(nextDocs, newDoc.id, notesSortOrder, locale, setDocs, setActiveIndex, groupsRef.current);
-    resetDocState(state, tiptapRef, filePath, content);
+    resetDocState(state, tiptapRef, newDoc.id, filePath, content);
     notifyActiveDocRef?.current?.(newDoc.id, filePath);
   }, [getLiveDocsSnapshot, leaveCurrentDoc, markDocClean, notesSortOrder, setActiveIndex, setDocs, state, tiptapRef, pruneEmptyCurrentDoc]);
 
@@ -654,7 +668,7 @@ export function useFileSystem(
     sortAndPersistDocs(nextDocs, restoredDoc.id, notesSortOrder, locale, setDocs, setActiveIndex, restoredGroups);
     emitDocCreated(restoredDoc);
 
-    resetDocState(state, tiptapRef, restoredPath, content);
+    resetDocState(state, tiptapRef, restoredDoc.id, restoredPath, content);
     notifyActiveDocRef?.current?.(restoredDoc.id, restoredPath);
   }, [getLiveDocsSnapshot, leaveCurrentDoc, markDocClean, notesSortOrder, setActiveIndex, setDocs, setGroups, setTrashedNotes, state, tiptapRef, pruneEmptyCurrentDoc]);
 
@@ -668,10 +682,11 @@ export function useFileSystem(
       setTrashedNotes((prev) => prev.filter((n) => n.id !== trashedNoteId));
       emitTrashUpdated(getTrashedNotesCache());
     }
+    tiptapRef.current?.invalidateDocumentSession?.(trashed.id, trashed.originalFilePath);
 
     // Persist immediately — trash-only change, no sortAndPersistDocs to trigger it
     void saveManifest(docsRef.current, docsRef.current[activeIndexRef.current]?.id ?? null, groupsRef.current).catch(() => {});
-  }, [setTrashedNotes]);
+  }, [setTrashedNotes, tiptapRef]);
 
   const emptyTrash = useCallback(async () => {
     for (const trashed of trashedNotesRef.current ?? []) {
