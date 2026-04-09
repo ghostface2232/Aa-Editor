@@ -26,6 +26,7 @@ Windows-native Markdown editor built with Tauri v2, React, and TypeScript.
 
 - App settings are stored in `AppData/Roaming/com.noten.app/settings.json` via Tauri fs plugin.
 - Note manifest (file list, groups, active note) is stored as `manifest.json` in the notes directory (file-based). localStorage is used only as a one-time migration fallback.
+- Manifest includes `imageAssetMigrationV1CompletedAt` to track one-time image asset migration completion per notes directory.
 - Sidebar open/close state and width are stored in localStorage.
 - Notes created by the app are stored under the app data `notes` directory.
 - `appDataDir()` may not include a trailing separator; always check before joining paths.
@@ -40,30 +41,31 @@ Windows-native Markdown editor built with Tauri v2, React, and TypeScript.
 - `hasPendingChangesRef` (sync ref) tracks whether `scheduleAutoSave` was called, used by `flushAutoSave` to skip saving view-only documents.
 - `onCloseRequested` handler in App.tsx awaits `flushAutoSave` before window close.
 - Empty notes (no content, no customName) are auto-deleted when leaving via `pruneEmptyCurrentDoc`. Applied in switchDocument, newNote, importFiles, duplicateNote, and restoreNote.
-- External documents are files opened via Ctrl+O from outside the notes directory.
-- External documents are NOT auto-saved; the user must press Ctrl+S to write back to disk.
-- Rename on external documents renames the actual file on disk.
-- Delete on internal documents removes the file; external documents show "Close" instead (removes from sidebar only).
-- Sidebar icon: `DocumentRegular` for internal, `FolderRegular` for external.
-- External documents show a `●` dot when dirty; internal documents show no dirty indicator.
+- `Ctrl+O` imports selected files into the app notes directory and creates managed internal notes (new note IDs and note files).
+- Imported notes are treated the same as other internal notes (auto-save enabled, normal delete/duplicate/restore flow).
+- Rename updates the note title metadata (and sets `customName`), not the underlying `.md` file path.
 - `customName` flag on a document means the user manually renamed it; auto-title derivation is permanently disabled for that document.
 
 ## Current Settings Model
 
 - Theme, note sort order, paste formatting, spellcheck, wrap mode, font family, group layout, paragraph spacing, and notes directory are user settings.
-- Note sort order supports four options: `updated-desc`, `updated-asc`, `created-desc`, `created-asc` (default: `updated-desc`).
+- Note sort order supports six options: `updated-desc`, `updated-asc`, `created-desc`, `created-asc`, `title-asc`, `title-desc` (default: `updated-desc`).
 - Old values `recent-first`/`recent-last` are auto-migrated on load.
 
 ## Images
 
-- Images are stored as base64 data URLs in markdown.
-- The Image extension uses `allowBase64: true` and a custom NodeView (`createImageNodeView`) for resize handles and context menu.
+- Markdown image sources use note-local relative asset paths: `.assets/<noteId>/<hash>.<ext>`.
+- Legacy base64 images are supported for compatibility (`allowBase64: true`) and are migrated on startup once per notes directory.
+- Startup migration converts `data:image/...` sources in markdown to asset files and marks completion via `imageAssetMigrationV1CompletedAt`.
+- On insert/replace/drop/paste, images are written to note-local assets and inserted with relative `.assets/...` sources.
+- The Image extension keeps a custom NodeView (`createImageNodeView`) for resize handles, drag reorder, context menu, and asset-source rendering.
+- Asset-path images are rendered by reading file bytes and resolving to displayable data URLs in the NodeView.
 - When `width`/`height` are set, `renderMarkdown` outputs `<img>` HTML tags to preserve dimensions through markdown round-trips.
 - On insert (pick, drop, paste), images are capped to 560px width with aspect ratio preserved. Clamping uses `clampImageDimensions` from `imageUtils.ts`.
 - Image height is always `auto` (CSS) — only width is set as px to prevent aspect ratio distortion on narrow viewports.
 - Images in the editor show `move` cursor and can be dragged to reorder via `ImageReorder.ts`.
 - Image drag reorder: `ImageView.ts` detects a 6px threshold on `pointerdown`, then delegates to `startReorder()` which creates a ghost preview, drop indicator, and handles the transaction in a single undo step.
-- Ctrl+C on a selected image copies the image blob to clipboard (not HTML).
+- Ctrl+C on a selected image copies the image blob to clipboard (not HTML), for both base64 and asset-path sources.
 
 ## Context Menus
 
@@ -113,6 +115,8 @@ Do not use old community-package APIs such as `editor.storage.markdown.getMarkdo
 ## Shared Utilities
 
 - `src/utils/imageUtils.ts` — `bytesToDataUrl`, `dataUrlToUint8Array`, `mimeFromExt`, `mimeToExt`, `mimeFromDataUrl`, `clampImageDimensions`
+- `src/utils/imageAssetUtils.ts` — document image context, asset path helpers, asset write/read, renderable source resolution
+- `src/utils/migrateImageAssets.ts` — one-time markdown migration from base64 image sources to `.assets/...` paths
 - `src/utils/contextMenuRegistry.ts` — `closeContextMenu`, `createMenuShell`, `createMenuItem`, `createMenuSeparator`, `isDarkTheme`
 - `src/utils/clampMenuPosition.ts` — `clampMenuToViewport`
 

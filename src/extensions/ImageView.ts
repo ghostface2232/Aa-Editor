@@ -4,7 +4,13 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import { readFile, writeFile } from "@tauri-apps/plugin-fs";
 import { t } from "../i18n";
 import type { Locale } from "../hooks/useSettings";
-import { dataUrlToUint8Array, mimeFromDataUrl, mimeToExt, bytesToDataUrl, mimeFromExt } from "../utils/imageUtils";
+import { bytesToDataUrl, mimeFromExt } from "../utils/imageUtils";
+import {
+  type DocumentImageContext,
+  persistBinaryAsAsset,
+  readImageBinary,
+  resolveRenderableImageSource,
+} from "../utils/imageAssetUtils";
 import { closeContextMenu, createMenuShell, createMenuItem } from "../utils/contextMenuRegistry";
 
 const HANDLE_SIZE = 10;
@@ -16,6 +22,7 @@ function showContextMenu(
   editor: Editor,
   nodePos: number,
   src: string,
+  context: DocumentImageContext,
   locale: Locale,
 ) {
   const i = (key: Parameters<typeof t>[0]) => t(key, locale);
@@ -32,10 +39,22 @@ function showContextMenu(
       label: i("image.save"), icon: iconSave,
       action: async () => {
         closeContextMenu();
-        const ext = mimeToExt(src);
+        const payload = await readImageBinary(src, context);
+        if (!payload) return;
+        const ext = payload.mime === "image/jpeg"
+          ? "jpg"
+          : payload.mime === "image/png"
+            ? "png"
+            : payload.mime === "image/gif"
+              ? "gif"
+              : payload.mime === "image/webp"
+                ? "webp"
+                : payload.mime === "image/svg+xml"
+                  ? "svg"
+                  : "png";
         const path = await save({ title: i("dialog.saveImage"), filters: [{ name: "Image", extensions: [ext] }] });
         if (!path) return;
-        await writeFile(path, dataUrlToUint8Array(src));
+        await writeFile(path, payload.bytes);
       },
     },
     {
@@ -43,9 +62,9 @@ function showContextMenu(
       action: async () => {
         closeContextMenu();
         try {
-          const bytes = dataUrlToUint8Array(src);
-          const mime = mimeFromDataUrl(src);
-          const blob = new Blob([bytes], { type: mime });
+          const payload = await readImageBinary(src, context);
+          if (!payload) return;
+          const blob = new Blob([payload.bytes], { type: payload.mime });
           await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
         } catch { /* ignore */ }
       },
@@ -62,8 +81,10 @@ function showContextMenu(
         const path = selected as string;
         const ext = path.split(".").pop() ?? "png";
         const fileBytes = await readFile(path);
-        const dataUrl = bytesToDataUrl(fileBytes, mimeFromExt(ext));
-        editor.chain().focus().setNodeSelection(nodePos).updateAttributes("image", { src: dataUrl }).run();
+        const mime = mimeFromExt(ext);
+        const relativeSrc = await persistBinaryAsAsset({ bytes: fileBytes, mime }, context);
+        const fallbackDataUrl = bytesToDataUrl(fileBytes, mime);
+        editor.chain().focus().setNodeSelection(nodePos).updateAttributes("image", { src: relativeSrc ?? fallbackDataUrl }).run();
       },
     },
     {
@@ -96,7 +117,26 @@ export function createImageNodeView(editor: Editor) {
     dom.draggable = false;
 
     const img = document.createElement("img");
-    img.src = HTMLAttributes.src;
+    const getContext = (): DocumentImageContext => ({
+      noteId: editor.storage.documentContext?.noteId ?? null,
+      filePath: editor.storage.documentContext?.filePath ?? null,
+    });
+
+    let imageSourceToken = 0;
+    const syncImageSource = (source: string) => {
+      const token = ++imageSourceToken;
+      void (async () => {
+        const resolved = await resolveRenderableImageSource(source, getContext());
+        if (token !== imageSourceToken) return;
+        if (resolved) {
+          img.src = resolved;
+        } else {
+          img.removeAttribute("src");
+        }
+      })();
+    };
+
+    syncImageSource(HTMLAttributes.src);
     if (HTMLAttributes.alt) img.alt = HTMLAttributes.alt;
     if (HTMLAttributes.title) img.title = HTMLAttributes.title;
     img.draggable = false;
@@ -247,7 +287,7 @@ export function createImageNodeView(editor: Editor) {
       const pos = getPos();
       if (pos === undefined) return;
       const locale = (editor.storage.slashCommands?.locale ?? "en") as Locale;
-      showContextMenu({ x: e.clientX, y: e.clientY }, editor, pos, currentSrc, locale);
+      showContextMenu({ x: e.clientX, y: e.clientY }, editor, pos, currentSrc, getContext(), locale);
     });
 
     editor.on("selectionUpdate", updateSelection);
@@ -260,7 +300,7 @@ export function createImageNodeView(editor: Editor) {
         if (updatedNode.type.name !== "image") return false;
         currentNode = updatedNode;
         currentSrc = updatedNode.attrs.src;
-        img.src = updatedNode.attrs.src;
+        syncImageSource(updatedNode.attrs.src);
         if (updatedNode.attrs.alt) img.alt = updatedNode.attrs.alt;
         if (updatedNode.attrs.width) {
           img.style.width = `${updatedNode.attrs.width}px`;
@@ -276,6 +316,7 @@ export function createImageNodeView(editor: Editor) {
       },
       deselectNode: () => { dom.style.outline = "none"; hideHandles(); },
       destroy: () => {
+        imageSourceToken += 1;
         editor.off("selectionUpdate", updateSelection);
         editor.off("transaction", syncDragState);
         activeDragCleanup?.();

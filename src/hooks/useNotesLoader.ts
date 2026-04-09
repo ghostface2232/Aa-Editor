@@ -5,6 +5,7 @@ import { markOwnWrite } from "./ownWriteTracker";
 import type { Locale, NotesSortOrder } from "./useSettings";
 import { getDefaultDocumentTitle } from "../utils/documentTitle";
 import { getFileTimestamps } from "../utils/fileTimestamps";
+import { migrateDataUrlImagesToAssets } from "../utils/migrateImageAssets";
 
 export interface NoteDoc {
   id: string;
@@ -42,11 +43,13 @@ interface Manifest {
   activeNoteId: string | null;
   groups?: NoteGroup[];
   trashedNotes?: TrashedNote[];
+  imageAssetMigrationV1CompletedAt?: number;
 }
 
 const UI_STATE_STORAGE_KEY = "markdown-studio-ui-state";
 
 let notesDirCache: string | null = null;
+let imageAssetMigrationV1CompletedAtCache: number | null = null;
 
 // --- Module-level trashedNotes cache (avoids disk I/O in saveManifest) ---
 
@@ -183,7 +186,10 @@ function writeStoredManifest(manifest: Manifest) {
 async function readManifest(dir: string): Promise<Manifest | null> {
   // Primary: file-based manifest
   const fileManifest = await readManifestFromFile(dir);
-  if (fileManifest) return fileManifest;
+  if (fileManifest) {
+    imageAssetMigrationV1CompletedAtCache = fileManifest.imageAssetMigrationV1CompletedAt ?? null;
+    return fileManifest;
+  }
 
   // Fallback: localStorage (one-time migration)
   const lsManifest = readStoredManifest();
@@ -194,6 +200,7 @@ async function readManifest(dir: string): Promise<Manifest | null> {
     } catch {
       console.warn("Failed to migrate manifest from localStorage to file.");
     }
+    imageAssetMigrationV1CompletedAtCache = lsManifest.imageAssetMigrationV1CompletedAt ?? null;
     return lsManifest;
   }
 
@@ -201,6 +208,7 @@ async function readManifest(dir: string): Promise<Manifest | null> {
 }
 
 async function writeManifest(dir: string, manifest: Manifest): Promise<void> {
+  imageAssetMigrationV1CompletedAtCache = manifest.imageAssetMigrationV1CompletedAt ?? null;
   await writeManifestToFile(dir, manifest);
   // Also write to localStorage as backup
   writeStoredManifest(manifest);
@@ -306,6 +314,7 @@ export async function saveManifest(
     activeNoteId: activeId,
     groups: groups && groups.length > 0 ? groups : undefined,
     trashedNotes: trashed.length > 0 ? trashed : undefined,
+    imageAssetMigrationV1CompletedAt: imageAssetMigrationV1CompletedAtCache ?? undefined,
   };
 
   try {
@@ -351,7 +360,37 @@ export function useNotesLoader(
     (async () => {
       try {
         const dir = await ensureNotesDir();
-        const manifest = await readManifest(dir);
+        let manifest = await readManifest(dir);
+
+        if (!imageAssetMigrationV1CompletedAtCache) {
+          setMigrationInProgress(true);
+          try {
+            let noteFilePaths: string[] = [];
+            if (manifest && manifest.notes.length > 0) {
+              noteFilePaths = manifest.notes
+                .map((entry) => entry.filePath)
+                .filter(Boolean);
+            } else {
+              const entries = await readDir(dir).catch(() => []);
+              noteFilePaths = entries
+                .filter((entry) => entry.name?.endsWith(".md"))
+                .map((entry) => `${dir}/${entry.name}`);
+            }
+
+            await migrateDataUrlImagesToAssets(Array.from(new Set(noteFilePaths)));
+            imageAssetMigrationV1CompletedAtCache = Date.now();
+
+            if (manifest) {
+              manifest = {
+                ...manifest,
+                imageAssetMigrationV1CompletedAt: imageAssetMigrationV1CompletedAtCache,
+              };
+              await writeManifest(dir, manifest).catch(() => {});
+            }
+          } finally {
+            setMigrationInProgress(false);
+          }
+        }
 
         // Auto-purge expired trash on startup
         const rawTrashed = manifest?.trashedNotes ?? [];

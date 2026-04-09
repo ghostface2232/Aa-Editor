@@ -2,7 +2,16 @@ import { Extension, type Content, type Editor } from "@tiptap/core";
 import { Plugin, PluginKey, NodeSelection } from "@tiptap/pm/state";
 import { open } from "@tauri-apps/plugin-dialog";
 import { readFile } from "@tauri-apps/plugin-fs";
-import { bytesToDataUrl, clampImageDimensions, dataUrlToUint8Array, mimeFromDataUrl, mimeFromExt } from "../utils/imageUtils";
+import {
+  bytesToDataUrl,
+  clampImageDimensions,
+  mimeFromExt,
+} from "../utils/imageUtils";
+import {
+  type DocumentImageContext,
+  persistBinaryAsAsset,
+  readImageBinary,
+} from "../utils/imageAssetUtils";
 
 const IMAGE_MIME = ["image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml"];
 const IMAGE_EXTENSIONS = ["png", "jpg", "jpeg", "gif", "webp", "svg"];
@@ -17,35 +26,54 @@ function loadImageSize(src: string): Promise<{ width: number; height: number }> 
   });
 }
 
+function getDocumentContext(editor: Editor): DocumentImageContext {
+  const storageContext = editor.storage.documentContext;
+  return {
+    noteId: storageContext?.noteId ?? null,
+    filePath: storageContext?.filePath ?? null,
+  };
+}
+
+async function buildImageAttributesFromBinary(
+  editor: Editor,
+  bytes: Uint8Array,
+  mime: string,
+): Promise<{ src: string; width: number; height: number }> {
+  const context = getDocumentContext(editor);
+  const relativeSrc = await persistBinaryAsAsset({ bytes, mime }, context);
+  const fallbackDataUrl = bytesToDataUrl(bytes, mime);
+  const src = relativeSrc ?? fallbackDataUrl;
+  const { width: natW, height: natH } = await loadImageSize(fallbackDataUrl);
+  const { width, height } = clampImageDimensions(natW, natH, MAX_IMAGE_WIDTH);
+  return { src, width, height };
+}
+
 export function isImagePath(path: string): boolean {
   const ext = path.split(".").pop();
   return ext ? IMAGE_EXTENSIONS.includes(ext.toLowerCase()) : false;
 }
 
-async function loadImageAttrsFromPath(path: string): Promise<{
+async function loadImageAttrsFromPath(editor: Editor, path: string): Promise<{
   src: string;
   width: number;
   height: number;
 }> {
   const ext = path.split(".").pop() ?? "png";
+  const mime = mimeFromExt(ext);
   const bytes = await readFile(path);
-  const dataUrl = bytesToDataUrl(bytes, mimeFromExt(ext));
-  const { width: natW, height: natH } = await loadImageSize(dataUrl);
-  const { width, height } = clampImageDimensions(natW, natH, MAX_IMAGE_WIDTH);
-
-  return { src: dataUrl, width, height };
+  return buildImageAttributesFromBinary(editor, bytes, mime);
 }
 
-export async function buildImageContentFromPaths(paths: string[]): Promise<Content[]> {
-  const images = await Promise.all(paths.map((path) => loadImageAttrsFromPath(path)));
+export async function buildImageContentFromPaths(editor: Editor, paths: string[]): Promise<Content[]> {
+  const images = await Promise.all(paths.map((path) => loadImageAttrsFromPath(editor, path)));
   return images.map(({ src, width, height }) => ({
     type: "image",
     attrs: { src, width, height },
   }));
 }
 
-export async function buildImageMarkdownFromPaths(paths: string[]): Promise<string> {
-  const images = await Promise.all(paths.map((path) => loadImageAttrsFromPath(path)));
+export async function buildImageMarkdownFromPaths(editor: Editor, paths: string[]): Promise<string> {
+  const images = await Promise.all(paths.map((path) => loadImageAttrsFromPath(editor, path)));
   return images
     .map(({ src, width, height }) => `<img src="${src}" alt="" width="${width}" height="${height}" />`)
     .join("\n\n");
@@ -56,7 +84,7 @@ export async function insertImagesAtPosition(
   paths: string[],
   pos?: number,
 ): Promise<void> {
-  const content = await buildImageContentFromPaths(paths);
+  const content = await buildImageContentFromPaths(editor, paths);
   if (content.length === 0) return;
 
   const chain = editor.chain().focus();
@@ -95,15 +123,17 @@ const ImageDrop = Extension.create({
               if (node.type.name !== "image") return false;
 
               const src = node.attrs.src as string;
-              if (!src?.startsWith("data:")) return false;
-
               event.preventDefault();
-              try {
-                const bytes = dataUrlToUint8Array(src);
-                const mime = mimeFromDataUrl(src);
-                const blob = new Blob([bytes], { type: mime });
-                void navigator.clipboard.write([new ClipboardItem({ [mime]: blob })]);
-              } catch { /* ignore */ }
+              void (async () => {
+                try {
+                  const payload = await readImageBinary(src, getDocumentContext(editor));
+                  if (!payload) return;
+                  const blob = new Blob([payload.bytes], { type: payload.mime });
+                  await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
+                } catch {
+                  /* ignore */
+                }
+              })();
               return true;
             },
           },
@@ -122,19 +152,17 @@ const ImageDrop = Extension.create({
             });
 
             images.forEach((file) => {
-              const reader = new FileReader();
-              reader.onload = async () => {
-                const src = reader.result as string;
-                const { width: natW, height: natH } = await loadImageSize(src);
-                const { width: w, height: h } = clampImageDimensions(natW, natH, MAX_IMAGE_WIDTH);
+              void (async () => {
+                const bytes = new Uint8Array(await file.arrayBuffer());
+                const mime = file.type || mimeFromExt(file.name.split(".").pop() ?? "png");
+                const { src, width, height } = await buildImageAttributesFromBinary(editor, bytes, mime);
                 const chain = editor.chain().focus();
                 if (pos) chain.setTextSelection(pos.pos);
                 chain.insertContent({
                   type: "image",
-                  attrs: { src, width: w, height: h },
+                  attrs: { src, width, height },
                 }).run();
-              };
-              reader.readAsDataURL(file);
+              })();
             });
 
             return true;
@@ -155,14 +183,12 @@ const ImageDrop = Extension.create({
               const file = item.getAsFile();
               if (!file) return;
 
-              const reader = new FileReader();
-              reader.onload = async () => {
-                const src = reader.result as string;
-                const { width: natW, height: natH } = await loadImageSize(src);
-                const { width: w, height: h } = clampImageDimensions(natW, natH, MAX_IMAGE_WIDTH);
-                editor.chain().focus().setImage({ src, width: w, height: h }).run();
-              };
-              reader.readAsDataURL(file);
+              void (async () => {
+                const bytes = new Uint8Array(await file.arrayBuffer());
+                const mime = file.type || mimeFromExt(file.name.split(".").pop() ?? "png");
+                const { src, width, height } = await buildImageAttributesFromBinary(editor, bytes, mime);
+                editor.chain().focus().setImage({ src, width, height }).run();
+              })();
             });
 
             return true;
