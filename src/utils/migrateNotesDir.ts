@@ -36,6 +36,16 @@ function normalizeSep(dir: string): string {
   return dir.endsWith("/") || dir.endsWith("\\") ? dir : `${dir}/`;
 }
 
+function normalizePathForCompare(path: string): string {
+  return normalizeSep(path).replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+}
+
+function isSameOrChildPath(parentPath: string, candidatePath: string): boolean {
+  const parent = normalizePathForCompare(parentPath);
+  const candidate = normalizePathForCompare(candidatePath);
+  return candidate === parent || candidate.startsWith(`${parent}/`);
+}
+
 async function copyDirRecursive(srcDir: string, destDir: string): Promise<void> {
   let entries;
   try {
@@ -69,6 +79,11 @@ async function clearDirContents(dir: string): Promise<void> {
   const base = normalizeSep(dir);
   for (const entry of entries) {
     if (!entry.name) continue;
+    const isManagedRootEntry = entry.name === "manifest.json"
+      || entry.name === ".assets"
+      || entry.name === ".trash"
+      || (entry.isFile && entry.name.endsWith(".md"));
+    if (!isManagedRootEntry) continue;
     const target = `${base}${entry.name}`;
     try {
       await remove(target, { recursive: true });
@@ -160,6 +175,7 @@ export async function migrateNotesDir(
   const from = normalizeSep(fromDir).replace(/[\\/]+$/, "");
   const to = normalizeSep(toDir).replace(/[\\/]+$/, "");
   if (from === to) return { success: true };
+  const destinationIsInsideSource = isSameOrChildPath(fromDir, toDir);
 
   try {
     await mkdir(toDir, { recursive: true });
@@ -200,7 +216,9 @@ export async function migrateNotesDir(
     const sourceManifest = await readManifestFile(fromDir);
     if (!sourceManifest) {
       // No manifest in source — still clear whatever we just copied over
-      await clearDirContents(fromDir);
+      if (!destinationIsInsideSource) {
+        await clearDirContents(fromDir);
+      }
       return { success: true };
     }
 
@@ -230,7 +248,9 @@ export async function migrateNotesDir(
     // Clear contents of source directory (but keep the folder itself),
     // so the old AppData notes folder remains available for future reset
     // without leaving stale copies behind.
-    await clearDirContents(fromDir);
+    if (!destinationIsInsideSource) {
+      await clearDirContents(fromDir);
+    }
 
     return { success: true };
   } catch (err) {
