@@ -115,6 +115,11 @@ function getScrollParent(element: HTMLElement | null): HTMLElement | null {
 }
 
 function refreshRenderedContent(editor: Editor) {
+  // Replacing content during IME composition aborts the browser's
+  // composition buffer mid-stream — the already-typed jamo are dropped
+  // and the user sees nothing until they start the next character.
+  if (editor.view.composing) return;
+
   const scrollParent = getScrollParent(editor.view.dom);
   const scrollTop = scrollParent?.scrollTop ?? 0;
   const scrollLeft = scrollParent?.scrollLeft ?? 0;
@@ -139,6 +144,14 @@ function refreshRenderedContent(editor: Editor) {
 }
 
 function refreshSpellcheckMarkers(editor: Editor, forceFullRefresh = false) {
+  // Toggling the `spellcheck` attribute while the browser is holding an
+  // active IME composition kills the in-progress preview (observed with
+  // Korean IME: typed jamo become invisible until the next character
+  // triggers a commit). Skip here; the IMEGuard extension already toggles
+  // spellcheck around each composition, so the marker refresh isn't needed
+  // mid-IME — see the `imeGuard` plugin below.
+  if (editor.view.composing) return;
+
   const dom = editor.view.dom as HTMLElement;
   const spellcheckEnabled = dom.getAttribute("spellcheck") === "true";
 
@@ -423,6 +436,86 @@ const LinkPopoverShortcut = Extension.create({
         return linkPopoverCallbackRef.current?.() ?? false;
       },
     };
+  },
+});
+
+// IME composition guard.
+//
+// Root cause this addresses: with `spellcheck="true"` on the editor, the
+// browser's spellchecker occasionally races the in-progress IME composition
+// preview and the preview never renders — typed Korean jamo stay invisible
+// until the user starts the next syllable, which commits the prior one and
+// makes it appear. Switching to another document fixes it only because the
+// doc-switch path toggles the spellcheck attribute through
+// `scheduleSpellcheckRefresh`, resetting the racing state.
+//
+// The fix disables spellcheck for the duration of each composition (and
+// tags the root with `.ime-composing` for CSS hooks), then restores the
+// user's spellcheck preference on the next frame — deferring the restore
+// so it lands after the browser commits the composed text, not during it.
+// A depth counter keeps rapid back-to-back compositions (e.g. typing
+// "한국어" fluently) from thrashing the attribute.
+const IMEGuard = Extension.create({
+  name: "imeGuard",
+
+  addProseMirrorPlugins() {
+    let savedSpellcheck: string | null = null;
+    let depth = 0;
+
+    const restore = (dom: HTMLElement) => {
+      const spellcheckToRestore = savedSpellcheck;
+      savedSpellcheck = null;
+      depth = 0;
+      if (spellcheckToRestore === null) dom.removeAttribute("spellcheck");
+      else dom.setAttribute("spellcheck", spellcheckToRestore);
+      dom.classList.remove("ime-composing");
+    };
+
+    return [
+      new Plugin({
+        key: new PluginKey("imeGuard"),
+        props: {
+          handleDOMEvents: {
+            compositionstart(view) {
+              const dom = view.dom as HTMLElement;
+              if (depth === 0) {
+                savedSpellcheck = dom.getAttribute("spellcheck");
+                dom.setAttribute("spellcheck", "false");
+                dom.classList.add("ime-composing");
+              }
+              depth += 1;
+              return false;
+            },
+            compositionend(view) {
+              const dom = view.dom as HTMLElement;
+              depth = Math.max(0, depth - 1);
+              if (depth > 0) return false;
+              const spellcheckToRestore = savedSpellcheck;
+              savedSpellcheck = null;
+              requestAnimationFrame(() => {
+                // If a new composition started before the rAF, leave the
+                // guard in place — the next compositionend will handle it.
+                if (depth > 0) return;
+                if (spellcheckToRestore === null) dom.removeAttribute("spellcheck");
+                else dom.setAttribute("spellcheck", spellcheckToRestore);
+                dom.classList.remove("ime-composing");
+              });
+              return false;
+            },
+            // Belt-and-suspenders: if the editor loses focus mid-composition
+            // and the browser doesn't synthesize a compositionend (rare but
+            // observed with system-level IME interruptions), `depth` would
+            // stay > 0 and the next compositionstart would skip the save.
+            // Forcibly reset on blur so the plugin self-heals.
+            blur(view) {
+              if (depth === 0 && savedSpellcheck === null) return false;
+              restore(view.dom as HTMLElement);
+              return false;
+            },
+          },
+        },
+      }),
+    ];
   },
 });
 
@@ -756,6 +849,7 @@ export const TiptapEditor = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
         TableNodeSelect,
         MarkdownPaste,
         DocumentContext,
+        IMEGuard,
         ReadonlyGuard,
         SlashCommands,
         ImageDrop,

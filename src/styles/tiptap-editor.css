@@ -392,6 +392,13 @@
   pointer-events: none;
   height: 0;
 }
+/* Hide the placeholder during IME composition. The floated ::before with
+   `height: 0` has been observed to offset the composition preview on empty
+   paragraphs in some engines; removing it for the composition duration
+   keeps the preview anchored to the real caret position. */
+.ProseMirror.ime-composing p.is-editor-empty:first-child::before {
+  display: none;
+}
 
 /* ─── hljs 구문 강조 색상 ─── */
 .ProseMirror pre .hljs-comment,
