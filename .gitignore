@@ -29,6 +29,7 @@ dist-ssr
 # Claude Code
 .claude/
 AGENTS.md
+UPDATE.md
 
 # Tauri build output
 src-tauri/target/
