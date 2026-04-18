@@ -148,7 +148,8 @@ body {
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
 }
 
-[data-group-item].sidebar-drag-over {
+[data-group-item].sidebar-drag-over,
+[data-notes-section].sidebar-drag-over {
   outline: 2px solid #0078d4;
   outline-offset: -2px;
   border-radius: 6px;

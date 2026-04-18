@@ -1,15 +1,16 @@
 import { useRef, useCallback } from "react";
+import { flushSync } from "react-dom";
 import type { NoteGroup, NoteDoc } from "./useNotesLoader";
+import { captureSidebarRowTops, playSidebarRowsFLIP } from "../utils/sidebarFlip";
 
 const DRAG_THRESHOLD = 5;
 const AUTO_EXPAND_DELAY = 600;
 const SCROLL_EDGE = 40;
 const SCROLL_SPEED = 8;
 
-interface DropTarget {
-  type: "group";
-  groupId: string;
-}
+type DropTarget =
+  | { type: "group"; groupId: string }
+  | { type: "ungrouped" };
 
 interface DragSession {
   noteId: string;
@@ -42,6 +43,7 @@ interface UseSidebarDragOptions {
   sidebarBodyRef: React.RefObject<HTMLElement | null>;
   onAddNoteToGroup: (noteId: string, groupId: string) => void;
   onMoveNotesToGroup: (noteIds: string[], groupId: string) => void;
+  onRemoveNotesFromGroups: (noteIds: string[]) => void;
   onToggleGroupCollapsed: (groupId: string) => void;
 }
 
@@ -77,12 +79,27 @@ export function useSidebarDrag(opts: UseSidebarDragOptions) {
     const o = optsRef.current;
     const t = s.target;
 
-    if (t && t.groupId !== s.sourceGroupId) {
-      if (s.allNoteIds.length === 1) {
-        o.onAddNoteToGroup(s.noteId, t.groupId);
-      } else {
-        o.onMoveNotesToGroup(s.allNoteIds, t.groupId);
-      }
+    // Figure out whether this drop mutates state and, if so, run a FLIP
+    // pass so displaced rows slide into their new positions instead of
+    // snapping. We skip FLIP entirely for no-op drops to avoid doing a
+    // flushSync for nothing.
+    let mutate: (() => void) | null = null;
+    if (t?.type === "group" && t.groupId !== s.sourceGroupId) {
+      mutate = s.allNoteIds.length === 1
+        ? () => o.onAddNoteToGroup(s.noteId, t.groupId)
+        : () => o.onMoveNotesToGroup(s.allNoteIds, t.groupId);
+    } else if (t?.type === "ungrouped" && s.sourceGroupId !== null) {
+      mutate = () => o.onRemoveNotesFromGroups(s.allNoteIds);
+    }
+
+    if (mutate) {
+      // Restore source opacity before the FLIP pass so the moved node
+      // doesn't flash from dimmed-0.35 to full-1 on the first post-commit
+      // paint. bounding-rect measurement isn't affected by opacity.
+      s.dimmedEls.forEach((el) => { el.style.opacity = ""; });
+      const oldTops = captureSidebarRowTops();
+      flushSync(mutate);
+      playSidebarRowsFLIP(oldTops);
     }
 
     cleanup();
@@ -121,6 +138,7 @@ export function useSidebarDrag(opts: UseSidebarDragOptions) {
 
     const groupHeader = el.closest<HTMLElement>("[data-group-item][data-group-id]");
     const noteInGroup = el.closest<HTMLElement>("[data-doc-item][data-group-id]");
+    const notesSection = el.closest<HTMLElement>("[data-notes-section]");
 
     let nextTarget: DropTarget | null = null;
     let targetGroupId: string | null = null;
@@ -146,6 +164,11 @@ export function useSidebarDrag(opts: UseSidebarDragOptions) {
       } else if (!groupHeader) {
         clearAutoExpand(s);
       }
+    } else if (notesSection && s.sourceGroupId !== null) {
+      // Dropping a grouped note into the ungrouped section removes it from
+      // its group. Ignored when the source is already ungrouped.
+      nextTarget = { type: "ungrouped" };
+      clearAutoExpand(s);
     } else {
       clearAutoExpand(s);
     }
@@ -235,10 +258,14 @@ export function useSidebarDrag(opts: UseSidebarDragOptions) {
       }
     }
 
-    // Fade non-drop areas (notes section, new-doc button)
+    // Fade non-drop areas. The notes section is only faded when the source
+    // is already ungrouped — otherwise it's a valid drop target (removes
+    // the note from its group) and must stay interactive.
     const fadedEls: HTMLElement[] = [];
-    const notesSection = document.querySelector<HTMLElement>("[data-notes-section]");
-    if (notesSection) { notesSection.style.opacity = "0.45"; notesSection.style.pointerEvents = "none"; fadedEls.push(notesSection); }
+    if (sourceGroup === undefined) {
+      const notesSection = document.querySelector<HTMLElement>("[data-notes-section]");
+      if (notesSection) { notesSection.style.opacity = "0.45"; notesSection.style.pointerEvents = "none"; fadedEls.push(notesSection); }
+    }
     const newDocBtn = document.querySelector<HTMLElement>("[data-sidebar-body] > button");
     if (newDocBtn) { newDocBtn.style.opacity = "0.45"; newDocBtn.style.pointerEvents = "none"; fadedEls.push(newDocBtn); }
 
@@ -288,6 +315,11 @@ function clearTarget(s: DragSession) {
 function applyTarget(t: DropTarget | null) {
   document.querySelectorAll(".sidebar-drag-over").forEach((el) => el.classList.remove("sidebar-drag-over"));
   if (!t) return;
-  const header = document.querySelector<HTMLElement>(`[data-group-item][data-group-id="${t.groupId}"]`);
-  if (header) header.classList.add("sidebar-drag-over");
+  if (t.type === "group") {
+    const header = document.querySelector<HTMLElement>(`[data-group-item][data-group-id="${t.groupId}"]`);
+    if (header) header.classList.add("sidebar-drag-over");
+  } else {
+    const section = document.querySelector<HTMLElement>("[data-notes-section]");
+    if (section) section.classList.add("sidebar-drag-over");
+  }
 }

@@ -94,6 +94,7 @@ interface SidebarProps {
   onUngroupGroup: (groupId: string) => void;
   onAddNoteToGroup: (noteId: string, groupId: string) => void;
   onRemoveNoteFromGroup: (noteId: string) => void;
+  onRemoveNotesFromGroups: (noteIds: string[]) => void;
   onMoveNotesToGroup: (noteIds: string[], groupId: string) => void;
   onToggleGroupCollapsed: (groupId: string) => void;
   onReorderGroups: (fromIndex: number, insertionIndex: number) => void;
@@ -130,6 +131,7 @@ export function Sidebar({
   onUngroupGroup,
   onAddNoteToGroup,
   onRemoveNoteFromGroup,
+  onRemoveNotesFromGroups,
   onMoveNotesToGroup,
   onToggleGroupCollapsed,
   onReorderGroups,
@@ -176,6 +178,7 @@ export function Sidebar({
     sidebarBodyRef,
     onAddNoteToGroup,
     onMoveNotesToGroup,
+    onRemoveNotesFromGroups,
     onToggleGroupCollapsed,
   });
 

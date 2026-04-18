@@ -90,6 +90,20 @@ export function useNoteGroups(
     [groups, persist],
   );
 
+  const removeNotesFromGroups = useCallback(
+    (noteIds: string[]) => {
+      if (noteIds.length === 0) return;
+      const idSet = new Set(noteIds);
+      persist(
+        groups.map((g) => {
+          const filtered = g.noteIds.filter((id) => !idSet.has(id));
+          return filtered.length !== g.noteIds.length ? { ...g, noteIds: filtered } : g;
+        }),
+      );
+    },
+    [groups, persist],
+  );
+
   const moveNotesToGroup = useCallback(
     (noteIds: string[], groupId: string) => {
       persist(
@@ -202,6 +216,7 @@ export function useNoteGroups(
     ungroupGroup,
     addNoteToGroup,
     removeNoteFromGroup,
+    removeNotesFromGroups,
     moveNotesToGroup,
     reorderNoteInGroup,
     insertNoteInGroup,
