@@ -198,7 +198,7 @@ export function Sidebar({
 
   const {
     newDocIds, slideUpFromIndex, exitingDoc,
-    expandedGroupIds, removingGroupIds, newGroupIds,
+    expandedGroupIds, collapsingGroupIds, removingGroupIds, newGroupIds,
     animateGroupRemoval,
   } = useSidebarAnimations({ docs, groups });
 
@@ -466,7 +466,9 @@ export function Sidebar({
 
     for (const group of groups) {
       gItems.push({ kind: "group", group });
-      if (!group.collapsed) {
+      // Keep notes mounted during a collapse animation so they can fade out.
+      const showNotes = !group.collapsed || collapsingGroupIds.has(group.id);
+      if (showNotes) {
         const entries: { doc: NoteDoc; originalIndex: number }[] = [];
         for (const noteId of group.noteIds) {
           const entry = docsMap.get(noteId);
@@ -484,20 +486,28 @@ export function Sidebar({
     }
 
     return { groupItems: gItems, noteItems: nItems };
-  }, [isSearching, filteredDocs, docs, groups, groupedNoteIds, notesSortOrder, locale]);
+  }, [isSearching, filteredDocs, docs, groups, groupedNoteIds, notesSortOrder, locale, collapsingGroupIds]);
 
   const renderNoteItem = (doc: NoteDoc, originalIndex: number, indented: boolean, snippet?: SearchSnippet | null, searchIndex?: number) => {
     const isSelected = selectedNoteIds.has(doc.id);
     const isHovered = hoveredIndex === originalIndex;
     const isContextTarget = contextMenu?.type === "note" && contextMenu.index === originalIndex;
 
-    // Check if this note's group just expanded
+    // Check if this note's group just expanded or is collapsing
     const noteGroup = indented ? getGroupForNote(doc.id) : null;
     const isInExpandingGroup = noteGroup ? expandedGroupIds.has(noteGroup.id) : false;
+    const isInCollapsingGroup = noteGroup ? collapsingGroupIds.has(noteGroup.id) : false;
     const isInRemovingGroup = removingGroupIds.has(doc.id);
-    const expandStagger = isInExpandingGroup && noteGroup
-      ? noteGroup.noteIds.indexOf(doc.id) * 0.03
+    const groupNoteIdx = noteGroup ? noteGroup.noteIds.indexOf(doc.id) : -1;
+    const expandStagger = isInExpandingGroup && groupNoteIdx >= 0
+      ? groupNoteIdx * 0.03
       : 0;
+    // Reverse stagger so the bottom-most note disappears first — mirrors the
+    // expand motion (top-to-bottom) in time.
+    const collapseStagger = isInCollapsingGroup && noteGroup && groupNoteIdx >= 0
+      ? (noteGroup.noteIds.length - 1 - groupNoteIdx) * 0.03
+      : 0;
+    const animationDelay = expandStagger + collapseStagger;
 
     return (
       <div
@@ -510,13 +520,13 @@ export function Sidebar({
           newDocIds.has(doc.id) && styles.docItemNew,
           slideUpFromIndex >= 0 && originalIndex >= slideUpFromIndex && styles.docItemSlideUp,
           isInExpandingGroup && styles.groupChildExpand,
-          isInRemovingGroup && styles.groupCollapseOut,
+          (isInCollapsingGroup || isInRemovingGroup) && styles.groupCollapseOut,
           isSearching && searchIndex !== undefined && styles.searchResultFadeIn,
         )}
         style={
           isSearching && searchIndex !== undefined
             ? { animationDelay: `${searchIndex * 0.03}s` }
-            : expandStagger > 0 ? { animationDelay: `${expandStagger}s` } : undefined
+            : animationDelay > 0 ? { animationDelay: `${animationDelay}s` } : undefined
         }
         onPointerDown={(e) => handleDragPointerDown(e, doc.id)}
         onMouseEnter={() => setHoveredIndex(originalIndex)}

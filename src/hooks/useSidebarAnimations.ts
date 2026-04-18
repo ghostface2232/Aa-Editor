@@ -14,9 +14,13 @@ export function useSidebarAnimations({ docs, groups }: UseSidebarAnimationsOptio
   const [slideUpFromIndex, setSlideUpFromIndex] = useState(-1);
   const [exitingDoc, setExitingDoc] = useState<{ doc: NoteDoc; index: number } | null>(null);
 
-  // Track groups that just expanded (for child animation)
+  // Track groups that just expanded / collapsed (for child animation).
+  // Detection happens during render (not in useEffect) so that a collapsing
+  // group's notes can stay mounted for the animation — by the time an effect
+  // runs React would already have filtered them out via `!group.collapsed`.
   const [expandedGroupIds, setExpandedGroupIds] = useState<Set<string>>(new Set());
-  const prevGroupCollapsedRef = useRef<Map<string, boolean>>(new Map());
+  const [collapsingGroupIds, setCollapsingGroupIds] = useState<Set<string>>(new Set());
+  const prevGroupCollapsedRef = useRef<Map<string, boolean>>(new Map(groups.map((g) => [g.id, g.collapsed])));
 
   // Track newly created groups (for slide-in animation)
   const prevGroupIdsRef = useRef<Set<string>>(new Set(groups.map((g) => g.id)));
@@ -69,37 +73,80 @@ export function useSidebarAnimations({ docs, groups }: UseSidebarAnimationsOptio
     return () => timers.forEach(clearTimeout);
   }, [docs]);
 
-  // Detect group expand/collapse and new groups for animation
-  useEffect(() => {
-    const timers: ReturnType<typeof setTimeout>[] = [];
-    const prevCollapsed = prevGroupCollapsedRef.current;
-    const justExpanded = new Set<string>();
-
+  // Detect expand/collapse transitions synchronously during render (see note
+  // above). Uses the "setState during render, guarded by a change condition"
+  // pattern — React discards the current render and retries with the updated
+  // state, so the collapse-animation class lands on the same paint as the
+  // state flip and the notes never visibly disappear before animating out.
+  {
+    const prev = prevGroupCollapsedRef.current;
+    const justExpanded: string[] = [];
+    const justCollapsed: string[] = [];
     for (const g of groups) {
-      const wasColl = prevCollapsed.get(g.id);
-      if (wasColl === true && !g.collapsed) {
-        justExpanded.add(g.id);
+      const wasColl = prev.get(g.id);
+      if (wasColl === true && !g.collapsed) justExpanded.push(g.id);
+      else if (wasColl === false && g.collapsed) justCollapsed.push(g.id);
+    }
+    if (justExpanded.length > 0 || justCollapsed.length > 0) {
+      prevGroupCollapsedRef.current = new Map(groups.map((g) => [g.id, g.collapsed]));
+      if (justExpanded.length > 0) {
+        setExpandedGroupIds((s) => {
+          const next = new Set(s);
+          for (const id of justExpanded) next.add(id);
+          return next;
+        });
+        // Rapid toggle: cancel any in-flight collapse for these groups.
+        setCollapsingGroupIds((s) => {
+          if (!justExpanded.some((id) => s.has(id))) return s;
+          const next = new Set(s);
+          for (const id of justExpanded) next.delete(id);
+          return next;
+        });
+      }
+      if (justCollapsed.length > 0) {
+        setCollapsingGroupIds((s) => {
+          const next = new Set(s);
+          for (const id of justCollapsed) next.add(id);
+          return next;
+        });
+        setExpandedGroupIds((s) => {
+          if (!justCollapsed.some((id) => s.has(id))) return s;
+          const next = new Set(s);
+          for (const id of justCollapsed) next.delete(id);
+          return next;
+        });
       }
     }
-    if (justExpanded.size > 0) {
-      setExpandedGroupIds(justExpanded);
-      timers.push(setTimeout(() => setExpandedGroupIds(new Set()), 250));
-    }
+  }
 
-    // Detect newly created groups
+  // Clear the in-flight animation sets after the animation finishes.
+  // 420ms ≈ 280ms duration + up to ~5 notes of 30ms stagger; for larger
+  // groups the tail is invisible (opacity 0) so running slightly long is fine.
+  useEffect(() => {
+    if (expandedGroupIds.size === 0) return;
+    const timer = setTimeout(() => setExpandedGroupIds(new Set()), 420);
+    return () => clearTimeout(timer);
+  }, [expandedGroupIds]);
+
+  useEffect(() => {
+    if (collapsingGroupIds.size === 0) return;
+    const timer = setTimeout(() => setCollapsingGroupIds(new Set()), 420);
+    return () => clearTimeout(timer);
+  }, [collapsingGroupIds]);
+
+  // Detect newly created groups (for slide-in). Effect is fine here — notes
+  // appear on mount so the class just needs to be applied post-render.
+  useEffect(() => {
     const prevIds = prevGroupIdsRef.current;
     const addedGroups = new Set<string>();
     for (const g of groups) {
       if (!prevIds.has(g.id)) addedGroups.add(g.id);
     }
-    if (addedGroups.size > 0) {
-      setNewGroupIds(addedGroups);
-      timers.push(setTimeout(() => setNewGroupIds(new Set()), 250));
-    }
-
-    prevGroupCollapsedRef.current = new Map(groups.map((g) => [g.id, g.collapsed]));
     prevGroupIdsRef.current = new Set(groups.map((g) => g.id));
-    return () => timers.forEach(clearTimeout);
+    if (addedGroups.size === 0) return;
+    setNewGroupIds(addedGroups);
+    const timer = setTimeout(() => setNewGroupIds(new Set()), 250);
+    return () => clearTimeout(timer);
   }, [groups]);
 
   const animateGroupRemoval = useCallback((groupId: string, noteIds: string[], callback: () => void) => {
@@ -117,6 +164,7 @@ export function useSidebarAnimations({ docs, groups }: UseSidebarAnimationsOptio
     slideUpFromIndex,
     exitingDoc,
     expandedGroupIds,
+    collapsingGroupIds,
     removingGroupIds,
     newGroupIds,
     animateGroupRemoval,

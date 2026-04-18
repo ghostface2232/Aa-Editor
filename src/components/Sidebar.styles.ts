@@ -66,14 +66,14 @@ export const useStyles = makeStyles({
   },
   groupChildExpand: {
     animationName: "groupChildExpand",
-    animationDuration: "0.2s",
-    animationTimingFunction: "cubic-bezier(0.4, 0, 0.2, 1)",
+    animationDuration: "0.28s",
+    animationTimingFunction: "cubic-bezier(0.22, 1, 0.36, 1)",
     animationFillMode: "backwards",
   },
   groupCollapseOut: {
     animationName: "groupCollapseOut",
-    animationDuration: "0.2s",
-    animationTimingFunction: "cubic-bezier(0.4, 0, 0.2, 1)",
+    animationDuration: "0.28s",
+    animationTimingFunction: "cubic-bezier(0.22, 1, 0.36, 1)",
     animationFillMode: "forwards",
     overflow: "hidden",
     pointerEvents: "none",
