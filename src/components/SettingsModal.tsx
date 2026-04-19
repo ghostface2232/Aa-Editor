@@ -226,6 +226,7 @@ interface SettingsModalProps {
   open: boolean;
   onClose: () => void;
   settings: Settings;
+  isDarkMode: boolean;
   onUpdate: <K extends keyof Settings>(key: K, value: Settings[K]) => void;
   currentNotesDir: string;
   onChangeNotesDir: () => void;
@@ -258,10 +259,9 @@ function settingItemClass(
   return mergeClasses(styles.settingItem, isFirst && styles.settingItemFirst);
 }
 
-export function SettingsModal({ open, onClose, settings, onUpdate, currentNotesDir, onChangeNotesDir, onResetNotesDir, trashedNotes, onRestoreNote, onPermanentlyDeleteNote, onEmptyTrash }: SettingsModalProps) {
+export function SettingsModal({ open, onClose, settings, isDarkMode, onUpdate, currentNotesDir, onChangeNotesDir, onResetNotesDir, trashedNotes, onRestoreNote, onPermanentlyDeleteNote, onEmptyTrash }: SettingsModalProps) {
   const styles = useStyles();
   const locale = settings.locale;
-  const isDarkMode = settings.themeMode === "dark";
   const i = (key: Parameters<typeof t>[0]) => t(key, locale);
   const [tab, setTab] = useState<TabId>("general");
   const [appVersion, setAppVersion] = useState("");
@@ -432,6 +432,7 @@ export function SettingsModal({ open, onClose, settings, onUpdate, currentNotesD
                   >
                     <Radio value="light" label={i("theme.light")} />
                     <Radio value="dark" label={i("theme.dark")} />
+                    <Radio value="system" label={i("theme.system")} />
                   </RadioGroup>
                 </div>
 

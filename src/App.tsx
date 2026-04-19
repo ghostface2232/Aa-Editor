@@ -56,6 +56,14 @@ const SIDEBAR_DEFAULT = 260;
 // plus grid padding this leaves >50px margin on either side.
 const EDITOR_MIN_WIDTH = 600;
 const WINDOW_MIN_HEIGHT = 620;
+const SYSTEM_DARK_QUERY = "(prefers-color-scheme: dark)";
+
+function getSystemPrefersDark() {
+  return typeof window !== "undefined"
+    && typeof window.matchMedia === "function"
+    && window.matchMedia(SYSTEM_DARK_QUERY).matches;
+}
+
 function App() {
   const [sidebarOpen, setSidebarOpen] = useState(() => {
     try { return localStorage.getItem("sidebar-open") === "true"; } catch { return false; }
@@ -127,13 +135,25 @@ function App() {
   const [sidebarSearchOpen, setSidebarSearchOpen] = useState(false);
   const [sidebarSearchQuery, setSidebarSearchQuery] = useState("");
   const { settings, update: updateSetting, isLoaded: settingsLoaded } = useSettings();
-  const isDarkMode = settings.themeMode === "dark";
+  const [systemPrefersDark, setSystemPrefersDark] = useState(getSystemPrefersDark);
+  const isDarkMode = settings.themeMode === "system"
+    ? systemPrefersDark
+    : settings.themeMode === "dark";
   const locale = settings.locale;
   const state = useMarkdownState();
   const styles = useStyles();
   const tiptapRef = useRef<TiptapEditorHandle>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const [tiptapEditor, setTiptapEditor] = useState<import("@tiptap/react").Editor | null>(null);
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const media = window.matchMedia(SYSTEM_DARK_QUERY);
+    const sync = () => setSystemPrefersDark(media.matches);
+    sync();
+    media.addEventListener("change", sync);
+    return () => media.removeEventListener("change", sync);
+  }, []);
 
   // 노트 디렉토리 초기화 (settings 로드 → 경로 설정 → 노트 로딩)
   const [notesDirReady, setNotesDirReady] = useState(false);
@@ -828,6 +848,7 @@ function App() {
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
         settings={settings}
+        isDarkMode={isDarkMode}
         onUpdate={updateSetting}
         currentNotesDir={currentNotesDir}
         onChangeNotesDir={handleChangeNotesDir}

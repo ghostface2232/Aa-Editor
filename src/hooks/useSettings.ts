@@ -3,7 +3,7 @@ import { appDataDir } from "@tauri-apps/api/path";
 import { mkdir, readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";
 
 export type Locale = "en" | "ko";
-export type ThemeMode = "light" | "dark";
+export type ThemeMode = "light" | "dark" | "system";
 export type NotesSortOrder = "updated-desc" | "updated-asc" | "created-desc" | "created-asc" | "title-asc" | "title-desc";
 export type WordWrap = "word" | "char";
 export type ParagraphSpacing = 0 | 10 | 20 | 30 | 40 | 50;
@@ -73,7 +73,9 @@ function parseSettings(raw: string | null): Settings {
     const parsed = JSON.parse(raw) as Partial<Settings> & Record<string, unknown>;
     return {
       locale: parsed.locale === "en" ? "en" : DEFAULTS.locale,
-      themeMode: parsed.themeMode === "dark" ? "dark" : DEFAULTS.themeMode,
+      themeMode: parsed.themeMode === "dark" || parsed.themeMode === "system"
+        ? parsed.themeMode
+        : DEFAULTS.themeMode,
       notesSortOrder: migrateSortOrder(String(parsed.notesSortOrder ?? DEFAULTS.notesSortOrder)),
       wordWrap: parsed.wordWrap === "char" ? "char" : DEFAULTS.wordWrap,
       paragraphSpacing: [0, 10, 20, 30, 40, 50].includes(parsed.paragraphSpacing as number)

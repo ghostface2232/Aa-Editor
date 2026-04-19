@@ -248,6 +248,8 @@ export function EditorToolbar({
 
   const isHeading = editor?.isActive("heading") ?? false;
   const headingLabel = getHeadingLabel(editor, locale);
+  const canUndo = editor?.can().undo() ?? false;
+  const canRedo = editor?.can().redo() ?? false;
 
   const tb = (
     tooltip: string,
@@ -287,14 +289,14 @@ export function EditorToolbar({
             <ArrowUndoRegular />,
             () => editor?.chain().focus().undo().run(),
             false,
-            !editor,
+            !canUndo,
           )}
           {tb(
             i("tool.redo"),
             <ArrowRedoRegular />,
             () => editor?.chain().focus().redo().run(),
             false,
-            !editor,
+            !canRedo,
           )}
         </div>
 

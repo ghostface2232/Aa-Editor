@@ -5,6 +5,7 @@ const dict = {
   "app.name": { en: "Noten", ko: "Noten" },
   "theme.light": { en: "Light", ko: "라이트" },
   "theme.dark": { en: "Dark", ko: "다크" },
+  "theme.system": { en: "System", ko: "시스템" },
 
   /* ─── EditorToolbar ─── */
   "heading.body": { en: "Body", ko: "본문" },
