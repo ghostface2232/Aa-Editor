@@ -82,13 +82,27 @@ export function useSidebarAnimations({ docs, groups }: UseSidebarAnimationsOptio
     const prev = prevGroupCollapsedRef.current;
     const justExpanded: string[] = [];
     const justCollapsed: string[] = [];
+    // Groups that never appeared in `prev` — covers every first-seen source:
+    // the async manifest load on cold start, remote `groups-updated` syncs,
+    // file-watcher reconciles, and user-created groups. Without silently
+    // seeding the ref for these cases, `prev` would stay at its mount-time
+    // snapshot forever (empty Map if the manifest loaded after first render),
+    // every later toggle would read `wasColl === undefined`, and the animation
+    // classes would never attach. First-time observation must not itself
+    // trigger an expand/collapse animation — the ref sync below records the
+    // state without firing setState.
+    let hasUntrackedGroup = false;
     for (const g of groups) {
       const wasColl = prev.get(g.id);
-      if (wasColl === true && !g.collapsed) justExpanded.push(g.id);
+      if (wasColl === undefined) hasUntrackedGroup = true;
+      else if (wasColl === true && !g.collapsed) justExpanded.push(g.id);
       else if (wasColl === false && g.collapsed) justCollapsed.push(g.id);
     }
-    if (justExpanded.length > 0 || justCollapsed.length > 0) {
+    const membershipChanged = hasUntrackedGroup || prev.size !== groups.length;
+    if (justExpanded.length > 0 || justCollapsed.length > 0 || membershipChanged) {
       prevGroupCollapsedRef.current = new Map(groups.map((g) => [g.id, g.collapsed]));
+    }
+    if (justExpanded.length > 0 || justCollapsed.length > 0) {
       if (justExpanded.length > 0) {
         setExpandedGroupIds((s) => {
           const next = new Set(s);
