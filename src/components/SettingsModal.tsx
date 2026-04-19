@@ -616,27 +616,19 @@ export function SettingsModal({ open, onClose, settings, isDarkMode, onUpdate, c
 
                   {/* Version notes */}
                   <div className={settingItemClass(styles)} style={{ paddingTop: "18px" }}>
-                    <div style={{ fontSize: "12px", fontWeight: 500, color: tokens.colorNeutralForeground2, marginBottom: "6px" }}>v0.1.8</div>
+                    <div style={{ fontSize: "12px", fontWeight: 500, color: tokens.colorNeutralForeground2, marginBottom: "6px" }}>v0.1.9</div>
                     <div style={{ fontSize: "12px", color: tokens.colorNeutralForeground3, lineHeight: "1.6" }}>
                       {locale === "ko" ? (
                         <>
-                          · 위키링크 [[Title]] 문법 지원 — 클릭 네비게이션, [[ 자동완성, hover Edit 팝오버, 이름 변경 시 전체 레퍼런스 rewrite<br />
-                          · 시스템 테마 모드 추가 (OS 설정 따라감)<br />
-                          · 사이드바 그룹 드래그 앤 드롭 재정렬 및 노트를 그룹 밖으로 빼는 기능을 FLIP 모션과 함께 추가, 그룹 collapse/expand도 대칭·스무스화<br />
-                          · 노트 디렉토리 변경 시 .assets 폴더도 함께 이동, 영구 삭제·휴지통 비우기·14일 만료 시 남아 있던 .assets/&lt;noteId&gt;/ 정리<br />
-                          · 한글 IME 조합 중 글자가 늦게 표시되던 문제 수정 (spellcheck race)<br />
-                          · 외부 동기화가 활성 문서를 삭제했을 때와 다른 창이 빈 manifest를 썼을 때의 사이드바 desync 수정<br />
-                          · 좁은 창에서 사이드바 열기 동작, suggestion 드롭다운 스크롤바 등 사이드바 UI 디테일 정돈
+                          · 다른 창이 같은 문서를 autosave 할 때 현재 창의 미저장 편집이 덮어써지던 문제 수정<br />
+                          · 노트 이름 변경 시 위키링크 전체 rewrite를 병렬 디스크 쓰기로 전환 (대량 rename 체감 개선)<br />
+                          · 링크 href scheme 검증을 공용 allow-list로 단일화 (popover·paste·autolink 동일 규칙)
                         </>
                       ) : (
                         <>
-                          · Wiki-link [[Title]] support — click-to-navigate, [[ autocompletion, hover-Edit popover, rename rewrites references across all notes<br />
-                          · Added a System theme mode that follows the OS setting<br />
-                          · Drag-and-drop group reordering and note-out-of-group, both with FLIP motion; group collapse/expand now symmetric and smoother<br />
-                          · Move the .assets folder alongside the notes directory when the path changes, and clean up stale .assets/&lt;noteId&gt;/ on permanent delete, empty trash, or 14-day expiry<br />
-                          · Fixed Korean IME composition preview racing with browser spellcheck<br />
-                          · Fixed sidebar desync when an external sync deleted the active doc, or another window wrote a manifest with zero groups<br />
-                          · Polished sidebar UI — narrow-window open behavior, suggestion-dropdown scrollbar, and other details
+                          · Fixed unsaved local edits being overwritten when another window autosaved the same document<br />
+                          · Parallelized per-file disk writes during rename's wiki-link rewrite for faster mass renames<br />
+                          · Centralized link href scheme validation behind a shared allow-list so the popover, paste, and autolink paths all honour the same rules
                         </>
                       )}
                     </div>
