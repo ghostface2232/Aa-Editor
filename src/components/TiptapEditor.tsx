@@ -33,6 +33,8 @@ import MermaidCodeBlock from "../extensions/MermaidCodeBlock";
 import SlashCommands from "../extensions/SlashCommands";
 import ImageDrop from "../extensions/ImageDrop";
 import { createImageNodeView } from "../extensions/ImageView";
+import WikiLink from "../extensions/WikiLink";
+import WikiLinkSuggestion from "../extensions/WikiLinkSuggestion";
 import TextContextMenu, {
   createTiptapTextContextMenuContext,
   isBelowTiptapDocumentEnd,
@@ -44,6 +46,7 @@ import { t } from "../i18n";
 import type { Locale, WordWrap } from "../hooks/useSettings";
 import "../styles/tiptap-editor.css";
 import "../styles/mermaid-theme.css";
+import "../styles/wiki-link.css";
 
 declare module "@tiptap/core" {
   interface Storage {
@@ -51,6 +54,7 @@ declare module "@tiptap/core" {
     slashCommands: { locale: string };
     markdownPaste: { keepFormatOnPaste: boolean };
     documentContext: { noteId: string | null; filePath: string | null };
+    wikiLink: import("../extensions/WikiLink").WikiLinkStorage;
   }
 }
 
@@ -808,7 +812,7 @@ export const TiptapEditor = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
 
     const editor = useEditor({
       extensions: [
-        StarterKit.configure({ codeBlock: false, underline: false }),
+        StarterKit.configure({ codeBlock: false, underline: false, link: false }),
         Markdown,
         Link.configure({
           autolink: true,
@@ -852,6 +856,8 @@ export const TiptapEditor = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
         IMEGuard,
         ReadonlyGuard,
         SlashCommands,
+        WikiLink,
+        WikiLinkSuggestion,
         ImageDrop,
         ImageFocusGuard,
         TextContextMenu,

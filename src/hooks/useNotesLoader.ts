@@ -504,6 +504,10 @@ export function useNotesLoader(
 
 export function stripInlineMarkdown(text: string): string {
   let s = text;
+  // wiki links: [[Title]] → Title (must run before the regular link strip so
+  // the outer brackets of the wiki-link syntax don't get treated as markdown
+  // link text).
+  s = s.replace(/\[\[([^\[\]\n]+)\]\]/g, "$1");
   // links: [text](url) → text
   s = s.replace(/\[([^\]]*)\]\([^)]*\)/g, "$1");
   // inline code

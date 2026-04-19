@@ -64,6 +64,9 @@ const dict = {
   "slash.image": { en: "Image", ko: "이미지" },
   "slash.image.desc": { en: "Insert local image", ko: "로컬 이미지 파일 삽입" },
 
+  /* ─── Wiki links ─── */
+  "wiki.createNew": { en: "Create new note", ko: "새 노트 만들기" },
+
   /* ─── Image context menu ─── */
   "image.save": { en: "Save image", ko: "이미지 저장" },
   "image.copy": { en: "Copy image", ko: "이미지 복사" },

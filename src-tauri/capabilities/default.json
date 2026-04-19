@@ -27,6 +27,8 @@
     "dialog:default",
     "fs:read-all",
     "fs:write-all",
+    "fs:allow-watch",
+    "fs:allow-unwatch",
     {
       "identifier": "fs:scope",
       "allow": [

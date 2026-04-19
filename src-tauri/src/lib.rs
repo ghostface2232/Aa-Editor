@@ -8,6 +8,25 @@ use tauri::{AppHandle, Manager, Runtime, path::BaseDirectory};
 const CREATE_NO_WINDOW_FLAG: u32 = 0x08000000;
 
 #[tauri::command]
+fn toggle_devtools<R: Runtime>(window: tauri::WebviewWindow<R>) {
+    // `open_devtools` / `close_devtools` compile only in debug builds or when
+    // the `devtools` Cargo feature is enabled; production release builds keep
+    // the devtools surface stripped from the binary.
+    #[cfg(any(debug_assertions, feature = "devtools"))]
+    {
+        if window.is_devtools_open() {
+            window.close_devtools();
+        } else {
+            window.open_devtools();
+        }
+    }
+    #[cfg(not(any(debug_assertions, feature = "devtools")))]
+    {
+        let _ = window;
+    }
+}
+
+#[tauri::command]
 async fn print_to_pdf(html: String, output_path: String) -> Result<(), String> {
     // Write HTML to a temp file
     let temp_dir = std::env::temp_dir();
@@ -123,7 +142,7 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .invoke_handler(tauri::generate_handler![print_to_pdf])
+        .invoke_handler(tauri::generate_handler![print_to_pdf, toggle_devtools])
         .setup(|app| {
             let app_handle = app.handle().clone();
             std::thread::spawn(move || ensure_maintenance_helper(app_handle));

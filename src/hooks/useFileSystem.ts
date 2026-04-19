@@ -30,6 +30,10 @@ function getFileName(path: string): string {
   return path.split(/[\\/]/).pop() || "untitled.md";
 }
 
+function escapeRegexForRename(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function sortAndPersistDocs(
   nextDocs: NoteDoc[],
   activeId: string | null,
@@ -86,6 +90,7 @@ export interface FileSystemActions {
   saveFile: () => Promise<void>;
   saveFileAs: () => Promise<void>;
   newNote: () => Promise<void>;
+  createNoteWithTitle: (title: string) => Promise<string | null>;
   switchDocument: (index: number) => Promise<void>;
   deleteNote: (index: number) => Promise<void>;
   duplicateNote: (index: number) => Promise<void>;
@@ -408,6 +413,60 @@ export function useFileSystem(
     }
   }, [cancelDocSaveRef, getLiveDocsSnapshot, leaveCurrentDoc, locale, markDocClean, notesSortOrder, setActiveIndex, setDocs, setGroups, state, tiptapRef]);
 
+  // Create a note with an explicit title without switching away from the
+  // currently focused document. Used by the wiki-link "create new" path so
+  // the user can keep typing while the new note is provisioned in the
+  // background. If a note with the same (case-insensitive) title already
+  // exists, returns that note's id instead of creating a duplicate.
+  const createNoteWithTitle = useCallback(async (rawTitle: string): Promise<string | null> => {
+    const title = rawTitle.trim();
+    if (!title) return null;
+
+    const existing = docsRef.current.find(
+      (doc) => doc.fileName.normalize("NFC").toLowerCase() === title.normalize("NFC").toLowerCase(),
+    );
+    if (existing) return existing.id;
+
+    const id = crypto.randomUUID();
+    const timestamp = Date.now();
+    let filePath = "";
+    try {
+      const notesDir = await getNotesDir();
+      await mkdir(notesDir, { recursive: true }).catch(() => {});
+      filePath = `${notesDir}/${id}.md`;
+      markOwnWrite(filePath);
+      await writeTextFile(filePath, "");
+    } catch (error) {
+      console.warn("Failed to create note for wiki link:", error);
+      return null;
+    }
+
+    const newDoc: NoteDoc = {
+      id,
+      filePath,
+      fileName: title,
+      isDirty: false,
+      content: "",
+      customName: true,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+
+    const { docs: liveDocs, activeDocId } = getLiveDocsSnapshot();
+    const nextDocs = [...liveDocs, newDoc];
+    sortAndPersistDocs(
+      nextDocs,
+      activeDocId,
+      notesSortOrder,
+      locale,
+      setDocs,
+      setActiveIndex,
+      groupsRef.current,
+    );
+    emitDocCreated(newDoc);
+    return id;
+  }, [getLiveDocsSnapshot, locale, notesSortOrder, setActiveIndex, setDocs]);
+
   const switchDocument = useCallback(async (index: number) => {
     const { docs: liveDocs, activeDocId, activeIndex: currentActiveIndex } = getLiveDocsSnapshot();
     if (index === currentActiveIndex) return;
@@ -598,21 +657,79 @@ export function useFileSystem(
   }, [activeIndex, docs, locale, tiptapRef]);
 
   const renameNote = useCallback(async (index: number, newName: string) => {
-    const { docs: liveDocs } = getLiveDocsSnapshot();
+    const { docs: liveDocs, activeDocId, activeIndex: currentActiveIndex } = getLiveDocsSnapshot();
     const doc = liveDocs[index];
     if (!doc) return;
 
     const trimmed = newName.trim();
     if (!trimmed || trimmed === doc.fileName) return;
 
+    const oldName = doc.fileName;
+    // Case-insensitive match — bracketed form `[[OldTitle]]` is the fenced
+    // delimiter, so we don't need word boundaries. Case-insensitive so
+    // `[[foo]]`, `[[Foo]]`, `[[FOO]]` all update together, and the new
+    // casing from `trimmed` replaces whatever was matched.
+    const rewritePattern = new RegExp(
+      `\\[\\[${escapeRegexForRename(oldName)}\\]\\]`,
+      "gi",
+    );
+    const replacement = `[[${trimmed}]]`;
+    const now = Date.now();
+
+    let activeRewrittenContent: string | null = null;
+    const diskWrites: Array<{ filePath: string; content: string }> = [];
+
     const nextDocs = liveDocs.map((entry, i) => {
-      if (i !== index) return entry;
-      return { ...entry, fileName: trimmed, updatedAt: Date.now(), customName: true };
+      if (i === index) {
+        return { ...entry, fileName: trimmed, updatedAt: now, customName: true };
+      }
+      if (!entry.content.includes("[[")) return entry;
+      const updated = entry.content.replace(rewritePattern, replacement);
+      if (updated === entry.content) return entry;
+
+      if (entry.id === activeDocId) {
+        activeRewrittenContent = updated;
+        // Active doc is flushed through the editor (below), not direct disk write.
+        return { ...entry, content: updated, updatedAt: now };
+      }
+      if (entry.filePath) {
+        diskWrites.push({ filePath: entry.filePath, content: updated });
+      }
+      return { ...entry, content: updated, updatedAt: now };
     });
+
+    for (const write of diskWrites) {
+      try {
+        markOwnWrite(write.filePath);
+        await writeTextFile(write.filePath, write.content);
+      } catch {
+        console.warn("Failed to rewrite wiki links in note:", write.filePath);
+      }
+    }
+
+    if (activeRewrittenContent !== null) {
+      const activeDoc = liveDocs[currentActiveIndex];
+      if (activeDoc?.filePath) {
+        try {
+          markOwnWrite(activeDoc.filePath);
+          await writeTextFile(activeDoc.filePath, activeRewrittenContent);
+        } catch {
+          console.warn("Failed to persist rewritten wiki links for active note.");
+        }
+      }
+      tiptapRef.current?.openDocument?.({
+        noteId: activeDoc?.id ?? null,
+        filePath: activeDoc?.filePath ?? null,
+        markdown: activeRewrittenContent,
+        reason: "file-watch",
+      });
+      state.primeMarkdown(activeRewrittenContent);
+      state.setIsDirty(false);
+    }
 
     sortAndPersistDocs(nextDocs, doc.id, notesSortOrder, locale, setDocs, setActiveIndex, groupsRef.current);
     emitDocRenamed(doc.id, doc.filePath, doc.filePath, trimmed);
-  }, [getLiveDocsSnapshot, notesSortOrder, setActiveIndex, setDocs]);
+  }, [getLiveDocsSnapshot, notesSortOrder, setActiveIndex, setDocs, state, tiptapRef]);
 
   const restoreNote = useCallback(async (trashedNoteId: string) => {
     const trashed = trashedNotesRef.current?.find((n) => n.id === trashedNoteId);
@@ -720,5 +837,5 @@ export function useFileSystem(
     void saveManifest(docsRef.current, docsRef.current[activeIndexRef.current]?.id ?? null, groupsRef.current).catch(() => {});
   }, [setTrashedNotes]);
 
-  return { importFile, importFiles, saveFile, saveFileAs, newNote, switchDocument, deleteNote, duplicateNote, exportNote, renameNote, restoreNote, permanentlyDeleteNote, emptyTrash };
+  return { importFile, importFiles, saveFile, saveFileAs, newNote, createNoteWithTitle, switchDocument, deleteNote, duplicateNote, exportNote, renameNote, restoreNote, permanentlyDeleteNote, emptyTrash };
 }

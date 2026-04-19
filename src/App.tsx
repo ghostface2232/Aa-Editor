@@ -34,6 +34,7 @@ import { SettingsModal } from "./components/SettingsModal";
 import { SearchBar } from "./components/SearchBar";
 import { GoToLineBar } from "./components/GoToLineBar";
 import { searchPluginKey, type SearchPluginState } from "./extensions/SearchHighlight";
+import { refreshWikiLinkDecorations } from "./extensions/WikiLink";
 import { t } from "./i18n";
 import { exportAsMarkdown, exportAsPdf, exportAsRtf } from "./utils/exportHandlers";
 import { migrateNotesDir, hasManifest } from "./utils/migrateNotesDir";
@@ -303,6 +304,26 @@ function App() {
   }, [tiptapEditor]);
 
   useEffect(syncEditorRef, [syncEditorRef]);
+
+  // Keep the wiki-link extension's storage in sync with the live docs list
+  // and the app callbacks. The decoration plugin rebuilds when we nudge it
+  // here so missing/existing state reflects newly added or removed notes.
+  useEffect(() => {
+    if (!tiptapEditor?.storage.wikiLink) return;
+    const storage = tiptapEditor.storage.wikiLink;
+    storage.docs = docs;
+    storage.locale = locale;
+    storage.navigateToTitle = (title: string) => {
+      const needle = title.normalize("NFC").trim().toLowerCase();
+      if (!needle) return;
+      const idx = docs.findIndex(
+        (doc) => doc.fileName.normalize("NFC").toLowerCase() === needle,
+      );
+      if (idx >= 0) void fs.switchDocument(idx);
+    };
+    storage.createNoteWithTitle = (title: string) => fs.createNoteWithTitle(title);
+    refreshWikiLinkDecorations(tiptapEditor);
+  }, [tiptapEditor, docs, locale, fs.switchDocument, fs.createNoteWithTitle]);
 
   useEffect(() => {
     if (!settingsLoaded || docs.length < 2) return;

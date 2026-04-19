@@ -1,0 +1,55 @@
+/* ─── Wiki-link mark ─── */
+.ProseMirror .wiki-link {
+  color: var(--editor-color-accent);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  text-decoration-color: color-mix(in srgb, var(--editor-color-accent) 60%, transparent);
+  cursor: pointer;
+  border-radius: 2px;
+  padding: 0 1px;
+  transition: background-color 0.12s ease;
+}
+
+.ProseMirror .wiki-link:hover {
+  background-color: color-mix(in srgb, var(--editor-color-accent) 12%, transparent);
+  text-decoration-color: var(--editor-color-accent);
+}
+
+/* Missing (no matching note) — decoration class applied by the plugin. */
+.ProseMirror .wiki-link.wiki-link-missing,
+.ProseMirror .wiki-link-missing {
+  color: var(--editor-color-text-secondary);
+  text-decoration-style: dashed;
+  text-decoration-color: color-mix(
+    in srgb,
+    var(--editor-color-text-secondary) 55%,
+    transparent
+  );
+  opacity: 0.85;
+}
+
+.ProseMirror .wiki-link.wiki-link-missing:hover,
+.ProseMirror .wiki-link-missing:hover {
+  background-color: color-mix(
+    in srgb,
+    var(--editor-color-text-secondary) 10%,
+    transparent
+  );
+}
+
+/* When the mark is rendered read-only we still want the pointer cursor for
+   navigable targets and the default (text) cursor for missing ones. */
+.tiptap-readonly .ProseMirror .wiki-link {
+  cursor: pointer;
+}
+
+.tiptap-readonly .ProseMirror .wiki-link-missing {
+  cursor: default;
+}
+
+/* Suggestion menu reuses the slash-command list, but we rescale the icon
+   color so document icons read as neutral rather than the slash accent. */
+.wiki-suggestion-menu .slash-command-item .slash-command-icon {
+  color: var(--editor-color-text-secondary);
+}

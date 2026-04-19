@@ -1,4 +1,5 @@
 import { useEffect, type Dispatch, type RefObject, type SetStateAction } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import type { TiptapEditorHandle } from "../components/TiptapEditor";
 import { openNewWindow } from "../utils/newWindow";
 
@@ -50,6 +51,22 @@ export function useKeyboardShortcuts({
       if (e.key === "Tab" && !isDialogTarget(e.target)) {
         e.preventDefault();
         tiptapRef.current?.getEditor()?.commands.focus();
+        return;
+      }
+
+      // 개발자용 비밀 단축키 (차단 규칙보다 먼저 처리해 preventDefault 이전에 통과시킴)
+      // — Ctrl+Alt+Shift+I: 개발자 도구 토글 (release 빌드에서는 no-op)
+      // — Ctrl+Alt+Shift+R: 하드 새로고침
+      if (ctrl && e.altKey && e.shiftKey && key === "i") {
+        e.preventDefault();
+        e.stopPropagation();
+        void invoke("toggle_devtools").catch(() => {});
+        return;
+      }
+      if (ctrl && e.altKey && e.shiftKey && key === "r") {
+        e.preventDefault();
+        e.stopPropagation();
+        window.location.reload();
         return;
       }
 
