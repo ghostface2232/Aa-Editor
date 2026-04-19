@@ -446,6 +446,15 @@ export const useStyles = makeStyles({
     paddingRight: "8px",
     cursor: "pointer",
   },
+  // Stand-in selection cue for the active note when its group is
+  // collapsed: the note row itself isn't rendered, so the header adopts
+  // the `docItemActive` background and stroke so it's still obvious where
+  // the open note lives. Re-expanding restores the note-row cue and this
+  // class falls off.
+  groupHeaderActive: {
+    backgroundColor: "var(--ui-active-bg)",
+    fontWeight: 500,
+  },
   groupChevron: {
     display: "flex",
     alignItems: "center",

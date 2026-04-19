@@ -657,6 +657,12 @@ export function Sidebar({
     const isContextTarget = contextMenu?.type === "group" && contextMenu.groupId === group.id;
     const noteCount = group.noteIds.filter((id) => docs.some((d) => d.id === id)).length;
     const isRemoving = removingGroupIds.has(group.id);
+    // When the group is collapsed the active note's row isn't visible, so
+    // surface the selection on the header instead. Expanding the group
+    // brings the row back and this condition goes false automatically.
+    const activeDocId = docs[activeIndex]?.id ?? null;
+    const isActiveGroup =
+      !!activeDocId && group.collapsed && group.noteIds.includes(activeDocId);
 
     return (
       <div
@@ -678,7 +684,10 @@ export function Sidebar({
       >
         <Button
           appearance="subtle"
-          className={styles.groupHeader}
+          className={mergeClasses(
+            styles.groupHeader,
+            isActiveGroup && styles.groupHeaderActive,
+          )}
           size="small"
           onClick={() => {
             if (isDraggingGroup.current) return;
