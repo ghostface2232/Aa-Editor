@@ -9,11 +9,13 @@ import { migrateDataUrlImagesToAssets } from "../utils/migrateImageAssets";
 import { removeNoteAssetDir } from "../utils/imageAssetUtils";
 import { deriveNoteGroups, groupsToStored, readStoredGroups, writeStoredGroups } from "../utils/groupsIO";
 import {
+  ensureMetaDir,
   metaToNoteDoc,
   metaToTrashedNote,
   noteDocToMeta,
   readAllNoteMetas,
   readNoteMeta,
+  removeNoteMeta,
   writeNoteMeta,
   type NoteMeta,
 } from "../utils/metadataIO";
@@ -233,7 +235,8 @@ export async function persistGroupCollapsed(groups: NoteGroup[]): Promise<void> 
 }
 
 async function migrateLegacyManifestIfNeeded(dir: string): Promise<void> {
-  const legacy = await readLegacyManifestFromFile(dir) ?? readStoredManifest();
+  const fileLegacy = await readLegacyManifestFromFile(dir);
+  const legacy = fileLegacy ?? readStoredManifest();
   if (!legacy) return;
 
   const machineId = await getMachineId();
@@ -242,15 +245,21 @@ async function migrateLegacyManifestIfNeeded(dir: string): Promise<void> {
   await Promise.all(decomposed.metas.map((meta) => writeNoteMeta(dir, meta)));
   await updateUiState(() => decomposed.uiState);
 
-  const legacyPath = joinPath(dir, "manifest.json");
-  const renamedPath = joinPath(dir, "manifest.legacy.json");
-  try {
-    if (await exists(legacyPath)) {
-      markOwnWrite(legacyPath, null);
-      await rename(legacyPath, renamedPath);
+  if (fileLegacy) {
+    const legacyPath = joinPath(dir, "manifest.json");
+    const renamedPath = joinPath(dir, "manifest.legacy.json");
+    try {
+      if (await exists(legacyPath)) {
+        markOwnWrite(legacyPath, null);
+        await rename(legacyPath, renamedPath);
+      }
+    } catch {
+      // Leave the source in place; loader remains idempotent.
     }
-  } catch {
-    // Leave the source in place; loader remains idempotent.
+  } else {
+    // Consumed the localStorage fallback — clear it so the next launch doesn't
+    // reapply this stale snapshot on top of newer per-file metadata.
+    try { localStorage.removeItem(UI_STATE_STORAGE_KEY); } catch { /* ignore */ }
   }
 }
 
@@ -407,6 +416,22 @@ export async function saveManifest(
         lastWriterMachineId: existing?.lastWriterMachineId ?? machineId,
         imageAssetMigrationV1CompletedAt: existing?.imageAssetMigrationV1CompletedAt,
       });
+    }));
+
+    // Remove orphan .meta/<id>.json for ids that no longer appear in either set
+    // — e.g. when a .md file was deleted externally and reconcileFolder dropped
+    // the doc. Otherwise readAllNoteMetas would resurrect it as an empty note.
+    const validIds = new Set<string>([
+      ...docs.map((d) => d.id),
+      ...trashedNotesCache.map((t) => t.id),
+    ]);
+    const metaDir = await ensureMetaDir(dir);
+    const metaEntries = await readDir(metaDir).catch(() => []);
+    await Promise.all(metaEntries.map(async (entry) => {
+      const name = entry.name;
+      if (!name?.endsWith(".json") || name.endsWith(".tmp")) return;
+      const id = name.replace(/\.json$/, "");
+      if (!validIds.has(id)) await removeNoteMeta(dir, id);
     }));
 
     if (groups) {
