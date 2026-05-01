@@ -136,9 +136,10 @@ const useStyles = makeStyles({
     width: "8px",
     height: "8px",
     borderRadius: "50%",
-    backgroundColor: tokens.colorBrandBackground,
+    backgroundColor: "var(--update-dot-color)",
     marginLeft: "auto",
     flexShrink: 0,
+    boxShadow: "0 0 4px var(--update-dot-color), 0 0 7px var(--update-dot-color)",
   },
   content: {
     flex: 1,
@@ -338,6 +339,7 @@ export function SettingsModal({ open, onClose, settings, isDarkMode, onUpdate, c
             className={styles.nav}
             style={{
               "--settings-nav-hover": themeStyles.navHover,
+              "--update-dot-color": isDarkMode ? tokens.colorBrandForeground1 : tokens.colorBrandBackground,
             } as React.CSSProperties}
           >
             <span className={styles.navTitle}>{i("settings.title")}</span>

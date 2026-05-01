@@ -753,6 +753,7 @@ function App() {
               pendingRenameGroupId={pendingRenameGroupId}
               onPendingRenameGroupIdClear={() => setPendingRenameGroupId(null)}
               updateAvailable={updater.state.status === "available" || updater.state.status === "downloading" || updater.state.status === "ready"}
+              isDarkMode={isDarkMode}
             />
             <div
               className={mergeClasses(
