@@ -609,13 +609,11 @@ const fastMarked = createFastMarked();
 
 export interface TiptapEditorHandle {
   getMarkdown: () => string;
-  setContent: (markdown: string) => void;
-  setDocumentContext: (noteId: string | null, filePath: string | null, refresh?: boolean) => void;
   openDocument: (params: {
     noteId: string | null;
     filePath: string | null;
     markdown: string;
-    reason?: "init" | "switch" | "window-sync" | "file-watch" | "fallback";
+    reason?: "init" | "switch" | "window-sync" | "file-watch";
   }) => void;
   invalidateDocumentSession: (noteId: string | null, filePath: string | null) => void;
   setEditable: (editable: boolean) => void;
@@ -940,7 +938,7 @@ const TiptapEditorBase = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
       noteId: string | null;
       filePath: string | null;
       markdown: string;
-      reason?: "init" | "switch" | "window-sync" | "file-watch" | "fallback";
+      reason?: "init" | "switch" | "window-sync" | "file-watch";
     }) => {
       if (!editor) return;
       closeLinkPopover();
@@ -1372,26 +1370,6 @@ const TiptapEditorBase = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
           if (!editor) return "";
           return readEditorMarkdown(editor);
         },
-        setContent: (markdown: string) => {
-          if (!editor) return;
-          openDocument({
-            noteId: editor.storage.documentContext.noteId,
-            filePath: editor.storage.documentContext.filePath,
-            markdown,
-            reason: "fallback",
-          });
-        },
-        setDocumentContext: (noteId: string | null, filePath: string | null, refresh = true) => {
-          if (!editor) return;
-          const prevNoteId = editor.storage.documentContext.noteId;
-          const prevFilePath = editor.storage.documentContext.filePath;
-          editor.storage.documentContext.noteId = noteId;
-          editor.storage.documentContext.filePath = filePath;
-          if (refresh && (prevNoteId !== noteId || prevFilePath !== filePath)) {
-            refreshImageNodeViewSources(editor);
-            scheduleSpellcheckRefresh(editor);
-          }
-        },
         openDocument,
         invalidateDocumentSession,
         setEditable: (value: boolean) => {
@@ -1408,7 +1386,7 @@ const TiptapEditorBase = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
         },
         getEditor: () => editor,
       }),
-      [closeLinkHoverPopover, closeLinkPopover, editor, invalidateDocumentSession, openDocument, scheduleSpellcheckRefresh],
+      [closeLinkHoverPopover, closeLinkPopover, editor, invalidateDocumentSession, openDocument],
     );
 
     // "#" in the link popover switches the input into heading-autocomplete

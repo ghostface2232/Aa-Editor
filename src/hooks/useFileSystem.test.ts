@@ -203,8 +203,6 @@ function renderFs(opts: RenderOpts = {}) {
       getEditor: () => ({ getMarkdown: () => refs.editorContent }),
       openDocument,
       invalidateDocumentSession,
-      setDocumentContext: vi.fn(),
-      setContent: vi.fn(),
       focus: focusEditor,
     } as unknown as TiptapEditorHandle,
   };

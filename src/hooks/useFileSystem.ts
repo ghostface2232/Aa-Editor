@@ -142,19 +142,14 @@ function resetDocState(
   docId: string | null,
   filePath: string | null,
   content: string,
-  reason: "init" | "switch" | "window-sync" | "file-watch" | "fallback" = "switch",
+  reason: "init" | "switch" | "window-sync" | "file-watch" = "switch",
 ) {
-  if (tiptapRef.current?.openDocument) {
-    tiptapRef.current.openDocument({
-      noteId: docId,
-      filePath,
-      markdown: content,
-      reason,
-    });
-  } else {
-    tiptapRef.current?.setDocumentContext(docId, filePath, false);
-    tiptapRef.current?.setContent(content);
-  }
+  tiptapRef.current?.openDocument({
+    noteId: docId,
+    filePath,
+    markdown: content,
+    reason,
+  });
   state.primeMarkdown(content);
   state.setFilePath(filePath);
   state.setIsDirty(false);
