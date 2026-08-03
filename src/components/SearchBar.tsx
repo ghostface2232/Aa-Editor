@@ -16,7 +16,7 @@ import {
 import { scrollToPos } from "../utils/scrollToPos";
 import { t } from "../i18n";
 import type { Locale } from "../hooks/useSettings";
-import { MOTION_DURATION_BASE, pressableButton } from "../styles/interactions";
+import { pressableButton } from "../styles/interactions";
 
 const useStyles = makeStyles({
   wrapper: {
@@ -44,13 +44,6 @@ const useStyles = makeStyles({
     gap: "2px",
     padding: "0 5px 6px 12px",
     overflow: "hidden",
-    animationName: {
-      from: { opacity: 0, transform: "translateY(-4px)", filter: "blur(4px)" },
-      to: { opacity: 1, transform: "translateY(0)", filter: "blur(0px)" },
-    },
-    animationDuration: MOTION_DURATION_BASE,
-    animationTimingFunction: "cubic-bezier(0.2, 0, 0, 1)",
-    animationFillMode: "backwards",
   },
   input: {
     flex: 1,

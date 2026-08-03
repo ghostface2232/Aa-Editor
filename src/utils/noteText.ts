@@ -31,9 +31,12 @@ function stripBlockMarkers(line: string): string {
 
 export function deriveTitle(content: string): string {
   if (!content) return "";
-  const lines = content.trimStart().split("\n");
-  for (const raw of lines) {
-    const line = raw.trim();
+  let lineStart = 0;
+  while (lineStart <= content.length) {
+    const newline = content.indexOf("\n", lineStart);
+    const lineEnd = newline === -1 ? content.length : newline;
+    const line = content.slice(lineStart, lineEnd).trim();
+    lineStart = newline === -1 ? content.length + 1 : newline + 1;
     if (!line) continue;
     if (line.startsWith("![") || line.startsWith("<img") || line.startsWith("```")) continue;
     const heading = stripInlineMarkdown(stripBlockMarkers(line));

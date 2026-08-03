@@ -18,7 +18,7 @@ import {
   PanelLeftRegular,
   SearchRegular,
 } from "@fluentui/react-icons";
-import { getCurrentWindow, Effect, LogicalSize, LogicalPosition } from "@tauri-apps/api/window";
+import { getCurrentWindow, Effect, LogicalSize } from "@tauri-apps/api/window";
 import { useMarkdownState } from "./hooks/useMarkdownState";
 import { getCurrentMarkdown, useFileSystem } from "./hooks/useFileSystem";
 import { saveManifest, sortNotes, useNotesLoader, getNotesDir, getDefaultNotesDir, setNotesDir, resetNotesDir, setMigrationInProgress } from "./hooks/useNotesLoader";
@@ -68,7 +68,6 @@ import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 import { useFocusOutlineSync } from "./hooks/useFocusOutlineSync";
 import { useDragDrop } from "./hooks/useDragDrop";
 import { useUpdater } from "./hooks/useUpdater";
-import { MOTION_FAST_MS } from "./styles/interactions";
 import {
   getSystemPrefersDarkFromMatchMedia,
   queryWindowsSystemPrefersDark,
@@ -158,12 +157,8 @@ function App() {
       const currentLogicalH = size.height / scale;
       if (currentLogicalW >= minWidth - 1) return;
 
-      const pos = await win.outerPosition();
-      if (run.cancelled) return;
-      const fromX = pos.x / scale;
       const fromW = currentLogicalW;
       const toW = minWidth;
-      const toX = fromX;
 
       const DURATION = 280;
       const startTime = performance.now();
@@ -174,13 +169,9 @@ function App() {
         const t = Math.min(1, elapsed / DURATION);
         const e = 1 - Math.pow(1 - t, 3);
         const w = fromW + (toW - fromW) * e;
-        const x = fromX + (toX - fromX) * e;
         if (t >= 1 || Math.abs(w - lastW) * scale >= 1) {
           lastW = w;
-          void Promise.all([
-            win.setPosition(new LogicalPosition(x, pos.y / scale)),
-            win.setSize(new LogicalSize(w, currentLogicalH)),
-          ]).catch(() => {});
+          void win.setSize(new LogicalSize(w, currentLogicalH)).catch(() => {});
         }
         if (t < 1) requestAnimationFrame(tick);
       };
@@ -232,8 +223,6 @@ function App() {
   const [docSearchReplace, setDocSearchReplace] = useState(false);
   const [docGoToLineOpen, setDocGoToLineOpen] = useState(false);
   const activeFloatingEditorControl: FloatingEditorControl = docSearchOpen ? "search" : docGoToLineOpen ? "goto" : null;
-  const [renderedFloatingEditorControl, setRenderedFloatingEditorControl] = useState<FloatingEditorControl>(null);
-  const [floatingEditorControlExiting, setFloatingEditorControlExiting] = useState(false);
   const [sidebarSearchOpen, setSidebarSearchOpen] = useState(false);
   const [sidebarSearchQuery, setSidebarSearchQuery] = useState("");
   const [notesDirConflict, setNotesDirConflict] = useState<NotesDirConflictDialogState | null>(null);
@@ -334,25 +323,6 @@ function App() {
       media?.removeEventListener("change", syncMedia);
     };
   }, [settings.themeMode]);
-
-  useEffect(() => {
-    if (activeFloatingEditorControl) {
-      setRenderedFloatingEditorControl(activeFloatingEditorControl);
-      setFloatingEditorControlExiting(false);
-      return;
-    }
-
-    if (!renderedFloatingEditorControl) {
-      return;
-    }
-
-    setFloatingEditorControlExiting(true);
-    const timeout = window.setTimeout(() => {
-      setRenderedFloatingEditorControl(null);
-      setFloatingEditorControlExiting(false);
-    }, MOTION_FAST_MS);
-    return () => window.clearTimeout(timeout);
-  }, [activeFloatingEditorControl, renderedFloatingEditorControl]);
 
   useEffect(() => {
     if (startupUpdateCheckStartedRef.current) return;
@@ -1523,15 +1493,12 @@ function App() {
                   onToggleOutline={handleToggleOutline}
                 />
               </div>
-              {renderedFloatingEditorControl && (
+              {activeFloatingEditorControl && (
                 <div
-                  className={mergeClasses(
-                    styles.searchBarAnchor,
-                    floatingEditorControlExiting && styles.searchBarAnchorExiting,
-                  )}
+                  className={styles.searchBarAnchor}
                   style={!hideToolbar && toolbarHeight > 0 ? { top: `${toolbarHeight}px` } : undefined}
                 >
-                  {renderedFloatingEditorControl === "search" ? (
+                  {activeFloatingEditorControl === "search" ? (
                     <SearchBar
                       editor={noteEditor}
                       onClose={() => { setDocSearchOpen(false); setDocSearchReplace(false); }}

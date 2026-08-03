@@ -55,6 +55,17 @@ export function shouldRefreshImageSelection(
   return true;
 }
 
+export function shouldSyncImageSource(currentSrc: unknown, nextSrc: unknown): boolean {
+  return currentSrc !== nextSrc;
+}
+
+export function shouldAssignRenderableImageSource(
+  currentSource: string | null,
+  nextSource: string | null,
+): boolean {
+  return currentSource !== nextSource;
+}
+
 function registerImageSelectionSync(editor: Editor, updateSelection: () => void): () => void {
   let sync = imageSelectionSyncByEditor.get(editor);
   if (!sync) {
@@ -196,16 +207,16 @@ export function createImageNodeView(editor: Editor) {
     });
 
     let imageSourceToken = 0;
+    let renderedImageSource: string | null = null;
     const syncImageSource = (source: string) => {
       const token = ++imageSourceToken;
       void (async () => {
         const resolved = await resolveRenderableImageSource(source, getContext());
         if (token !== imageSourceToken) return;
-        if (resolved) {
-          img.src = resolved;
-        } else {
-          img.removeAttribute("src");
-        }
+        if (!shouldAssignRenderableImageSource(renderedImageSource, resolved)) return;
+        renderedImageSource = resolved;
+        if (resolved) img.src = resolved;
+        else img.removeAttribute("src");
       })();
     };
 
@@ -384,8 +395,11 @@ export function createImageNodeView(editor: Editor) {
       update: (updatedNode: any) => {
         if (updatedNode.type.name !== "image") return false;
         currentNode = updatedNode;
-        currentSrc = updatedNode.attrs.src;
-        syncImageSource(updatedNode.attrs.src);
+        const nextSrc = updatedNode.attrs.src;
+        if (shouldSyncImageSource(currentSrc, nextSrc)) {
+          currentSrc = nextSrc;
+          syncImageSource(nextSrc);
+        }
         if (updatedNode.attrs.alt) img.alt = updatedNode.attrs.alt;
         if (updatedNode.attrs.width) {
           img.style.width = `${updatedNode.attrs.width}px`;

@@ -83,7 +83,7 @@ The active notes directory contains shared, syncable data:
 
 ### Native and release layers
 
-`src-tauri/src/lib.rs` registers the filesystem, dialog, opener, updater, and process plugins plus native commands for PDF printing through Edge, debug-only DevTools toggling, Windows app-theme lookup, and the Windows emoji picker. At startup it also copies the bundled maintenance helper to local app data and repairs its uninstall registry commands. The capability file limits filesystem access to app data, local app data, and the user's home directory; no HTTP client plugin is enabled.
+`src-tauri/src/lib.rs` registers the filesystem, dialog, opener, updater, and process plugins plus native commands for PDF printing through Edge, debug-only DevTools toggling, direct Win32 registry lookup of the Windows app theme, and the Windows emoji picker. At startup it also copies the bundled maintenance helper to local app data and repairs its uninstall registry commands. The capability file limits filesystem access to app data, local app data, and the user's home directory; no HTTP client plugin is enabled.
 
 The root Cargo workspace builds `bootstrapper`, `maintenance-helper`, and `noten-splash-ui`; the Tauri crate is built separately under `src-tauri/`. `npm run tauri:dev` prepares the maintenance helper before starting Tauri. Tag-triggered GitHub Actions build Tauri-signed updater artifacts and the bootstrapper, Authenticode-sign the bootstrapper when certificate secrets are available, and leave the GitHub release as a draft for manual publication.
 

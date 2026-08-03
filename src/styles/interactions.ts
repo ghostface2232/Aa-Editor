@@ -5,8 +5,6 @@ export const MOTION_DURATION_SLOW = "var(--motion-slow)";
 export const MOTION_DURATION_SLOWER = "var(--motion-slower)";
 export const MOTION_DURATION_SLOWEST = "var(--motion-slowest)";
 
-export const MOTION_FAST_MS = 120;
-
 export const pressableButton = {
   transitionProperty: "background-color, color, scale",
   transitionDuration: MOTION_DURATION_FAST,

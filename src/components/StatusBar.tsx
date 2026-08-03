@@ -46,27 +46,32 @@ const useStyles = makeStyles({
   },
 });
 
-function useEditorStats(editor: Editor | null) {
+function useEditorStats(editor: Editor | null, enabled: boolean) {
   const [stats, setStats] = useState({ charCount: 0, lineCount: 0, cursorRow: 1 });
 
   useEffect(() => {
-    if (!editor) return;
+    if (!editor || !enabled) return;
 
-    // rAF-coalesce: doc.textContent walks the entire doc on each call, which
-    // dominated per-keystroke work on larger notes. One pass per frame keeps
-    // the readout fluid without paying for selection-only transactions.
+    // Keep the expensive document-wide counts keyed to ProseMirror's immutable
+    // doc identity. Selection-only transactions reuse the same node, so cursor
+    // movement updates only the cheap row readout.
     let frame: number | null = null;
+    let lastDoc: Editor["state"]["doc"] | null = null;
+    let charCount = 0;
+    let lineCount = 0;
     const compute = () => {
       frame = null;
       const doc = editor.state.doc;
-      let row = 1;
-      try {
-        row = doc.resolve(editor.state.selection.$head.pos).index(0) + 1;
-      } catch {}
+      if (doc !== lastDoc) {
+        lastDoc = doc;
+        charCount = doc.textContent.length;
+        lineCount = doc.childCount;
+      }
+      const row = editor.state.selection.$head.index(0) + 1;
       setStats((prev) => {
         const next = {
-          charCount: doc.textContent.length,
-          lineCount: doc.childCount,
+          charCount,
+          lineCount,
           cursorRow: row,
         };
         if (prev.charCount === next.charCount && prev.lineCount === next.lineCount && prev.cursorRow === next.cursorRow) {
@@ -86,7 +91,7 @@ function useEditorStats(editor: Editor | null) {
       editor.off("transaction", schedule);
       if (frame !== null) cancelAnimationFrame(frame);
     };
-  }, [editor]);
+  }, [editor, enabled]);
 
   return stats;
 }
@@ -99,7 +104,7 @@ interface StatusBarProps {
 
 function StatusBarImpl({ editor, hidden, locale }: StatusBarProps) {
   const styles = useStyles();
-  const { charCount, lineCount, cursorRow } = useEditorStats(editor);
+  const { charCount, lineCount, cursorRow } = useEditorStats(editor, !hidden);
   const i = (key: Parameters<typeof t>[0]) => t(key, locale);
 
   return (

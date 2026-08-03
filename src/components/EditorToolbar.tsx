@@ -305,7 +305,7 @@ function EditorToolbarImpl({
 
   const [, setTick] = useState(0);
   useEffect(() => {
-    if (!editor) return;
+    if (!editor || hidden) return;
     // rAF-coalesce: each render below calls 10+ editor.isActive(...) plus
     // can().undo()/can().redo(), so a transaction storm (typing, IME) used to
     // re-render the whole toolbar per keystroke. One render per frame keeps
@@ -323,7 +323,7 @@ function EditorToolbarImpl({
       editor.off("transaction", bump);
       if (frame !== null) cancelAnimationFrame(frame);
     };
-  }, [editor]);
+  }, [editor, hidden]);
 
   // ResizeObserver mutates layout styles directly to avoid render loops.
   const BREAKPOINT = 740;
@@ -548,6 +548,6 @@ function EditorToolbarImpl({
 }
 
 // Memoized so unrelated App state changes (e.g. a sidebar group toggle) don't
-// re-render the toolbar. It still re-renders on its own editor `transaction`
-// subscription; memo only blocks parent-driven renders with unchanged props.
+// re-render the toolbar. While visible it still re-renders on its own editor
+// `transaction` subscription; hidden chrome does not pay that cost.
 export const EditorToolbar = memo(EditorToolbarImpl);

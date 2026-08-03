@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { shouldRefreshImageSelection } from "./ImageView";
+import {
+  shouldAssignRenderableImageSource,
+  shouldRefreshImageSelection,
+  shouldSyncImageSource,
+} from "./ImageView";
 
 describe("shouldRefreshImageSelection", () => {
   it("skips the typing hot path: nothing selected and nothing changed", () => {
@@ -57,5 +61,25 @@ describe("shouldRefreshImageSelection", () => {
         { pos: null, readonly: true },
       ),
     ).toBe(true);
+  });
+});
+
+describe("image source synchronization", () => {
+  it("skips resolving an unchanged node source", () => {
+    expect(shouldSyncImageSource(".assets/note/image.png", ".assets/note/image.png")).toBe(false);
+  });
+
+  it("resolves a changed node source", () => {
+    expect(shouldSyncImageSource(".assets/note/old.png", ".assets/note/new.png")).toBe(true);
+  });
+
+  it("skips assigning an unchanged resolved source to the img element", () => {
+    const dataUrl = "data:image/png;base64,AAAA";
+    expect(shouldAssignRenderableImageSource(dataUrl, dataUrl)).toBe(false);
+  });
+
+  it("updates or clears the img element when the resolved source changes", () => {
+    expect(shouldAssignRenderableImageSource(null, "data:image/png;base64,AAAA")).toBe(true);
+    expect(shouldAssignRenderableImageSource("data:image/png;base64,AAAA", null)).toBe(true);
   });
 });

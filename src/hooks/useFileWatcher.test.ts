@@ -300,9 +300,10 @@ describe("useFileWatcher — own-write echo skip", () => {
     });
 
     // setDocs must not have been called with a body update for this doc.
-    // (reconcile may still call it, but the changed:false mock guarantees
-    // reconcile doesn't trigger one.)
+    // A content-hash-confirmed echo is also the one safe case where the full
+    // folder reconcile can be skipped entirely.
     expect(setDocs).not.toHaveBeenCalled();
+    expect(reconcileFolderMock).not.toHaveBeenCalled();
   });
 
   it("updates setDocs when isOwnWriteContentMatch returns false (sanity check)", async () => {
@@ -324,6 +325,80 @@ describe("useFileWatcher — own-write echo skip", () => {
     });
 
     expect(setDocs).toHaveBeenCalled();
+    expect(reconcileFolderMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores atomic body temp-file events", async () => {
+    renderWatcher({ docs: [makeDoc("a")] });
+    await waitForRootHandler();
+
+    await act(async () => {
+      await refs.rootHandler!({
+        type: { modify: { kind: "data", mode: "any" } },
+        paths: ["/notes/a.md.tmp"],
+        attrs: {},
+      } as unknown as WatchEvent);
+    });
+
+    expect(reconcileFolderMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("useFileWatcher — own meta echo skip", () => {
+  it("skips both the partial apply and full reconcile for an exact own-write hash", async () => {
+    const doc = makeDoc("a");
+    const metaPath = "/notes/.meta/a.json";
+    refs.bodyByPath.set(metaPath, JSON.stringify(makeMeta("a")));
+    refs.ownWriteMatch = true;
+    const { setDocs, setGroups } = renderWatcher({ docs: [doc] });
+    await waitForMetaHandler();
+
+    await act(async () => {
+      await refs.metaHandler!({
+        type: { modify: { kind: "data", mode: "any" } },
+        paths: [metaPath],
+        attrs: {},
+      } as unknown as WatchEvent);
+    });
+
+    expect(setDocs).not.toHaveBeenCalled();
+    expect(setGroups).not.toHaveBeenCalled();
+    expect(reconcileFolderMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps the full reconcile for an unreadable own-timestamp event", async () => {
+    const { isOwnWrite } = await import("./ownWriteTracker");
+    vi.mocked(isOwnWrite).mockReturnValueOnce(true);
+    const doc = makeDoc("a");
+    const metaPath = "/notes/.meta/a.json";
+    refs.bodyFaultByPath.set(metaPath, new Error("locked"));
+    renderWatcher({ docs: [doc] });
+    await waitForMetaHandler();
+
+    await act(async () => {
+      await refs.metaHandler!({
+        type: { remove: { kind: "file" } },
+        paths: [metaPath],
+        attrs: {},
+      } as unknown as WatchEvent);
+    });
+
+    expect(reconcileFolderMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores atomic metadata temp-file events", async () => {
+    renderWatcher({ docs: [makeDoc("a")] });
+    await waitForMetaHandler();
+
+    await act(async () => {
+      await refs.metaHandler!({
+        type: { modify: { kind: "data", mode: "any" } },
+        paths: ["/notes/.meta/a.json.tmp"],
+        attrs: {},
+      } as unknown as WatchEvent);
+    });
+
+    expect(reconcileFolderMock).not.toHaveBeenCalled();
   });
 });
 
@@ -480,6 +555,54 @@ describe("useFileWatcher — reconcile drift barrier (P0-5)", () => {
     expect(arrayReplace).toBeDefined();
     expect((arrayReplace![0] as NoteDoc[]).map((d) => d.id)).toEqual(["a", "remote-new"]);
 
+    unmount();
+  });
+
+  it("serializes overlapping requests and coalesces them into one follow-up pass", async () => {
+    let releaseFirst: (() => void) | null = null;
+    const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    let activePasses = 0;
+    let maxActivePasses = 0;
+    const docsA = [makeDoc("a")];
+
+    reconcileFolderMock
+      .mockImplementationOnce(async (_fs, _state, _dir, docs, groups) => {
+        activePasses += 1;
+        maxActivePasses = Math.max(maxActivePasses, activePasses);
+        await firstGate;
+        activePasses -= 1;
+        return { docs, groups, changed: false };
+      })
+      .mockImplementationOnce(async (_fs, _state, _dir, docs, groups) => {
+        activePasses += 1;
+        maxActivePasses = Math.max(maxActivePasses, activePasses);
+        activePasses -= 1;
+        return { docs, groups, changed: false };
+      });
+
+    const { unmount } = renderWatcherWithRerender(docsA);
+    await waitForRootHandler();
+
+    let requests: Promise<unknown>[] = [];
+    await act(async () => {
+      requests = [
+        Promise.resolve(refs.rootHandler!(IDLE_EVENT)),
+        Promise.resolve(refs.rootHandler!(IDLE_EVENT)),
+        Promise.resolve(refs.rootHandler!(IDLE_EVENT)),
+      ];
+      for (let i = 0; i < 20 && reconcileFolderMock.mock.calls.length === 0; i++) {
+        await Promise.resolve();
+      }
+    });
+    expect(reconcileFolderMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      releaseFirst!();
+      await Promise.all(requests);
+    });
+
+    expect(reconcileFolderMock).toHaveBeenCalledTimes(2);
+    expect(maxActivePasses).toBe(1);
     unmount();
   });
 });

@@ -121,7 +121,6 @@ interface NoteRowProps {
   isNew: boolean;
   isSearching: boolean;
   snippet: SearchSnippet | null;
-  searchIndex?: number;
   noDrag: boolean;
   groupId?: string;
   selectMode: boolean;
@@ -147,7 +146,7 @@ const NoteRow = memo(function NoteRow(props: NoteRowProps) {
   const {
     doc, originalIndex, indented,
     isActive, isSelected, isContextTarget, isEditing, isNew,
-    isSearching, snippet, searchIndex, noDrag, groupId, selectMode,
+    isSearching, snippet, noDrag, groupId, selectMode,
     locale, notesSortOrder, styles,
     editingValue, inputRef, onEditingValueChange, onCommitRename, onCancelRename,
     onActivate, onContextMenu, onMoreClick, onPointerDown, onCheckboxClick,
@@ -165,13 +164,7 @@ const NoteRow = memo(function NoteRow(props: NoteRowProps) {
         selectMode && isActive && styles.docItemWrapperActive,
         selectMode && !isActive && styles.docItemWrapperHoverable,
         isNew && styles.docItemNew,
-        isSearching && searchIndex !== undefined && styles.searchResultFadeIn,
       )}
-      style={
-        isSearching && searchIndex !== undefined
-          ? { animationDelay: `${searchIndex * 0.03}s` }
-          : undefined
-      }
       onPointerDown={noDrag ? undefined : (e) => onPointerDown(e, doc.id)}
       onContextMenu={(e) => onContextMenu(originalIndex, doc, e)}
     >
@@ -1009,9 +1002,9 @@ export function Sidebar({
     doc: NoteDoc,
     originalIndex: number,
     indented: boolean,
-    opts: { snippet?: SearchSnippet | null; searchIndex?: number; noDrag?: boolean; paneActive?: boolean; groupId?: string } = {},
+    opts: { snippet?: SearchSnippet | null; noDrag?: boolean; paneActive?: boolean; groupId?: string } = {},
   ) => {
-    const { snippet = null, searchIndex, noDrag = false, paneActive = true, groupId } = opts;
+    const { snippet = null, noDrag = false, paneActive = true, groupId } = opts;
     const isActive = originalIndex === activeIndex;
     const isSelected = selectedNoteIds.has(doc.id);
     const isContextTarget = contextMenu?.type === "note" && contextMenu.noteId === doc.id;
@@ -1031,7 +1024,6 @@ export function Sidebar({
         isNew={isNew}
         isSearching={isSearching}
         snippet={snippet}
-        searchIndex={searchIndex}
         noDrag={noDrag}
         groupId={groupId}
         selectMode={selectMode}
@@ -1293,10 +1285,10 @@ export function Sidebar({
                   {!flatListMode && (noteItems.length > 0 || exitingDocs.some((g) => g.groupId === null)) && (
                     <span className={styles.sectionLabel}>{i("sidebar.notesLabel")}</span>
                   )}
-                  {noteItems.map((item, idx) => (
+                  {noteItems.map((item) => (
                     <Fragment key={item.doc.id}>
                       {exitGhostsAt(null, item.doc.id)}
-                      {renderNoteItem(item.doc, item.originalIndex, item.indented, { snippet: item.snippet, searchIndex: isSearching ? idx : undefined, paneActive: !inAllNotes })}
+                      {renderNoteItem(item.doc, item.originalIndex, item.indented, { snippet: item.snippet, paneActive: !inAllNotes })}
                     </Fragment>
                   ))}
                   {exitGhostsAt(null, null)}
@@ -1334,10 +1326,9 @@ export function Sidebar({
               {filteredDocs.length === 0 ? (
                 <span className={styles.empty}>{debouncedQuery ? i("search.noResults") : colorFilterActive ? i("sidebar.colorFilterEmpty") : i("sidebar.empty")}</span>
               ) : (
-                filteredDocs.map(({ doc, originalIndex, snippet }, idx) => (
+                filteredDocs.map(({ doc, originalIndex, snippet }) => (
                   renderNoteItem(doc, originalIndex, false, {
                     snippet,
-                    searchIndex: isSearching ? idx : undefined,
                     noDrag: true,
                     paneActive: inAllNotes,
                   })

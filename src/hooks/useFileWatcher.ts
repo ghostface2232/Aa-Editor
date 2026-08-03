@@ -73,6 +73,11 @@ export function useFileWatcher(
   // the latest runReconcile without threading it through the timer closure.
   const reconcileRetryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const runReconcileRef = useRef<() => Promise<void>>(() => Promise.resolve());
+  // Watch, focus, visibility, and periodic signals can arrive while a slow
+  // cloud-backed reconcile is still reading the folder. Keep at most one pass
+  // in flight and collapse every overlapping request into one follow-up pass.
+  const reconcileDrainRef = useRef<Promise<void> | null>(null);
+  const reconcileRequestedRef = useRef(false);
 
   const getRoutedActiveDocId = useCallback(() => {
     const editorDocId = tiptapRef.current?.getEditor?.()?.storage.documentContext.noteId ?? null;
@@ -172,7 +177,7 @@ export function useFileWatcher(
     });
   }, [setDocs, setGroups, reloadGroupsFromDisk]);
 
-  const runReconcile = useCallback(async () => {
+  const performReconcile = useCallback(async () => {
     if (migrationInProgress) return;
     const dir = await getNotesDir();
     try { await scanAndAbsorbConflicts(tauriFileSystem, dir); } catch { /* best-effort */ }
@@ -280,6 +285,24 @@ export function useFileWatcher(
 
     await saveManifest(reconciledDocs, nextActiveId, reconciledGroups).catch(() => {});
   }, [getRoutedActiveDocId, setActiveIndex, setDocs, setGroups, tiptapRef, reconcileState]);
+
+  const runReconcile = useCallback((): Promise<void> => {
+    reconcileRequestedRef.current = true;
+    if (reconcileDrainRef.current) return reconcileDrainRef.current;
+
+    const drain = (async () => {
+      try {
+        while (reconcileRequestedRef.current) {
+          reconcileRequestedRef.current = false;
+          await performReconcile();
+        }
+      } finally {
+        reconcileDrainRef.current = null;
+      }
+    })();
+    reconcileDrainRef.current = drain;
+    return drain;
+  }, [performReconcile]);
   // Keep the self-reference current so a pending drift retry invokes the latest
   // runReconcile closure (fresh setDocs/deps), not the one captured when armed.
   runReconcileRef.current = runReconcile;
@@ -308,6 +331,15 @@ export function useFileWatcher(
     const mdChanges = affectedPaths.filter(
       (p) => p.endsWith(".md") && p.startsWith(dirNorm) && !p.includes("/.trash/"),
     );
+    // Unknown paths, group changes, new/deleted bodies, unreadable bodies, and
+    // real remote writes still require the conservative full-folder pass. The
+    // only event batch that may skip it is one made exclusively of known,
+    // readable note bodies whose content hash matches a write from this
+    // window. Timestamp-only suppression is deliberately insufficient here:
+    // it could hide a remote same-path edit inside the grace window.
+    let shouldReconcile = affectedPaths.length === 0 || affectedPaths.some(
+      (p) => !mdChanges.includes(p) && !p.endsWith(".tmp"),
+    );
 
     if (groupsChanged) {
       await reloadGroupsFromDisk();
@@ -319,18 +351,26 @@ export function useFileWatcher(
         (d) => normalizePath(d.filePath) === changedPath,
       );
 
-      if (docIndex < 0) continue;
+      if (docIndex < 0) {
+        shouldReconcile = true;
+        continue;
+      }
       const doc = currentDocs[docIndex];
-      if (doc.isDirty) continue;
+      if (doc.isDirty) {
+        shouldReconcile = true;
+        continue;
+      }
 
       let content: string;
       try {
         content = await readTextFile(doc.filePath);
       } catch {
+        shouldReconcile = true;
         continue;
       }
 
       if (await isOwnWriteContentMatch(doc.filePath, content)) continue;
+      shouldReconcile = true;
 
       // Track the actual disk bytes as the conflict baseline regardless of
       // whether we reload, so backupIfRemoteWroteFirst compares against reality.
@@ -385,7 +425,7 @@ export function useFileWatcher(
       }
     }
 
-    await runReconcile();
+    if (shouldReconcile) await runReconcile();
   }, [getRoutedActiveDocId, reloadGroupsFromDisk, runReconcile, setDocs, tiptapRef]);
 
   const handleMetaEvent = useCallback(async (event: WatchEvent) => {
@@ -393,24 +433,41 @@ export function useFileWatcher(
     pruneOwnWrites();
 
     const affectedPaths = event.paths.map(normalizePath);
+    let shouldReconcile = affectedPaths.length === 0;
     for (const p of affectedPaths) {
-      if (!p.endsWith(".json")) continue;
-      if (p.endsWith(".tmp.json") || p.endsWith(".tmp")) continue;
-      if (isOwnWrite(p)) continue;
+      if (!p.endsWith(".json")) {
+        if (p.endsWith(".tmp")) continue;
+        shouldReconcile = true;
+        continue;
+      }
+      if (p.endsWith(".tmp.json") || p.endsWith(".tmp")) {
+        continue;
+      }
 
       const fileName = p.split("/").pop() ?? "";
       const id = fileName.replace(/\.json$/i, "");
-      if (!id) continue;
+      if (!id) {
+        shouldReconcile = true;
+        continue;
+      }
 
+      let contentMatchesOwnWrite = false;
       try {
         const raw = await readTextFile(p);
-        if (await isOwnWriteContentMatch(p, raw)) continue;
+        contentMatchesOwnWrite = await isOwnWriteContentMatch(p, raw);
       } catch { /* file may have been deleted; reconcile catches it */ }
+      if (contentMatchesOwnWrite) continue;
+
+      // Keep the existing timestamp grace for avoiding an eager partial apply,
+      // but still reconcile unless the stronger content-hash check above
+      // proved this exact sidecar came from us.
+      shouldReconcile = true;
+      if (isOwnWrite(p)) continue;
 
       await applyMetaChange(id);
     }
 
-    await runReconcile();
+    if (shouldReconcile) await runReconcile();
   }, [applyMetaChange, runReconcile]);
 
   useEffect(() => {

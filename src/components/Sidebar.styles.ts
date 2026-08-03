@@ -263,12 +263,6 @@ export const useStyles = makeStyles({
     overflow: "hidden",
     pointerEvents: "none",
   },
-  searchResultFadeIn: {
-    animationName: "searchResultFadeIn",
-    animationDuration: MOTION_DURATION_SLOW,
-    animationTimingFunction: "cubic-bezier(0.2, 0, 0, 1)",
-    animationFillMode: "backwards",
-  },
   searchResultContent: {
     display: "flex",
     flexDirection: "column",
@@ -793,6 +787,9 @@ export const useStyles = makeStyles({
     transitionDuration: MOTION_DURATION_MEDIUM,
     transitionTimingFunction: "cubic-bezier(0.4, 0, 0.2, 1)",
     marginBottom: "0px",
+    "@media screen and (prefers-reduced-motion: reduce)": {
+      transitionDuration: "0.01ms",
+    },
   },
   searchBoxWrapperOpen: {
     maxHeight: "40px",

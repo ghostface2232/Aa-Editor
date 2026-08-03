@@ -1,0 +1,19 @@
+import { describe, expect, it } from "vitest";
+import { deriveTitle } from "./noteText";
+
+describe("deriveTitle", () => {
+  it("uses the first meaningful Markdown line", () => {
+    expect(deriveTitle("\n  ![cover](cover.png)\n```mermaid\n# Actual **title**\n"))
+      .toBe("Actual title");
+  });
+
+  it("strips block markers and limits the visible title", () => {
+    expect(deriveTitle("> 1. [[A deliberately long title for a note]]"))
+      .toBe("A deliberately long ");
+  });
+
+  it("does not split an unused large tail into an array", () => {
+    const content = `# Ready\n${"tail\n".repeat(100_000)}`;
+    expect(deriveTitle(content)).toBe("Ready");
+  });
+});

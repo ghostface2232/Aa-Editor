@@ -5,6 +5,8 @@ use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::process::Command;
 use tauri::{path::BaseDirectory, AppHandle, Manager, Runtime};
+use windows_sys::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND};
+use windows_sys::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP,
     VIRTUAL_KEY, VK_LWIN, VK_OEM_PERIOD,
@@ -96,56 +98,40 @@ fn reg_add_value(reg_key: &str, value_name: &str, value_data: &str) -> Result<()
     }
 }
 
-fn parse_reg_dword(stdout: &str, value_name: &str) -> Result<Option<u32>, String> {
-    let value_name_lower = value_name.to_ascii_lowercase();
-    for line in stdout.lines() {
-        let trimmed = line.trim();
-        let mut parts = trimmed.split_whitespace();
-        let Some(name) = parts.next() else {
-            continue;
-        };
-        if name.to_ascii_lowercase() != value_name_lower {
-            continue;
-        }
-        let Some(kind) = parts.next() else {
-            continue;
-        };
-        if !kind.eq_ignore_ascii_case("REG_DWORD") {
-            continue;
-        }
-        let Some(raw_value) = parts.next() else {
-            return Err(format!("missing REG_DWORD data for {value_name}"));
-        };
-        let value = if let Some(hex) = raw_value.strip_prefix("0x").or_else(|| raw_value.strip_prefix("0X")) {
-            u32::from_str_radix(hex, 16)
-        } else {
-            raw_value.parse::<u32>()
-        }
-        .map_err(|e| format!("invalid REG_DWORD data for {value_name}: {e}"))?;
-        return Ok(Some(value));
-    }
-    Ok(None)
+fn wide_null(value: &str) -> Vec<u16> {
+    value.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
-fn reg_query_dword(reg_key: &str, value_name: &str) -> Result<Option<u32>, String> {
-    let output = Command::new("reg.exe")
-        .creation_flags(CREATE_NO_WINDOW_FLAG)
-        .args(["query", reg_key, "/v", value_name])
-        .output()
-        .map_err(|e| format!("failed to run reg.exe query: {e}"))?;
+fn reg_query_current_user_dword(sub_key: &str, value_name: &str) -> Result<Option<u32>, String> {
+    let sub_key = wide_null(sub_key);
+    let wide_value_name = wide_null(value_name);
+    let mut value = 0u32;
+    let mut value_size = std::mem::size_of::<u32>() as u32;
+    let status = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            sub_key.as_ptr(),
+            wide_value_name.as_ptr(),
+            RRF_RT_REG_DWORD,
+            std::ptr::null_mut(),
+            (&mut value as *mut u32).cast(),
+            &mut value_size,
+        )
+    };
 
-    if !output.status.success() {
-        return Ok(None);
+    match status {
+        0 => Ok(Some(value)),
+        ERROR_FILE_NOT_FOUND | ERROR_PATH_NOT_FOUND => Ok(None),
+        code => Err(format!(
+            "failed to read registry DWORD {value_name}: Win32 error {code}"
+        )),
     }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    parse_reg_dword(&stdout, value_name)
 }
 
 #[tauri::command]
 fn get_windows_app_theme() -> Result<Option<&'static str>, String> {
-    let value = reg_query_dword(
-        r"HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+    let value = reg_query_current_user_dword(
+        r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
         "AppsUseLightTheme",
     )?;
     Ok(value.map(|v| if v == 0 { "dark" } else { "light" }))
@@ -260,25 +246,11 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_reg_dword;
+    use super::wide_null;
 
     #[test]
-    fn parse_reg_dword_reads_hex_theme_value() {
-        let output = r#"
-HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize
-    AppsUseLightTheme    REG_DWORD    0x0
-"#;
-
-        assert_eq!(parse_reg_dword(output, "AppsUseLightTheme").unwrap(), Some(0));
-    }
-
-    #[test]
-    fn parse_reg_dword_reads_decimal_theme_value() {
-        let output = r#"
-HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize
-    AppsUseLightTheme    REG_DWORD    1
-"#;
-
-        assert_eq!(parse_reg_dword(output, "AppsUseLightTheme").unwrap(), Some(1));
+    fn wide_null_encodes_utf16_with_one_terminator() {
+        assert_eq!(wide_null("Theme"), vec![84, 104, 101, 109, 101, 0]);
+        assert_eq!(wide_null("테마").last(), Some(&0));
     }
 }
