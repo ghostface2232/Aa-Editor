@@ -12,11 +12,22 @@ afterEach(() => {
 // StarterKit ships a `codeBlock` node, the same node Noten's Mermaid block
 // extends, so it exercises the real trapping case.
 function make(content: string): Editor {
-  editor = new Editor({ extensions: [StarterKit, EscapeFirstBlock], content });
+  // GapCursor's vertical-motion handler needs browser layout APIs that jsdom
+  // does not implement. It is unrelated to this code-block keymap contract.
+  editor = new Editor({
+    extensions: [StarterKit.configure({ gapcursor: false }), EscapeFirstBlock],
+    content,
+  });
   return editor;
 }
 
 const firstType = (e: Editor) => e.state.doc.firstChild?.type.name;
+
+function pressKey(e: Editor, key: string): KeyboardEvent {
+  const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+  e.view.dom.dispatchEvent(event);
+  return event;
+}
 
 describe("escapeLeadingBlock", () => {
   it("inserts a paragraph above a leading code block from its first line", () => {
@@ -96,6 +107,43 @@ describe("escapeLeadingBlock — requireBlockStart (ArrowLeft binding)", () => {
     const e = make("<pre><code>const x = 1</code></pre>");
     e.commands.setTextSelection(6);
     expect(escapeLeadingBlock(e)).toBe(true);
+    expect(firstType(e)).toBe("paragraph");
+  });
+});
+
+describe("Tiptap 3.29 code-block ArrowUp integration", () => {
+  it("upstream inserts a paragraph at the exact start without Noten's extension", () => {
+    editor = new Editor({
+      extensions: [StarterKit.configure({ gapcursor: false })],
+      content: "<pre><code>const x = 1</code></pre>",
+    });
+    editor.commands.setTextSelection(1);
+    const before = editor.state.doc.childCount;
+
+    expect(pressKey(editor, "ArrowUp").defaultPrevented).toBe(true);
+    expect(editor.state.doc.childCount).toBe(before + 1);
+    expect(firstType(editor)).toBe("paragraph");
+    expect(editor.state.doc.child(1).type.name).toBe("codeBlock");
+  });
+
+  it("delegates offset-zero ArrowUp to upstream without double-inserting", () => {
+    const e = make("<pre><code>const x = 1</code></pre>");
+    e.commands.setTextSelection(1);
+    const before = e.state.doc.childCount;
+
+    expect(pressKey(e, "ArrowUp").defaultPrevented).toBe(true);
+    expect(e.state.doc.childCount).toBe(before + 1);
+    expect(firstType(e)).toBe("paragraph");
+    expect(e.state.doc.child(1).type.name).toBe("codeBlock");
+  });
+
+  it("keeps Noten's broader first-line ArrowUp behavior", () => {
+    const e = make("<pre><code>const x = 1</code></pre>");
+    e.commands.setTextSelection(6);
+    const before = e.state.doc.childCount;
+
+    expect(pressKey(e, "ArrowUp").defaultPrevented).toBe(true);
+    expect(e.state.doc.childCount).toBe(before + 1);
     expect(firstType(e)).toBe("paragraph");
   });
 });

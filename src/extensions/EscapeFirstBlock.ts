@@ -1,11 +1,11 @@
 import { Extension, type Editor } from "@tiptap/core";
 
-// A code block (which in Noten includes Mermaid — a `codeBlock` with
-// language=mermaid) holds a text cursor but offers no way to move above it. When
-// one is the very first node in a document, a user cannot add text before it:
-// ArrowUp does nothing and Enter just inserts a newline inside the block. This
-// extension makes ArrowUp / ArrowLeft on the first line of a leading code block
-// insert an empty paragraph above and move the cursor into it.
+// Tiptap 3.29 handles ArrowUp at offset 0 of a leading code block. Noten keeps
+// this extension for the two broader cases that upstream deliberately leaves
+// alone: ArrowUp from elsewhere on the first visual line, and ArrowLeft at the
+// exact block start. The offset-0 ArrowUp path must return false here so only
+// upstream owns that transformation. Mermaid inherits the same `codeBlock`
+// keyboard behavior.
 //
 // Tables and images are deliberately NOT handled here: they are block-selectable
 // and already escapable via gapcursor and TableNodeSelect. Only text-holding
@@ -50,7 +50,11 @@ export const EscapeFirstBlock = Extension.create({
 
   addKeyboardShortcuts() {
     return {
-      ArrowUp: ({ editor }) => escapeLeadingBlock(editor),
+      ArrowUp: ({ editor }) => (
+        editor.state.selection.$from.parentOffset === 0
+          ? false
+          : escapeLeadingBlock(editor)
+      ),
       ArrowLeft: ({ editor }) => escapeLeadingBlock(editor, { requireBlockStart: true }),
     };
   },

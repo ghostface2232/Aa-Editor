@@ -105,6 +105,26 @@ describe("TextContextMenu paste", () => {
     }
   });
 
+  it("pastes a whole internal document without leading or trailing empty paragraphs", async () => {
+    ensureClipboardEvent();
+
+    const source = createEditor("<p>First</p><p>Second</p>");
+    const target = createEditor("<p></p>");
+    try {
+      source.commands.selectAll();
+      const { dom, text } = source.view.serializeForClipboard(source.state.selection.content());
+      installClipboard(text, dom.innerHTML);
+
+      const ctx = createTiptapTextContextMenuContext(target);
+      await ctx.paste(false);
+
+      expect(target.getHTML()).toBe("<p>First</p><p>Second</p>");
+    } finally {
+      source.destroy();
+      target.destroy();
+    }
+  });
+
   it("pastes plain text as literal text with stable single-newline handling", async () => {
     const target = createEditor("<p></p>");
     try {

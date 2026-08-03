@@ -244,6 +244,104 @@ describe("Markdown fixture round-trip compatibility", () => {
     expect(stableMarkdown(second)).toBe(markdown);
   });
 
+  it("keeps code-span pipes inside one table cell", () => {
+    const source = [
+      "| Expression | Meaning |",
+      "| --- | --- |",
+      "| `a || b` | logical OR |",
+    ].join("\n");
+
+    const first = trackedEditor(source);
+    const table = descendants(first.getJSON()).find((node) => node.type === "table");
+    const bodyRow = table?.content?.[1];
+    expect(bodyRow?.content).toHaveLength(2);
+    expect(textContent(bodyRow!.content![0])).toBe("a || b");
+    expect(hasMark(bodyRow!.content![0], "code")).toBe(true);
+
+    const markdown = stableMarkdown(first);
+    const second = trackedEditor(markdown);
+    expect(stableMarkdown(second)).toBe(markdown);
+    expect(textContent(second.getJSON())).toContain("a || b");
+  });
+
+  it("preserves a plain bullet nested under a task-list parent", () => {
+    const source = [
+      "- [ ] parent",
+      "  - plain child",
+      "  - [ ] task child",
+    ].join("\n");
+
+    const first = trackedEditor(source);
+    const doc = first.getJSON();
+    expect(textContent(doc)).toContain("parent");
+    expect(textContent(doc)).toContain("plain child");
+    expect(textContent(doc)).toContain("task child");
+    expect(countNodes(doc, "bulletList")).toBeGreaterThanOrEqual(1);
+
+    const markdown = stableMarkdown(first);
+    const second = trackedEditor(markdown);
+    expect(stableMarkdown(second)).toBe(markdown);
+    expect(textContent(second.getJSON())).toContain("plain child");
+  });
+
+  it("does not parse a parenthesized phone number as an ordered list", () => {
+    const source = "Call (216) 555-1234 tomorrow.";
+    const editor = trackedEditor(source);
+    const doc = editor.getJSON();
+
+    expect(countNodes(doc, "orderedList")).toBe(0);
+    expect(textContent(doc)).toBe(source);
+  });
+
+  it("round-trips hard breaks inside table cells as br tags", () => {
+    const source = [
+      "| Notes |",
+      "| --- |",
+      "| first line<br>second line |",
+    ].join("\n");
+
+    const first = trackedEditor(source);
+    const markdown = stableMarkdown(first);
+    expect(markdown).toContain("first line<br>second line");
+
+    const second = trackedEditor(markdown);
+    expect(stableMarkdown(second)).toBe(markdown);
+    expect(countNodes(second.getJSON(), "hardBreak")).toBeGreaterThanOrEqual(1);
+  });
+
+  it("preserves intentional blank paragraphs after block elements", () => {
+    const source = [
+      "# Heading",
+      "",
+      "",
+      "",
+      "Paragraph after an intentional blank line.",
+      "",
+      "| A | B |",
+      "| --- | --- |",
+      "| one | two |",
+      "",
+      "",
+      "",
+      "Paragraph after the table gap.",
+    ].join("\n");
+
+    const first = trackedEditor(source);
+    const firstDoc = first.getJSON();
+    const emptyParagraphs = (firstDoc.content ?? []).filter(
+      (node) => node.type === "paragraph" && (!node.content || node.content.length === 0),
+    );
+    expect(emptyParagraphs).toHaveLength(2);
+
+    const markdown = stableMarkdown(first);
+    const second = trackedEditor(markdown);
+    expect(stableMarkdown(second)).toBe(markdown);
+    const secondEmptyParagraphs = (second.getJSON().content ?? []).filter(
+      (node) => node.type === "paragraph" && (!node.content || node.content.length === 0),
+    );
+    expect(secondEmptyParagraphs).toHaveLength(2);
+  });
+
   it("round-trips anchor links with Hangul slug destinations verbatim", () => {
     // Anchor hrefs are stored as GitHub-style slugs precisely so the markdown
     // destination never needs encoding — guard that assumption end to end.
