@@ -41,8 +41,12 @@ function makeDoc(id: string): NoteDoc {
   };
 }
 
-function renderWindowSync(settleRemoteDeletedDoc: (docId: string) => Promise<boolean>) {
+function renderWindowSync(
+  settleRemoteDeletedDoc: (docId: string) => Promise<boolean>,
+  initialDocs: NoteDoc[] = [makeDoc("a"), makeDoc("b")],
+) {
   const openDocument = vi.fn();
+  const onActiveDocChanged = vi.fn();
   const tiptapRef = {
     current: {
       getEditor: () => ({ storage: { documentContext: { noteId: "a" } } }),
@@ -51,7 +55,7 @@ function renderWindowSync(settleRemoteDeletedDoc: (docId: string) => Promise<boo
   };
 
   const hook = renderHook(() => {
-    const [docs, setDocs] = useState([makeDoc("a"), makeDoc("b")]);
+    const [docs, setDocs] = useState(initialDocs);
     const [activeIndex, setActiveIndex] = useState(0);
     useWindowSync(
       setDocs,
@@ -61,14 +65,14 @@ function renderWindowSync(settleRemoteDeletedDoc: (docId: string) => Promise<boo
       setActiveIndex,
       undefined,
       undefined,
-      undefined,
+      onActiveDocChanged,
       "updated-desc",
       "en",
       settleRemoteDeletedDoc,
     );
     return { docs, activeIndex };
   });
-  return { ...hook, openDocument };
+  return { ...hook, openDocument, onActiveDocChanged };
 }
 
 beforeEach(() => {
@@ -107,5 +111,69 @@ describe("useWindowSync — remote deletion", () => {
 
     await waitFor(() => expect(settle).toHaveBeenCalledWith("a"));
     await waitFor(() => expect(result.current.docs.map((doc) => doc.id)).toEqual(["b"]));
+  });
+});
+
+describe("useWindowSync — last-note replacement", () => {
+  it("activates a replacement that arrives after the peer removed its last note", async () => {
+    const settle = vi.fn(async () => true);
+    const { result, openDocument, onActiveDocChanged } = renderWindowSync(settle, [makeDoc("a")]);
+    await waitFor(() => expect(refs.handlers.has("doc-created")).toBe(true));
+
+    act(() => {
+      refs.handlers.get("doc-deleted")?.({
+        payload: { sourceWindow: "window-b", docId: "a" },
+      });
+    });
+    expect(result.current.docs).toEqual([]);
+
+    const replacement = makeDoc("b");
+    act(() => {
+      refs.handlers.get("doc-created")?.({
+        payload: { sourceWindow: "window-b", doc: replacement },
+      });
+    });
+
+    expect(result.current.docs.map((doc) => doc.id)).toEqual(["b"]);
+    expect(result.current.activeIndex).toBe(0);
+    expect(openDocument).toHaveBeenLastCalledWith({
+      noteId: "b",
+      filePath: replacement.filePath,
+      markdown: replacement.content,
+      reason: "window-sync",
+    });
+    expect(onActiveDocChanged).toHaveBeenLastCalledWith({
+      filePath: replacement.filePath,
+      content: replacement.content,
+    });
+  });
+
+  it("switches to a replacement that arrives before the deletion event", async () => {
+    const settle = vi.fn(async () => true);
+    const { result, openDocument } = renderWindowSync(settle, [makeDoc("a")]);
+    await waitFor(() => expect(refs.handlers.has("doc-created")).toBe(true));
+
+    const replacement = makeDoc("b");
+    act(() => {
+      refs.handlers.get("doc-created")?.({
+        payload: { sourceWindow: "window-b", doc: replacement },
+      });
+    });
+    expect(result.current.docs.map((doc) => doc.id)).toEqual(["a", "b"]);
+
+    act(() => {
+      refs.handlers.get("doc-deleted")?.({
+        payload: { sourceWindow: "window-b", docId: "a" },
+      });
+    });
+
+    expect(result.current.docs.map((doc) => doc.id)).toEqual(["b"]);
+    expect(result.current.activeIndex).toBe(0);
+    expect(openDocument).toHaveBeenLastCalledWith({
+      noteId: "b",
+      filePath: replacement.filePath,
+      markdown: replacement.content,
+      reason: "window-sync",
+    });
   });
 });

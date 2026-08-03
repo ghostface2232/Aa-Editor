@@ -130,6 +130,7 @@ import * as ownWriteModule from "./ownWriteTracker";
 import * as metadataIOModule from "../utils/metadataIO";
 import * as conflictBackupModule from "../utils/conflictBackup";
 import * as notesLoaderModule from "./useNotesLoader";
+import * as windowSyncModule from "./useWindowSync";
 
 const writeMock = fsPlugin.writeTextFile as ReturnType<typeof vi.fn>;
 const readMock = fsPlugin.readTextFile as ReturnType<typeof vi.fn>;
@@ -138,6 +139,7 @@ const logMock = crashLogModule.logNotenError as ReturnType<typeof vi.fn>;
 const markOwnWriteMock = ownWriteModule.markOwnWrite as ReturnType<typeof vi.fn>;
 const markGroupAsDeletedMock = notesLoaderModule.markGroupAsDeleted as ReturnType<typeof vi.fn>;
 const saveManifestMock = notesLoaderModule.saveManifest as ReturnType<typeof vi.fn>;
+const emitDocCreatedMock = windowSyncModule.emitDocCreated as ReturnType<typeof vi.fn>;
 
 function makeDoc(id: string, overrides: Partial<NoteDoc> = {}): NoteDoc {
   return {
@@ -585,7 +587,7 @@ describe("useFileSystem — deleteNote last-note replacement", () => {
     refs.writeFaultByPath.set("/notes/uuid-1.md", new Error("EACCES"));
 
     const doc = makeDoc("a", { content: "to delete" });
-    const { result, setDocs } = renderFs({ docs: [doc] });
+    const { result, setDocs, state } = renderFs({ docs: [doc] });
 
     await act(async () => {
       await result.current.deleteNote(0);
@@ -599,6 +601,8 @@ describe("useFileSystem — deleteNote last-note replacement", () => {
     // the doc as dirty — autosave will then retry rather than the user
     // believing they have a clean note that's actually missing on disk.
     expect(lastDocs[0].isDirty).toBe(true);
+    expect(state.setIsDirty).toHaveBeenLastCalledWith(true);
+    expect(emitDocCreatedMock).not.toHaveBeenCalled();
 
     const logged = logMock.mock.calls.find(
       (c) => (c[0] as NotenError).code === "SAVE_FAILED",
@@ -620,6 +624,8 @@ describe("useFileSystem — deleteNote last-note replacement", () => {
     const lastDocs = setDocs.mock.calls[setDocs.mock.calls.length - 1][0] as NoteDoc[];
     expect(lastDocs).toHaveLength(1);
     expect(lastDocs[0].isDirty).toBe(false);
+    expect(emitDocCreatedMock).toHaveBeenCalledOnce();
+    expect(emitDocCreatedMock).toHaveBeenCalledWith(lastDocs[0]);
   });
 });
 

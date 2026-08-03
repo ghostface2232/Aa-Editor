@@ -866,8 +866,12 @@ export function useFileSystem(
       setDocs([newDoc]);
       setActiveIndex(0);
       resetDocState(state, tiptapRef, id, filePath, "");
+      state.setIsDirty(!writeOk);
       notifyActiveDocRef?.current?.(id, filePath);
       void saveManifest([newDoc], newDoc.id, cleanedGroups).catch(() => {});
+      // A failed provision has no body for peer windows to load. Keep it local
+      // and dirty so the normal save drain can retry before advertising it.
+      if (writeOk) emitDocCreated(newDoc);
       return deletedList;
     }
 

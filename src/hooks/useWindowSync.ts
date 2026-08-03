@@ -258,10 +258,27 @@ export function useWindowSync(
         const { sourceWindow, doc } = event.payload;
         if (sourceWindow === WINDOW_LABEL) return;
 
-        setDocs((prev) => {
-          if (prev.some((d) => d.id === doc.id || d.filePath === doc.filePath)) return prev;
-          return [...prev, { ...doc, isDirty: false }];
+        let shouldActivate = false;
+        flushSync(() => {
+          setDocs((prev) => {
+            if (prev.some((d) => d.id === doc.id || d.filePath === doc.filePath)) return prev;
+            shouldActivate = prev.length === 0;
+            if (shouldActivate) setActiveIndex(0);
+            return [...prev, { ...doc, isDirty: false }];
+          });
         });
+
+        // Deletion and creation are separate Tauri events, so the replacement
+        // may arrive after the peer has already removed its last document.
+        if (shouldActivate) {
+          tiptapRef.current?.openDocument?.({
+            noteId: doc.id,
+            filePath: doc.filePath,
+            markdown: doc.content,
+            reason: "window-sync",
+          });
+          onActiveDocChangedRef.current?.({ filePath: doc.filePath, content: doc.content });
+        }
       }),
 
       listen<NotePinnedUpdatedPayload>("note-pinned-updated", (event) => {
