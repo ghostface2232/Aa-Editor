@@ -3,8 +3,10 @@ import type { OutlineHeading } from "./outline";
 import {
   buildHeadingAnchors,
   filterHeadingAnchors,
+  HEADING_SUGGESTION_LIMIT,
   normalizeFragmentHref,
   resolveHeadingFragment,
+  selectHeadingAnchorSuggestions,
   slugifyHeading,
 } from "./headingSlug";
 
@@ -222,5 +224,35 @@ describe("filterHeadingAnchors", () => {
       "install-on-windows",
     ]);
     expect(filterHeadingAnchors(hierarchy, "###windows")).toEqual([]);
+  });
+});
+
+describe("selectHeadingAnchorSuggestions", () => {
+  it("caps large unfiltered result sets in document order", () => {
+    const anchors = buildHeadingAnchors(
+      Array.from({ length: HEADING_SUGGESTION_LIMIT * 5 }, (_, index) =>
+        heading(`Section ${index}`, index * 10)),
+    );
+
+    const suggestions = selectHeadingAnchorSuggestions(anchors, "");
+
+    expect(suggestions).toHaveLength(HEADING_SUGGESTION_LIMIT);
+    expect(suggestions[0].slug).toBe("section-0");
+    expect(suggestions[suggestions.length - 1]?.slug).toBe(
+      `section-${HEADING_SUGGESTION_LIMIT - 1}`,
+    );
+  });
+
+  it("applies filtering before the cap", () => {
+    const anchors = buildHeadingAnchors(
+      Array.from({ length: 1_000 }, (_, index) =>
+        heading(index % 2 === 0 ? `Target ${index}` : `Other ${index}`, index * 10)),
+    );
+
+    const suggestions = selectHeadingAnchorSuggestions(anchors, "target", 25);
+
+    expect(suggestions).toHaveLength(25);
+    expect(suggestions.every((anchor) => anchor.slug.startsWith("target-"))).toBe(true);
+    expect(suggestions[suggestions.length - 1]?.slug).toBe("target-48");
   });
 });

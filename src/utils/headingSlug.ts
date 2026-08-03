@@ -20,6 +20,8 @@ export interface HeadingAnchor {
   heading: OutlineHeading;
 }
 
+export const HEADING_SUGGESTION_LIMIT = 200;
+
 /**
  * Slug per linkable heading in document order, with GitHub's duplicate rule:
  * the first occurrence keeps the bare slug and later collisions get "-1",
@@ -129,21 +131,51 @@ export function filterHeadingAnchors(
   anchors: HeadingAnchor[],
   query: string,
 ): HeadingAnchor[] {
+  return collectHeadingAnchorMatches(anchors, query, Number.POSITIVE_INFINITY);
+}
+
+/**
+ * Bounded autocomplete matches in document order. This avoids mounting one
+ * button per heading in large notes while a more specific query can still
+ * reach any heading.
+ */
+export function selectHeadingAnchorSuggestions(
+  anchors: HeadingAnchor[],
+  query: string,
+  limit = HEADING_SUGGESTION_LIMIT,
+): HeadingAnchor[] {
+  const boundedLimit = Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : 0;
+  return collectHeadingAnchorMatches(anchors, query, boundedLimit);
+}
+
+function collectHeadingAnchorMatches(
+  anchors: HeadingAnchor[],
+  query: string,
+  limit: number,
+): HeadingAnchor[] {
+  if (limit === 0) return [];
+
   const trimmed = query.trim();
   const levelPrefixLength = trimmed.match(/^#+/)?.[0].length ?? 0;
   const minimumLevel = levelPrefixLength + 1;
   const textQuery = trimmed.slice(levelPrefixLength).trim();
-  const levelMatches = levelPrefixLength === 0
-    ? anchors
-    : anchors.filter((anchor) => anchor.heading.level >= minimumLevel);
-
-  if (!textQuery) return levelMatches;
-
   const slugged = slugifyHeading(textQuery);
   const lower = textQuery.normalize("NFC").toLowerCase();
-  return levelMatches.filter(
-    (a) =>
-      (slugged && a.slug.includes(slugged))
-      || a.heading.text.normalize("NFC").toLowerCase().includes(lower),
-  );
+  const matches: HeadingAnchor[] = [];
+
+  for (const anchor of anchors) {
+    if (levelPrefixLength > 0 && anchor.heading.level < minimumLevel) continue;
+    if (
+      textQuery
+      && !(slugged && anchor.slug.includes(slugged))
+      && !anchor.heading.text.normalize("NFC").toLowerCase().includes(lower)
+    ) {
+      continue;
+    }
+
+    matches.push(anchor);
+    if (matches.length >= limit) break;
+  }
+
+  return matches;
 }

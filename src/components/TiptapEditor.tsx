@@ -57,8 +57,8 @@ import type { Locale, WordWrap } from "../hooks/useSettings";
 import { isSafeLinkHref, normalizeLinkHref } from "../utils/linkHref";
 import {
   buildHeadingAnchors,
-  filterHeadingAnchors,
   normalizeFragmentHref,
+  selectHeadingAnchorSuggestions,
   type HeadingAnchor,
 } from "../utils/headingSlug";
 import { extractHeadings, outlineIndentDepth } from "../utils/outline";
@@ -1415,7 +1415,7 @@ const TiptapEditorBase = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
       if (!linkAnchorsRef.current) {
         linkAnchorsRef.current = buildHeadingAnchors(extractHeadings(editor.state.doc));
       }
-      headingSuggestions = filterHeadingAnchors(linkAnchorsRef.current, linkFragmentQuery);
+      headingSuggestions = selectHeadingAnchorSuggestions(linkAnchorsRef.current, linkFragmentQuery);
     }
     const activeSuggestIndex = headingSuggestions.length > 0
       ? Math.min(linkSuggestIndex, headingSuggestions.length - 1)
