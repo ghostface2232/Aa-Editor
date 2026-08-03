@@ -25,6 +25,11 @@ interface UsePopoverAnchorOptions {
   placement: Placement;
   offsetPx: number;
   shiftPaddingPx?: number;
+  /**
+   * Allow the popover to overlap its reference to stay visible. Useful for a
+   * reference that can span the viewport, such as a long table.
+   */
+  shiftCrossAxis?: boolean;
   /** Fired once via rAF after autoUpdate is wired. Use for focus/measure side effects. */
   onPositioned?: () => void;
   /** Capture-phase mousedown outside the popover. Omit to disable outside-click handling. */
@@ -43,6 +48,7 @@ export function usePopoverAnchor({
   placement,
   offsetPx,
   shiftPaddingPx = 8,
+  shiftCrossAxis = false,
   onPositioned,
   onOutsideMouseDown,
 }: UsePopoverAnchorOptions): UsePopoverAnchorResult {
@@ -67,7 +73,11 @@ export function usePopoverAnchor({
       void computePosition(reference, popoverEl, {
         strategy: "fixed",
         placement,
-        middleware: [offset(offsetPx), flip(), shift({ padding: shiftPaddingPx })],
+        middleware: [
+          offset(offsetPx),
+          flip({ fallbackStrategy: "bestFit" }),
+          shift({ padding: shiftPaddingPx, crossAxis: shiftCrossAxis }),
+        ],
       }).then(({ x, y }) => {
         popoverEl.style.left = `${x}px`;
         popoverEl.style.top = `${y}px`;
@@ -93,7 +103,7 @@ export function usePopoverAnchor({
         cleanupRef.current = null;
       }
     };
-  }, [open, popoverRef, getReference, placement, offsetPx, shiftPaddingPx]);
+  }, [open, popoverRef, getReference, placement, offsetPx, shiftPaddingPx, shiftCrossAxis]);
 
   useEffect(() => {
     if (!open) return;

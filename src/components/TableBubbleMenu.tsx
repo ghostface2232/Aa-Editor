@@ -85,6 +85,10 @@ function TableBubbleMenuImpl({ editor, locale }: TableBubbleMenuProps) {
     getReference,
     placement: "top",
     offsetPx: 8,
+    // If neither end of a viewport-spanning table is visible, flip's best-fit
+    // side identifies the nearer end and cross-axis shift pins the toolbar to
+    // that screen edge instead of leaving it offscreen.
+    shiftCrossAxis: true,
   });
 
   if (!editor || !open) return null;
