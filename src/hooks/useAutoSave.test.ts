@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { renderHook, act } from "@testing-library/react";
+import { renderHook, act, waitFor } from "@testing-library/react";
 import type { NoteDoc, NoteGroup } from "../utils/noteTypes";
 import type { MarkdownState } from "./useMarkdownState";
 import type { TiptapEditorHandle } from "../components/TiptapEditor";
@@ -198,6 +198,48 @@ afterEach(() => {
 });
 
 describe("useAutoSave — remote deletion race", () => {
+  it("quarantines new saves and removes a crossed older in-flight body", async () => {
+    let releaseOlderWrite!: () => void;
+    refs.editorContent = "older local edit";
+    refs.files.set("/notes/.trash/a.md", "base");
+    writeMock.mockImplementationOnce(
+      (path: string, content: string) => new Promise<void>((resolve) => {
+        releaseOlderWrite = () => {
+          refs.files.set(path, content);
+          resolve();
+        };
+      }),
+    );
+    const { result } = renderAutoSave({
+      docs: [makeDoc("a", { content: "base", isDirty: true })],
+      state: makeState({ isDirty: true }),
+    });
+
+    act(() => result.current.captureAndQueueSave());
+    await waitFor(() => {
+      expect(writeMock).toHaveBeenCalledWith("/notes/a.md", "older local edit");
+    });
+
+    // A newer snapshot replaces pendingSnapshotsRef while the older body is
+    // already inside atomicWriteText. Both must remain known to deletion
+    // cleanup, and nothing scheduled after quarantine may re-enter doSave.
+    refs.editorContent = "newer local edit";
+    act(() => result.current.captureAndQueueSave());
+    const settlement = result.current.settleRemoteDeletedDoc("a");
+    refs.editorContent = "edit after delete event";
+    act(() => result.current.scheduleAutoSave());
+
+    await act(async () => {
+      releaseOlderWrite();
+      expect(await settlement).toBe(true);
+    });
+
+    const liveWrites = writeMock.mock.calls.filter(([path]) => path === "/notes/a.md");
+    expect(liveWrites).toEqual([["/notes/a.md", "older local edit"]]);
+    expect(refs.files.has("/notes/a.md")).toBe(false);
+    expect(writeMock).toHaveBeenCalledWith("/notes/.trash/a.md", "newer local edit");
+  });
+
   it("keeps deletion authoritative while folding dirty editor Markdown into trash", async () => {
     vi.useFakeTimers();
     refs.editorContent = "base plus local edit";

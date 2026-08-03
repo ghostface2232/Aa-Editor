@@ -197,12 +197,14 @@ export function useWindowSync(
 
         void (async () => {
           try {
-            // Preservation is best-effort. The originating window already
-            // committed the delete, so a false result must not resurrect it.
+            // settleRemoteDeletedDoc captures and quarantines the local body
+            // synchronously before its promise reaches the first await. Remove
+            // the live editor immediately afterwards so the user cannot keep
+            // typing into a document whose deletion already committed.
+            let settlement: Promise<boolean> | null = null;
             if (settleRemoteDeletedDoc) {
-              try { await settleRemoteDeletedDoc(docId); } catch { /* deletion remains authoritative */ }
+              try { settlement = settleRemoteDeletedDoc(docId); } catch { /* deletion remains authoritative */ }
             }
-            if (!mounted) return;
 
             flushSync(() => {
               setDocs((prev) => {
@@ -240,6 +242,12 @@ export function useWindowSync(
                 return filtered;
               });
             });
+            // Preservation is best-effort and is also tracked by the autosave
+            // close/migration drain. The originating window already committed
+            // the delete, so failure must not put the document back in state.
+            if (settlement) {
+              try { await settlement; } catch { /* deletion remains authoritative */ }
+            }
           } finally {
             deletingDocIds.delete(docId);
           }

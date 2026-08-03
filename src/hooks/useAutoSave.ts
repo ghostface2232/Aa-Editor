@@ -56,6 +56,14 @@ export function useAutoSave(
   // could drop a save if the user closed mid-write.
   const inFlightSavesRef = useRef(new Set<Promise<boolean>>());
   const inFlightSavesByDocRef = useRef(new Map<string, Set<Promise<boolean>>>());
+  const inFlightSnapshotsByDocRef = useRef(new Map<string, Set<SaveSnapshot>>());
+  // A remote delete is a session-lifetime tombstone. Once observed, no later
+  // editor update or stale callback may create another write for that id.
+  const remoteDeletedDocIdsRef = useRef(new Set<string>());
+  // Remote-deletion preservation continues after the document is removed from
+  // React state. Close/migration drains must still wait for its trash/conflict
+  // write to finish.
+  const remoteDeletionSettlementsRef = useRef(new Set<Promise<boolean>>());
   // Per-doc serialization tail for the body-write critical section inside
   // doSave. Each save's write is chained after the previous write of the SAME
   // doc, so two never touch `${path}.tmp` concurrently and clobber each other
@@ -100,6 +108,7 @@ export function useAutoSave(
   const markActiveDocEdited = useCallback((): PendingSaveTarget | null => {
     const target = activeDocRef.current;
     if (!target?.filePath) return null;
+    if (remoteDeletedDocIdsRef.current.has(target.id)) return null;
 
     const editSerial = (latestEditSerialByDocRef.current.get(target.id) ?? 0) + 1;
     latestEditSerialByDocRef.current.set(target.id, editSerial);
@@ -123,6 +132,7 @@ export function useAutoSave(
     const target = pendingTarget ?? activeDocRef.current;
     if (!target?.filePath) return null;
     const docId = "docId" in target ? target.docId : target.id;
+    if (remoteDeletedDocIdsRef.current.has(docId)) return null;
     if (activeDocRef.current?.id !== docId) {
       return null;
     }
@@ -174,6 +184,7 @@ export function useAutoSave(
   const doSave = useCallback(async (snapshot: SaveSnapshot): Promise<boolean> => {
     // Snapshots captured before a notes-dir migration point at stale paths.
     if (migrationInProgress) return false;
+    if (remoteDeletedDocIdsRef.current.has(snapshot.docId)) return false;
 
     const {
       locale: latestLocale,
@@ -231,6 +242,7 @@ export function useAutoSave(
       // one. Re-check the revision INSIDE the lock so a save superseded while it
       // waited bails without writing, leaving only the newest content on disk.
       const performBodyWrite = async (): Promise<boolean> => {
+        if (remoteDeletedDocIdsRef.current.has(snapshot.docId)) return false;
         if (!snapshotIsCurrent(snapshot)) return false;
         markOwnWrite(snapshot.filePath, snapshot.content);
         // The body .md is the single source of truth: a crash or cloud-sync/AV
@@ -339,7 +351,8 @@ export function useAutoSave(
 
   // Wrap a doSave call so the promise lives in inFlightSavesRef until it
   // settles. Returned promise still rejects/resolves identically.
-  const trackInFlight = useCallback((docId: string, p: Promise<boolean>): Promise<boolean> => {
+  const trackInFlight = useCallback((snapshot: SaveSnapshot, p: Promise<boolean>): Promise<boolean> => {
+    const docId = snapshot.docId;
     inFlightSavesRef.current.add(p);
     let docSaves = inFlightSavesByDocRef.current.get(docId);
     if (!docSaves) {
@@ -347,14 +360,26 @@ export function useAutoSave(
       inFlightSavesByDocRef.current.set(docId, docSaves);
     }
     docSaves.add(p);
-    void p.finally(() => {
+    let docSnapshots = inFlightSnapshotsByDocRef.current.get(docId);
+    if (!docSnapshots) {
+      docSnapshots = new Set();
+      inFlightSnapshotsByDocRef.current.set(docId, docSnapshots);
+    }
+    docSnapshots.add(snapshot);
+    const cleanup = () => {
       inFlightSavesRef.current.delete(p);
       const currentDocSaves = inFlightSavesByDocRef.current.get(docId);
       currentDocSaves?.delete(p);
       if (currentDocSaves?.size === 0) {
         inFlightSavesByDocRef.current.delete(docId);
       }
-    });
+      const currentSnapshots = inFlightSnapshotsByDocRef.current.get(docId);
+      currentSnapshots?.delete(snapshot);
+      if (currentSnapshots?.size === 0) {
+        inFlightSnapshotsByDocRef.current.delete(docId);
+      }
+    };
+    void p.then(cleanup, cleanup);
     return p;
   }, []);
 
@@ -371,7 +396,7 @@ export function useAutoSave(
       else refreshHasPendingChanges();
       return saved;
     });
-    return trackInFlight(snapshot.docId, save);
+    return trackInFlight(snapshot, save);
   }, [clearPendingSnapshotIfCurrent, doSave, refreshHasPendingChanges, trackInFlight]);
 
   const flushAutoSave = useCallback((): Promise<boolean> => {
@@ -403,8 +428,11 @@ export function useAutoSave(
   // writing to disk. Stale in-flight saves are expected to bail on the
   // snapshot guard inside doSave; this just waits for them to settle.
   const awaitInFlightSaves = useCallback(async (): Promise<void> => {
-    while (inFlightSavesRef.current.size > 0) {
-      const snapshot = Array.from(inFlightSavesRef.current);
+    while (inFlightSavesRef.current.size > 0 || remoteDeletionSettlementsRef.current.size > 0) {
+      const snapshot = [
+        ...Array.from(inFlightSavesRef.current),
+        ...Array.from(remoteDeletionSettlementsRef.current),
+      ];
       await Promise.allSettled(snapshot);
     }
   }, []);
@@ -425,7 +453,7 @@ export function useAutoSave(
       return true;
     }
 
-    const saved = await trackInFlight(snapshot.docId, doSave(snapshot));
+    const saved = await trackInFlight(snapshot, doSave(snapshot));
     if (saved) clearPendingSnapshotIfCurrent(snapshot);
     else refreshHasPendingChanges();
     return saved;
@@ -445,7 +473,7 @@ export function useAutoSave(
         continue;
       }
       try {
-        const saved = await trackInFlight(snapshot.docId, doSave(snapshot));
+        const saved = await trackInFlight(snapshot, doSave(snapshot));
         if (saved) clearPendingSnapshotIfCurrent(snapshot);
       } catch {
         // doSave already logged; nothing more we can do at close time.
@@ -542,10 +570,14 @@ export function useAutoSave(
     refreshHasPendingChanges();
   }, [refreshHasPendingChanges]);
 
-  const settleRemoteDeletedDoc = useCallback(async (docId: string): Promise<boolean> => {
+  const settleRemoteDeletedDoc = useCallback((docId: string): Promise<boolean> => {
+    // Quarantine synchronously, before returning the promise to useWindowSync.
+    // The window-sync handler can then remove the live editor immediately
+    // without any timer or callback reopening the write path.
+    remoteDeletedDocIdsRef.current.add(docId);
     const live = stateRef.current;
     const doc = live.docs.find((entry) => entry.id === docId);
-    if (!doc) return true;
+    if (!doc) return Promise.resolve(true);
 
     const isActive = activeDocRef.current?.id === docId;
     const pendingSnapshot = pendingSnapshotsRef.current.get(docId);
@@ -555,7 +587,13 @@ export function useAutoSave(
     const localContent = isActive
       ? getCurrentMarkdown(live.tiptapRef)
       : pendingSnapshot?.content ?? doc.content;
-    const possibleLocalWrites = [localContent, pendingSnapshot?.content, doc.content]
+    const inFlightSnapshots = Array.from(inFlightSnapshotsByDocRef.current.get(docId) ?? []);
+    const possibleLocalWrites = [
+      localContent,
+      pendingSnapshot?.content,
+      doc.content,
+      ...inFlightSnapshots.map((snapshot) => snapshot.content),
+    ]
       .filter((body): body is string => body !== undefined);
 
     // Invalidate before the first await. An atomic write already in progress
@@ -575,68 +613,74 @@ export function useAutoSave(
     pendingSnapshotsRef.current.delete(docId);
     refreshHasPendingChanges();
 
-    await awaitDocSave(docId);
-    if (!hasLocalEdits) return true;
+    const settlement = (async (): Promise<boolean> => {
+      await awaitDocSave(docId);
+      if (!hasLocalEdits) return true;
 
-    let notesDir: string | null = null;
-    try {
-      const dir = await getNotesDir();
-      notesDir = dir;
-      const base = normalizeSep(dir);
-      const trashDir = `${base}.trash`;
-      const trashPath = `${trashDir}/${docId}.md`;
-      let trashContent: string | null = null;
+      let notesDir: string | null = null;
       try {
-        trashContent = await tauriFileSystem.readTextFile(trashPath);
+        const dir = await getNotesDir();
+        notesDir = dir;
+        const base = normalizeSep(dir);
+        const trashDir = `${base}.trash`;
+        const trashPath = `${trashDir}/${docId}.md`;
+        let trashContent: string | null = null;
+        try {
+          trashContent = await tauriFileSystem.readTextFile(trashPath);
+        } catch (err) {
+          if (await tauriFileSystem.exists(trashPath)) throw err;
+        }
+
+        if (trashContent === null || markdownEqual(trashContent, doc.content)) {
+          // The deleting window's trash copy is the same body this editor was
+          // based on, so fold the local edit into the deleted note. Deletion
+          // still wins; restoring from trash later recovers the latest text.
+          await tauriFileSystem.mkdir(trashDir, { recursive: true });
+          markOwnWrite(trashPath, localContent);
+          await atomicWriteText(tauriFileSystem, trashPath, localContent, { failClosed: true });
+        } else if (!markdownEqual(trashContent, localContent)) {
+          // Both windows changed the body. Keep the deleting window's trash
+          // version authoritative and preserve only this genuinely divergent
+          // local edit as a conflict artifact.
+          await backupLocalDeletionVersion(tauriFileSystem, dir, docId, localContent);
+        }
+
+        // If an older local autosave crossed the deletion and recreated the live
+        // body, remove only a body matching one of our captured local versions.
+        if (await tauriFileSystem.exists(doc.filePath)) {
+          const diskContent = await tauriFileSystem.readTextFile(doc.filePath);
+          if (possibleLocalWrites.some((body) => markdownEqual(body, diskContent))) {
+            markOwnWrite(doc.filePath);
+            await tauriFileSystem.remove(doc.filePath);
+          }
+        }
+        return true;
       } catch (err) {
-        if (await tauriFileSystem.exists(trashPath)) throw err;
-      }
-
-      if (trashContent === null || markdownEqual(trashContent, doc.content)) {
-        // The deleting window's trash copy is the same body this editor was
-        // based on, so fold the local edit into the deleted note. Deletion
-        // still wins; restoring from trash later recovers the latest text.
-        await tauriFileSystem.mkdir(trashDir, { recursive: true });
-        markOwnWrite(trashPath, localContent);
-        await atomicWriteText(tauriFileSystem, trashPath, localContent, { failClosed: true });
-      } else if (!markdownEqual(trashContent, localContent)) {
-        // Both windows changed the body. Keep the deleting window's trash
-        // version authoritative and preserve only this genuinely divergent
-        // local edit as a conflict artifact.
-        await backupLocalDeletionVersion(tauriFileSystem, dir, docId, localContent);
-      }
-
-      // If an older local autosave crossed the deletion and recreated the live
-      // body, remove only a body matching one of our captured local versions.
-      if (await tauriFileSystem.exists(doc.filePath)) {
-        const diskContent = await tauriFileSystem.readTextFile(doc.filePath);
-        if (possibleLocalWrites.some((body) => markdownEqual(body, diskContent))) {
-          markOwnWrite(doc.filePath);
-          await tauriFileSystem.remove(doc.filePath);
+        try {
+          const dir = notesDir ?? await getNotesDir();
+          await backupLocalDeletionVersion(tauriFileSystem, dir, docId, localContent);
+          return true;
+        } catch (backupErr) {
+          // Deletion remains authoritative even when both preservation paths are
+          // unavailable. Record the exceptional loss of the recovery copy, but
+          // never resurrect or retain a note the user deleted in another window.
+          const failure = backupErr ?? err;
+          void logNotenError(failure instanceof NotenError
+            ? failure
+            : new NotenError(
+                "BACKUP_FAILED",
+                "fatal",
+                failure instanceof Error ? failure.message : String(failure),
+                { context: { noteId: docId, filePath: doc.filePath }, cause: failure },
+              ));
+          return true;
         }
       }
-      return true;
-    } catch (err) {
-      try {
-        const dir = notesDir ?? await getNotesDir();
-        await backupLocalDeletionVersion(tauriFileSystem, dir, docId, localContent);
-        return true;
-      } catch (backupErr) {
-        // Deletion remains authoritative even when both preservation paths are
-        // unavailable. Record the exceptional loss of the recovery copy, but
-        // never resurrect or retain a note the user deleted in another window.
-        const failure = backupErr ?? err;
-        void logNotenError(failure instanceof NotenError
-          ? failure
-          : new NotenError(
-              "BACKUP_FAILED",
-              "fatal",
-              failure instanceof Error ? failure.message : String(failure),
-              { context: { noteId: docId, filePath: doc.filePath }, cause: failure },
-            ));
-        return true;
-      }
-    }
+    })();
+    remoteDeletionSettlementsRef.current.add(settlement);
+    const cleanup = () => remoteDeletionSettlementsRef.current.delete(settlement);
+    void settlement.then(cleanup, cleanup);
+    return settlement;
   }, [awaitDocSave, hasPendingForDoc, refreshHasPendingChanges]);
 
   return { scheduleAutoSave, flushAutoSave, hasUnsavedChanges, captureAndQueueSave, awaitInFlightSaves, awaitDocSave, flushDocSave, flushPendingSnapshots, notifyActiveDoc, cancelDocSave, settleRemoteDeletedDoc };

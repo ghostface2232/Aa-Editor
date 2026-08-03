@@ -76,7 +76,7 @@ beforeEach(() => {
 });
 
 describe("useWindowSync — remote deletion", () => {
-  it("keeps the document live until its local autosave state is settled", async () => {
+  it("removes the live document immediately after synchronous preservation capture", async () => {
     let finish!: (value: boolean) => void;
     const settle = vi.fn(() => new Promise<boolean>((resolve) => { finish = resolve; }));
     const { result } = renderWindowSync(settle);
@@ -87,11 +87,11 @@ describe("useWindowSync — remote deletion", () => {
         payload: { sourceWindow: "window-b", docId: "a" },
       });
     });
-    expect(result.current.docs.map((doc) => doc.id)).toEqual(["a", "b"]);
+    expect(result.current.docs.map((doc) => doc.id)).toEqual(["b"]);
+    expect(settle).toHaveBeenCalledWith("a");
 
     await act(async () => { finish(true); });
     await waitFor(() => expect(result.current.docs.map((doc) => doc.id)).toEqual(["b"]));
-    expect(settle).toHaveBeenCalledWith("a");
   });
 
   it("still applies deletion when preserving the local copy fails", async () => {
