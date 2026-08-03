@@ -32,6 +32,40 @@ interface PendingSaveTarget {
   editSerial: number;
 }
 
+interface RemoteDeletionTombstone {
+  // The `docs` entry that was live when the deletion arrived, or null when this
+  // window never held the note.
+  deletedDoc: NoteDoc | null;
+  // Set once `docs` has actually been observed without the id, i.e. the removal
+  // this tombstone describes really landed in local state.
+  removalObserved: boolean;
+}
+
+// A remote deletion tombstone blocks every write path for the deleted id — but
+// only for as long as that id stays deleted. `restoreNote` reuses the original
+// id and re-broadcasts it via `emitDocCreated`, and a watcher reconcile can
+// rediscover the restored body on its own, so a session-lifetime tombstone
+// would leave a restored note permanently unsaveable: markActiveDocEdited
+// refuses to arm a timer while the dirty indicator still lights up, and the
+// close-time flush captures no snapshot, so the edits vanish when the window
+// closes. Any entry under that id which is not the object the deletion removed
+// (or any entry at all, once the removal has been observed) is the restored
+// note, so the tombstone is lifted for it.
+function syncRemoteDeletionTombstones(
+  tombstones: Map<string, RemoteDeletionTombstone>,
+  docs: NoteDoc[],
+): void {
+  if (tombstones.size === 0) return;
+  for (const [docId, tombstone] of tombstones) {
+    const live = docs.find((doc) => doc.id === docId) ?? null;
+    if (live === null) {
+      tombstone.removalObserved = true;
+    } else if (tombstone.removalObserved || live !== tombstone.deletedDoc) {
+      tombstones.delete(docId);
+    }
+  }
+}
+
 export function useAutoSave(
   state: MarkdownState,
   tiptapRef: React.RefObject<TiptapEditorHandle | null>,
@@ -57,9 +91,10 @@ export function useAutoSave(
   const inFlightSavesRef = useRef(new Set<Promise<boolean>>());
   const inFlightSavesByDocRef = useRef(new Map<string, Set<Promise<boolean>>>());
   const inFlightSnapshotsByDocRef = useRef(new Map<string, Set<SaveSnapshot>>());
-  // A remote delete is a session-lifetime tombstone. Once observed, no later
-  // editor update or stale callback may create another write for that id.
-  const remoteDeletedDocIdsRef = useRef(new Set<string>());
+  // A remote delete tombstones the id: no later editor update or stale callback
+  // may create another write for it. Lifted only when the id comes back as a
+  // restored document — see syncRemoteDeletionTombstones.
+  const remoteDeletedDocsRef = useRef(new Map<string, RemoteDeletionTombstone>());
   // Remote-deletion preservation continues after the document is removed from
   // React state. Close/migration drains must still wait for its trash/conflict
   // write to finish.
@@ -94,6 +129,12 @@ export function useAutoSave(
     groups,
   };
 
+  // Reconcile tombstones during render, not in an effect: useWindowSync removes
+  // the deleted doc inside flushSync, so this render is the one that observes
+  // the removal, and every editor callback that consults a tombstone runs after
+  // the render that committed a restore.
+  syncRemoteDeletionTombstones(remoteDeletedDocsRef.current, docs);
+
   // Synchronous active-doc ref prevents wrong-doc saves during rapid switches.
   const activeDocRef = useRef<{ id: string; filePath: string } | null>(null);
   const activeTarget = docs[activeIndex];
@@ -108,7 +149,7 @@ export function useAutoSave(
   const markActiveDocEdited = useCallback((): PendingSaveTarget | null => {
     const target = activeDocRef.current;
     if (!target?.filePath) return null;
-    if (remoteDeletedDocIdsRef.current.has(target.id)) return null;
+    if (remoteDeletedDocsRef.current.has(target.id)) return null;
 
     const editSerial = (latestEditSerialByDocRef.current.get(target.id) ?? 0) + 1;
     latestEditSerialByDocRef.current.set(target.id, editSerial);
@@ -132,7 +173,7 @@ export function useAutoSave(
     const target = pendingTarget ?? activeDocRef.current;
     if (!target?.filePath) return null;
     const docId = "docId" in target ? target.docId : target.id;
-    if (remoteDeletedDocIdsRef.current.has(docId)) return null;
+    if (remoteDeletedDocsRef.current.has(docId)) return null;
     if (activeDocRef.current?.id !== docId) {
       return null;
     }
@@ -184,7 +225,7 @@ export function useAutoSave(
   const doSave = useCallback(async (snapshot: SaveSnapshot): Promise<boolean> => {
     // Snapshots captured before a notes-dir migration point at stale paths.
     if (migrationInProgress) return false;
-    if (remoteDeletedDocIdsRef.current.has(snapshot.docId)) return false;
+    if (remoteDeletedDocsRef.current.has(snapshot.docId)) return false;
 
     const {
       locale: latestLocale,
@@ -242,7 +283,7 @@ export function useAutoSave(
       // one. Re-check the revision INSIDE the lock so a save superseded while it
       // waited bails without writing, leaving only the newest content on disk.
       const performBodyWrite = async (): Promise<boolean> => {
-        if (remoteDeletedDocIdsRef.current.has(snapshot.docId)) return false;
+        if (remoteDeletedDocsRef.current.has(snapshot.docId)) return false;
         if (!snapshotIsCurrent(snapshot)) return false;
         markOwnWrite(snapshot.filePath, snapshot.content);
         // The body .md is the single source of truth: a crash or cloud-sync/AV
@@ -571,12 +612,16 @@ export function useAutoSave(
   }, [refreshHasPendingChanges]);
 
   const settleRemoteDeletedDoc = useCallback((docId: string): Promise<boolean> => {
+    const live = stateRef.current;
+    const doc = live.docs.find((entry) => entry.id === docId) ?? null;
     // Quarantine synchronously, before returning the promise to useWindowSync.
     // The window-sync handler can then remove the live editor immediately
-    // without any timer or callback reopening the write path.
-    remoteDeletedDocIdsRef.current.add(docId);
-    const live = stateRef.current;
-    const doc = live.docs.find((entry) => entry.id === docId);
+    // without any timer or callback reopening the write path. A window that
+    // does not hold the note has no removal to observe, so its tombstone starts
+    // already-settled and lifts the moment a restore reintroduces the id —
+    // otherwise a window that never even opened the note would refuse to
+    // autosave it forever.
+    remoteDeletedDocsRef.current.set(docId, { deletedDoc: doc, removalObserved: doc === null });
     if (!doc) return Promise.resolve(true);
 
     const isActive = activeDocRef.current?.id === docId;

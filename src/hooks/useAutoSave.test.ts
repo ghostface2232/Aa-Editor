@@ -154,6 +154,12 @@ function makeTiptapRef(): React.RefObject<TiptapEditorHandle | null> {
   };
 }
 
+interface AutoSaveProps {
+  docs: NoteDoc[];
+  activeIndex: number;
+  state: MarkdownState;
+}
+
 function renderAutoSave(opts: {
   docs?: NoteDoc[];
   activeIndex?: number;
@@ -167,20 +173,29 @@ function renderAutoSave(opts: {
   const groups: NoteGroup[] = [];
   const activeIndex = opts.activeIndex ?? 0;
 
-  const { result } = renderHook(() =>
-    useAutoSave(
-      state,
-      tiptapRef,
-      docs,
-      setDocs,
-      activeIndex,
-      setActiveIndex,
-      "en",
-      "updated-desc",
-      groups,
-    ),
+  let props: AutoSaveProps = { docs, activeIndex, state };
+  const { result, rerender } = renderHook(
+    (next: AutoSaveProps) =>
+      useAutoSave(
+        next.state,
+        tiptapRef,
+        next.docs,
+        setDocs,
+        next.activeIndex,
+        setActiveIndex,
+        "en",
+        "updated-desc",
+        groups,
+      ),
+    { initialProps: props },
   );
-  return { result, setDocs, setActiveIndex, state, tiptapRef, docs };
+  // Stand-in for an App re-render: window-sync, restoreNote, and reconcile all
+  // reach useAutoSave by replacing the docs array it is called with.
+  const rerenderWith = (patch: Partial<AutoSaveProps>) => {
+    props = { ...props, ...patch };
+    rerender(props);
+  };
+  return { result, rerenderWith, setDocs, setActiveIndex, state, tiptapRef, docs };
 }
 
 beforeEach(() => {
@@ -300,6 +315,109 @@ describe("useAutoSave — remote deletion race", () => {
       "a",
       "local edit",
     );
+  });
+});
+
+describe("useAutoSave — remote deletion tombstone lifecycle", () => {
+  it("saves again after the deleted id is restored under a new entry", async () => {
+    vi.useFakeTimers();
+    const deletedEntry = makeDoc("a", { content: "base" });
+    const { result, rerenderWith } = renderAutoSave({
+      docs: [deletedEntry],
+      state: makeState({ isDirty: false }),
+    });
+
+    await act(async () => {
+      expect(await result.current.settleRemoteDeletedDoc("a")).toBe(true);
+    });
+
+    // useWindowSync drops the deleted doc from state, then restoreNote (or the
+    // doc-created broadcast from the window that restored it) reintroduces the
+    // SAME id as a fresh entry. Autosave must come back to life for it.
+    act(() => rerenderWith({ docs: [] }));
+    act(() => rerenderWith({
+      docs: [makeDoc("a", { content: "base" })],
+      state: makeState({ isDirty: true }),
+    }));
+
+    refs.editorContent = "edit after restore";
+    act(() => result.current.scheduleAutoSave());
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+
+    expect(writeMock).toHaveBeenCalledWith("/notes/a.md", "edit after restore");
+  });
+
+  it("keeps blocking saves while the entry the deletion removed is still present", async () => {
+    vi.useFakeTimers();
+    const deletedEntry = makeDoc("a", { content: "base" });
+    const { result, rerenderWith } = renderAutoSave({
+      docs: [deletedEntry],
+      state: makeState({ isDirty: false }),
+    });
+
+    await act(async () => {
+      expect(await result.current.settleRemoteDeletedDoc("a")).toBe(true);
+    });
+
+    // A render still carrying the very entry the deletion targeted is not a
+    // restore, so the tombstone must survive it.
+    act(() => rerenderWith({ docs: [deletedEntry], state: makeState({ isDirty: true }) }));
+
+    refs.editorContent = "edit after delete event";
+    act(() => result.current.scheduleAutoSave());
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+
+    expect(writeMock).not.toHaveBeenCalledWith("/notes/a.md", expect.anything());
+  });
+
+  it("does not tombstone a note this window never held", async () => {
+    vi.useFakeTimers();
+    const { result, rerenderWith } = renderAutoSave({
+      docs: [makeDoc("b")],
+      state: makeState({ isDirty: false }),
+    });
+
+    // The deletion broadcast reaches every window, including ones with no entry
+    // for that id. Such a window has nothing to preserve and must not carry the
+    // id into the future.
+    await act(async () => {
+      expect(await result.current.settleRemoteDeletedDoc("a")).toBe(true);
+    });
+
+    act(() => rerenderWith({
+      docs: [makeDoc("a")],
+      state: makeState({ isDirty: true }),
+    }));
+
+    refs.editorContent = "edit on the restored note";
+    act(() => result.current.scheduleAutoSave());
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+
+    expect(writeMock).toHaveBeenCalledWith("/notes/a.md", "edit on the restored note");
+  });
+
+  it("flushes a restored note's pending edit at close", async () => {
+    const deletedEntry = makeDoc("a", { content: "base" });
+    const { result, rerenderWith } = renderAutoSave({
+      docs: [deletedEntry],
+      state: makeState({ isDirty: false }),
+    });
+
+    await act(async () => {
+      expect(await result.current.settleRemoteDeletedDoc("a")).toBe(true);
+    });
+    act(() => rerenderWith({ docs: [] }));
+    act(() => rerenderWith({
+      docs: [makeDoc("a", { content: "base" })],
+      state: makeState({ isDirty: true }),
+    }));
+
+    refs.editorContent = "unsaved edit at close";
+    await act(async () => {
+      expect(await result.current.flushAutoSave()).toBe(true);
+    });
+
+    expect(writeMock).toHaveBeenCalledWith("/notes/a.md", "unsaved edit at close");
   });
 });
 
