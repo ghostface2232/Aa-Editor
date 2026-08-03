@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { createInMemoryFileSystem, type InMemoryFileSystem } from "./fs.test-utils";
 import { wrapWithFaults, type FaultInjectingFileSystem } from "./fs.fault.test-utils";
 import {
@@ -186,6 +186,20 @@ describe("backupRemoteVersion", () => {
 });
 
 describe("backupLocalDeletionVersion", () => {
+  it("keeps same-millisecond backups at distinct paths", async () => {
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1234);
+    try {
+      const first = await backupLocalDeletionVersion(fs, DIR, NOTE_ID, "window A edit");
+      const second = await backupLocalDeletionVersion(fs, DIR, NOTE_ID, "window B edit");
+
+      expect(first).not.toBe(second);
+      expect(await fs.readTextFile(first)).toBe("window A edit");
+      expect(await fs.readTextFile(second)).toBe("window B edit");
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it("writes an artifact even when the dirty local body is empty", async () => {
     const path = await backupLocalDeletionVersion(fs, DIR, NOTE_ID, "");
 

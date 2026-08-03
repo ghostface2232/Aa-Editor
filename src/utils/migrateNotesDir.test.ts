@@ -188,7 +188,7 @@ describe("migrateNotesDir — merge newer-wins bodies", () => {
 
     // The overwritten destination body is preserved under .conflicts/.
     const backups = [...refs.fs!.snapshot().keys()]
-      .filter((p) => /^\/to\/\.conflicts\/a-\d+\.md$/.test(p));
+      .filter((p) => /^\/to\/\.conflicts\/a-\d+-.+\.md$/.test(p));
     expect(backups).toHaveLength(1);
     expect(await refs.fs!.readTextFile(backups[0])).toBe("older destination body");
   });

@@ -358,7 +358,7 @@ describe("reconcileFolder", () => {
     const faultFs = wrapWithFaults(fs);
     faultFs.injectFault({
       op: "writeTextFile",
-      path: new RegExp(`/\\.conflicts/${id}-\\d+\\.md$`),
+      path: new RegExp(`/\\.conflicts/${id}-\\d+-.+\\.md$`),
       throwError: new Error("ENOSPC: cannot preserve conflict body"),
     });
 

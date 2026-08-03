@@ -5,7 +5,7 @@ import { markdownEqual } from "./markdownEqual";
 
 const README_BODY = `This folder holds note bodies preserved during sync
 conflicts. Files are named
-"\`{noteId}-{timestamp-ms}.md\`" and are kept indefinitely so you can recover
+"\`{noteId}-{timestamp-ms}-{unique-id}.md\`" and are kept indefinitely so you can recover
 content lost to a multi-device race.
 
 Safe to delete anything in here once you've reviewed the contents.
@@ -51,7 +51,11 @@ async function writeConflictVersion(
 ): Promise<string> {
   const conflictsDir = `${normalizeSep(notesDir)}.conflicts`;
   try { await fs.mkdir(conflictsDir, { recursive: true }); } catch { /* ignore */ }
-  const path = `${normalizeSep(conflictsDir)}${noteId}-${Date.now()}.md`;
+  // Multiple windows can preserve different bodies for the same note in the
+  // same millisecond. The UUID prevents one recovery artifact from silently
+  // overwriting the other; an in-process counter or exists-then-write check
+  // would still race across windows.
+  const path = `${normalizeSep(conflictsDir)}${noteId}-${Date.now()}-${crypto.randomUUID()}.md`;
   try {
     await fs.writeTextFile(path, body);
     await ensureReadme(fs, notesDir, conflictsDir);
