@@ -30,6 +30,7 @@ interface ImageSelectionSync {
 }
 
 const imageSelectionSyncByEditor = new WeakMap<Editor, ImageSelectionSync>();
+const imageSourceSyncByEditor = new WeakMap<Editor, Set<() => void>>();
 
 function selectedImagePos(editor: Editor): number | null {
   const { selection } = editor.state;
@@ -55,8 +56,15 @@ export function shouldRefreshImageSelection(
   return true;
 }
 
-export function shouldSyncImageSource(currentSrc: unknown, nextSrc: unknown): boolean {
-  return currentSrc !== nextSrc;
+export function shouldSyncImageSource(
+  currentSrc: unknown,
+  nextSrc: unknown,
+  currentContext: DocumentImageContext,
+  nextContext: DocumentImageContext,
+): boolean {
+  return currentSrc !== nextSrc
+    || currentContext.noteId !== nextContext.noteId
+    || currentContext.filePath !== nextContext.filePath;
 }
 
 export function shouldAssignRenderableImageSource(
@@ -64,6 +72,26 @@ export function shouldAssignRenderableImageSource(
   nextSource: string | null,
 ): boolean {
   return currentSource !== nextSource;
+}
+
+function registerImageSourceSync(editor: Editor, syncSource: () => void): () => void {
+  let controllers = imageSourceSyncByEditor.get(editor);
+  if (!controllers) {
+    controllers = new Set();
+    imageSourceSyncByEditor.set(editor, controllers);
+  }
+  controllers.add(syncSource);
+
+  return () => {
+    controllers.delete(syncSource);
+    if (controllers.size === 0) imageSourceSyncByEditor.delete(editor);
+  };
+}
+
+export function refreshImageNodeViewSources(editor: Editor): void {
+  for (const syncSource of imageSourceSyncByEditor.get(editor) ?? []) {
+    syncSource();
+  }
 }
 
 function registerImageSelectionSync(editor: Editor, updateSelection: () => void): () => void {
@@ -208,10 +236,11 @@ export function createImageNodeView(editor: Editor) {
 
     let imageSourceToken = 0;
     let renderedImageSource: string | null = null;
-    const syncImageSource = (source: string) => {
+    let currentContext = getContext();
+    const syncImageSource = (source: string, context: DocumentImageContext) => {
       const token = ++imageSourceToken;
       void (async () => {
-        const resolved = await resolveRenderableImageSource(source, getContext());
+        const resolved = await resolveRenderableImageSource(source, context);
         if (token !== imageSourceToken) return;
         if (!shouldAssignRenderableImageSource(renderedImageSource, resolved)) return;
         renderedImageSource = resolved;
@@ -219,8 +248,17 @@ export function createImageNodeView(editor: Editor) {
         else img.removeAttribute("src");
       })();
     };
+    const refreshImageSource = () => {
+      const nextSrc = currentNode.attrs.src;
+      const nextContext = getContext();
+      if (!shouldSyncImageSource(currentSrc, nextSrc, currentContext, nextContext)) return;
+      currentSrc = nextSrc;
+      currentContext = nextContext;
+      syncImageSource(nextSrc, nextContext);
+    };
 
-    syncImageSource(HTMLAttributes.src);
+    syncImageSource(HTMLAttributes.src, currentContext);
+    const unregisterSourceSync = registerImageSourceSync(editor, refreshImageSource);
     if (HTMLAttributes.alt) img.alt = HTMLAttributes.alt;
     if (HTMLAttributes.title) img.title = HTMLAttributes.title;
     img.draggable = false;
@@ -395,11 +433,7 @@ export function createImageNodeView(editor: Editor) {
       update: (updatedNode: any) => {
         if (updatedNode.type.name !== "image") return false;
         currentNode = updatedNode;
-        const nextSrc = updatedNode.attrs.src;
-        if (shouldSyncImageSource(currentSrc, nextSrc)) {
-          currentSrc = nextSrc;
-          syncImageSource(nextSrc);
-        }
+        refreshImageSource();
         if (updatedNode.attrs.alt) img.alt = updatedNode.attrs.alt;
         if (updatedNode.attrs.width) {
           img.style.width = `${updatedNode.attrs.width}px`;
@@ -415,6 +449,7 @@ export function createImageNodeView(editor: Editor) {
       deselectNode: () => { dom.style.outline = "none"; hideHandles(); },
       destroy: () => {
         imageSourceToken += 1;
+        unregisterSourceSync();
         unregisterSelectionSync();
         activeDragCleanup?.();
       },

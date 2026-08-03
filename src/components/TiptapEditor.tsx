@@ -39,7 +39,7 @@ import EscapeFirstBlock from "../extensions/EscapeFirstBlock";
 import MermaidCodeBlock from "../extensions/MermaidCodeBlock";
 import SlashCommands from "../extensions/SlashCommands";
 import ImageDrop from "../extensions/ImageDrop";
-import { createImageNodeView } from "../extensions/ImageView";
+import { createImageNodeView, refreshImageNodeViewSources } from "../extensions/ImageView";
 import WikiLink from "../extensions/WikiLink";
 import WikiLinkSuggestion from "../extensions/WikiLinkSuggestion";
 import AnchorLink from "../extensions/AnchorLink";
@@ -1006,6 +1006,12 @@ const TiptapEditorBase = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
         editor.storage.readonlyGuard.readonly = wasReadonly;
       }
 
+      // `updateState()` can preserve an existing NodeView when the Markdown is
+      // unchanged, but relative asset sources still resolve against the new
+      // document path. Refresh after the swap so a previous notes directory's
+      // rendered data URL cannot survive the context change.
+      refreshImageNodeViewSources(editor);
+
       // A cached EditorState also contains the FocusMode plugin state from
       // when that note was last visited. Reconcile it after every state swap
       // so an older inactive session cannot leave the focus-mode CSS without
@@ -1382,6 +1388,7 @@ const TiptapEditorBase = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
           editor.storage.documentContext.noteId = noteId;
           editor.storage.documentContext.filePath = filePath;
           if (refresh && (prevNoteId !== noteId || prevFilePath !== filePath)) {
+            refreshImageNodeViewSources(editor);
             scheduleSpellcheckRefresh(editor);
           }
         },

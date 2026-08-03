@@ -777,17 +777,17 @@ export function SettingsModal({ open, onClose, settings, isDarkMode, onUpdate, c
                     <div style={{ fontSize: "13px", color: tokens.colorNeutralForeground3, lineHeight: "1.6" }}>
                       {locale === "ko" ? (
                         <>
-                          · 같은 노트의 헤딩으로 이동하는 앵커 링크와 # 자동완성 추가<br />
-                          · ##, ### 입력으로 링크할 헤딩을 깊이별로 필터링<br />
-                          · 텍스트 메뉴에 링크 추가 명령 제공<br />
-                          · 중복 헤딩, 인코딩된 앵커, 빈 헤딩의 링크 처리 개선
+                          · 여러 창과 클라우드 동기화에서 삭제된 노트가 되살아나지 않도록 충돌 처리 강화<br />
+                          · 원격 삭제, 충돌 백업, 마지막 노트 전환의 데이터 보호와 동기화 안정성 개선<br />
+                          · 대용량 노트의 툴바, 상태 표시, 파일 감시, 이미지 렌더링 성능 개선<br />
+                          · 포커스 모드, 앵커 링크, 긴 표 메뉴와 Tiptap 호환성 문제 수정
                         </>
                       ) : (
                         <>
-                          · Added anchor links and # autocomplete for headings in the same note<br />
-                          · Filter link targets by heading depth with ## and ###<br />
-                          · Added the link command to the text context menu<br />
-                          · Improved links for duplicate headings, encoded anchors, and empty headings
+                          · Strengthened conflict handling so deleted notes stay deleted across windows and cloud sync<br />
+                          · Improved data safety for remote deletion, conflict backups, and last-note transitions<br />
+                          · Improved toolbar, status, file-watching, and image-rendering performance for large notes<br />
+                          · Fixed focus mode, anchor links, long-table menus, and Tiptap compatibility issues
                         </>
                       )}
                     </div>
