@@ -122,6 +122,8 @@ interface NoteRowProps {
   isSearching: boolean;
   snippet: SearchSnippet | null;
   noDrag: boolean;
+  /** Row lives in a flat, drag-inert list, so off-screen rendering can be skipped. */
+  skipOffscreen: boolean;
   groupId?: string;
   selectMode: boolean;
   locale: Locale;
@@ -146,7 +148,7 @@ const NoteRow = memo(function NoteRow(props: NoteRowProps) {
   const {
     doc, originalIndex, indented,
     isActive, isSelected, isContextTarget, isEditing, isNew,
-    isSearching, snippet, noDrag, groupId, selectMode,
+    isSearching, snippet, noDrag, skipOffscreen, groupId, selectMode,
     locale, notesSortOrder, styles,
     editingValue, inputRef, onEditingValueChange, onCommitRename, onCancelRename,
     onActivate, onContextMenu, onMoreClick, onPointerDown, onCheckboxClick,
@@ -160,6 +162,8 @@ const NoteRow = memo(function NoteRow(props: NoteRowProps) {
       data-group-id={groupId}
       className={mergeClasses(
         styles.docItemWrapper,
+        skipOffscreen && styles.docItemSkippable,
+        skipOffscreen && !!snippet && styles.docItemSkippableSnippet,
         selectMode && styles.docItemSelectRow,
         selectMode && isActive && styles.docItemWrapperActive,
         selectMode && !isActive && styles.docItemWrapperHoverable,
@@ -1032,9 +1036,15 @@ export function Sidebar({
     doc: NoteDoc,
     originalIndex: number,
     indented: boolean,
-    opts: { snippet?: SearchSnippet | null; noDrag?: boolean; paneActive?: boolean; groupId?: string } = {},
+    opts: {
+      snippet?: SearchSnippet | null;
+      noDrag?: boolean;
+      skipOffscreen?: boolean;
+      paneActive?: boolean;
+      groupId?: string;
+    } = {},
   ) => {
-    const { snippet = null, noDrag = false, paneActive = true, groupId } = opts;
+    const { snippet = null, noDrag = false, skipOffscreen = false, paneActive = true, groupId } = opts;
     const isActive = originalIndex === activeIndex;
     const isSelected = selectedNoteIds.has(doc.id);
     const isContextTarget = contextMenu?.type === "note" && contextMenu.noteId === doc.id;
@@ -1055,6 +1065,7 @@ export function Sidebar({
         isSearching={isSearching}
         snippet={snippet}
         noDrag={noDrag}
+        skipOffscreen={skipOffscreen}
         groupId={groupId}
         selectMode={selectMode}
         locale={locale}
@@ -1318,7 +1329,14 @@ export function Sidebar({
                   {noteItems.map((item) => (
                     <Fragment key={item.doc.id}>
                       {exitGhostsAt(null, item.doc.id)}
-                      {renderNoteItem(item.doc, item.originalIndex, item.indented, { snippet: item.snippet, paneActive: !inAllNotes })}
+                      {renderNoteItem(item.doc, item.originalIndex, item.indented, {
+                        snippet: item.snippet,
+                        // Only the flat variants of this list render every note
+                        // at once; the grouped view stays fully laid out so
+                        // drag-to-group measurement is unaffected.
+                        skipOffscreen: flatListMode,
+                        paneActive: !inAllNotes,
+                      })}
                     </Fragment>
                   ))}
                   {exitGhostsAt(null, null)}
@@ -1360,6 +1378,7 @@ export function Sidebar({
                   renderNoteItem(doc, originalIndex, false, {
                     snippet,
                     noDrag: true,
+                    skipOffscreen: true,
                     paneActive: inAllNotes,
                   })
                 ))

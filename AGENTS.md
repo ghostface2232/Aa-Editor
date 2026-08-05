@@ -81,6 +81,11 @@ Noten's privacy posture is "your notes never leave the disk," and it should stay
 - Soft delete moves the body to `.trash/<noteId>.md` and records `trashedAt` / `trashedFromPath` in its sidecar. Restore keeps note assets; permanent delete and the 14-day purge remove the body, metadata, and `.assets/<noteId>/` only after validating the note id.
 - Treat note ids read from cloud or legacy data as untrusted path segments. `isValidNoteId` must guard `.md`, `.meta`, `.assets`, `.trash`, and recursive-delete paths before filesystem operations.
 - Rename updates the note title metadata (and sets `customName`), not the underlying `.md` file path.
+- `[[Title]]` names its target by title alone, so duplicated titles need one agreed resolution rule, shared by every consumer:
+  - `findDocByTitle` orders candidates by `createdAt` ascending with the note id as tiebreaker — never by position in `docs`, which is the sidebar sort order (under the default `updated-desc`, editing one of two same-titled notes would otherwise silently re-point every link at it).
+  - When the link's own note is in a group, a candidate in that same group wins. `findDocsByTitle` exposes the full candidate list for ambiguity checks.
+  - The click handler resolves the target and hands `navigateToDoc` an **id**. Do not re-resolve a title on the App side; two lookups can disagree.
+  - `renameNote` skips back-link rewriting entirely when the OLD title was shared by another note: `[[Old]]` cannot be attributed to one target, and rewriting would re-point links belonging to the other note. It returns `RenameNoteResult.linkRewriteSkipped` and App.tsx surfaces the transient notice.
 - `customName` flag on a document means the user manually renamed it; auto-title derivation is permanently disabled for that document.
 - Pinned notes sort before unpinned notes, with the active sort order preserved within each partition. In groups, pinned notes stay at the top of that group; ungrouped pinned notes stay at the top of the ungrouped list.
 
@@ -168,6 +173,8 @@ Do not use old community-package APIs such as `editor.storage.markdown.getMarkdo
 - Preserve the existing visual language; do not introduce unrelated icon sets or browser-style controls.
 - All user-visible strings must go through the i18n system (`src/i18n.ts`). Do not hardcode locale checks inline except for the intentionally human-written bilingual release-note block in `SettingsModal.tsx`; keep other necessary locale branching inside centralized formatters/adapters.
 - Toolbar and status bar share the same scroll-driven visibility behavior unless `pinEditorToolbar` keeps both visible.
+- The status bar's line count, its caret row, and Go to Line all use the *logical line* defined in `src/utils/documentLines.ts`: one line per textblock plus one per newline inside it. Counting top-level blocks (`doc.childCount`) instead made a ten-item list and a twenty-line code block read as one line. Keep the three readouts on the same definition — the number the status bar shows must be the number Go to Line accepts. `buildLineIndex` is O(document), so cache it against `doc` identity (selection-only transactions reuse the node) and never rebuild it per caret move.
+- The sidebar's flat lists (All Notes, search results, colour filter) render every note at once and are drag-inert, so their rows carry `content-visibility: auto` (`docItemSkippable`). The grouped root view must stay fully laid out — drag-to-group and the FLIP animations measure real geometry.
 - Toolbar layout: Undo/Redo in column 1, formatting tools centered in column 2, Search and Go-to-line in column 3; when width < 740px the formatting tools wrap to row 2.
 - Browser/WebView shortcuts that would interfere with app behavior are blocked. This includes reload, DevTools, print, source view, caret browsing, zoom, and browser back/forward. Ctrl+R is unblocked when sidebar has focus (used for rename). Ctrl+S is swallowed (no-op) since autosave persists continuously — there is no manual-save shortcut.
 - The sidebar body slides between two panes: the root view (groups section + ungrouped notes section) and an "All Notes" drill-in — a flat list of every note (groups ignored, pinned first, current sort order). Clicking the "All Notes" entry atop the group list opens the drill-in; its header or `Escape` returns. Drag-to-group works only in the root view.
@@ -183,6 +190,7 @@ Do not use old community-package APIs such as `editor.storage.markdown.getMarkdo
 
 - `npm run tauri:dev` for normal development. It runs `scripts/prepare-helper.ps1` to prepare `src-tauri/resources/maintenance-helper.exe`, then starts `tauri dev`.
 - `scripts/prepare-helper.ps1 -Release` builds only a release-mode helper, without bundling.
+- `node scripts/gen-notes.mjs --out <dir> --count <n> [--groups <n>]` writes a synthetic notes directory (bodies + `.meta` sidecars + `.groups.json`) for measuring startup, sidebar, and search behavior at library sizes real test folders never reach. Development aid only; it refuses to write over an existing library without `--force`.
 - `scripts/build-release.ps1` is a **local smoke test only** — does not sign and is not what ships. It also fails at the Tauri step without `TAURI_SIGNING_PRIVATE_KEY` in env, because `bundle.createUpdaterArtifacts` is on. Real releases go through CI.
 - `npm run check` chains `typecheck` + `lint` + `test`; `.github/workflows/ci.yml` runs the same on every push and PR to `main`.
 
@@ -250,6 +258,9 @@ Production publishing requires `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVA
 - `src/utils/contextMenuRegistry.ts` — `closeContextMenu`, `createMenuShell`, `createMenuItem`, `createMenuSeparator`, `isDarkTheme`
 - `src/utils/clampMenuPosition.ts` — `clampMenuToViewport`
 - `src/utils/concurrency.ts` — `mapWithConcurrency`, the bounded fan-out used for startup body reads (an unbounded `Promise.all` over every note stampedes the IPC bridge and cloud-folder placeholder hydration)
+- `src/utils/documentLines.ts` — `buildLineIndex`, `posToLine`, `lineToPos`, `countWords`; the shared logical-line model behind the status bar and Go to Line
+- `src/utils/docsSignature.ts` — `sortSignature`, the allocation-free change detector gating App.tsx's re-sort effect
+- `src/utils/noteText.ts` — `normalizeNoteTitle` is the single definition of "same title" for wiki-link resolution, duplicate detection, and rename
 - `src/utils/clipboardText.ts` — `sliceToPlainText` (clipboard `text/plain` serialization)
 - `src/extensions/mermaidExport.ts` — self-contained SVG serialization and transparent-background PNG export for rendered Mermaid diagrams
 - `src/extensions/mermaidSourceMetadata.ts` — `embedMermaidSourceInSvg` / `extractMermaidSourceFromSvg`, storing the Mermaid source in the SVG `<metadata>` under a private namespace so export/import round-trips losslessly

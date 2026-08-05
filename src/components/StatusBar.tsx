@@ -3,6 +3,7 @@ import { makeStyles, tokens } from "@fluentui/react-components";
 import { t } from "../i18n";
 import type { Editor } from "@tiptap/react";
 import type { Locale } from "../hooks/useSettings";
+import { buildLineIndex, posToLine, type LineIndex } from "../utils/documentLines";
 import { MOTION_DURATION_SLOW } from "../styles/interactions";
 
 const useStyles = makeStyles({
@@ -47,34 +48,41 @@ const useStyles = makeStyles({
 });
 
 function useEditorStats(editor: Editor | null, enabled: boolean) {
-  const [stats, setStats] = useState({ charCount: 0, lineCount: 0, cursorRow: 1 });
+  const [stats, setStats] = useState({ charCount: 0, wordCount: 0, lineCount: 0, cursorRow: 1 });
 
   useEffect(() => {
     if (!editor || !enabled) return;
 
     // Keep the expensive document-wide counts keyed to ProseMirror's immutable
     // doc identity. Selection-only transactions reuse the same node, so cursor
-    // movement updates only the cheap row readout.
+    // movement reuses the cached line index and only re-resolves the caret.
     let frame: number | null = null;
     let lastDoc: Editor["state"]["doc"] | null = null;
-    let charCount = 0;
-    let lineCount = 0;
+    let lineIndex: LineIndex | null = null;
     const compute = () => {
       frame = null;
       const doc = editor.state.doc;
       if (doc !== lastDoc) {
         lastDoc = doc;
-        charCount = doc.textContent.length;
-        lineCount = doc.childCount;
+        // One walk produces lines, characters, and words. Counting words from
+        // `doc.textContent` instead would fuse each block's last word to the
+        // next block's first — a three-item list read as one word.
+        lineIndex = buildLineIndex(doc);
       }
-      const row = editor.state.selection.$head.index(0) + 1;
+      const row = lineIndex ? posToLine(lineIndex, editor.state.selection.head) : 1;
       setStats((prev) => {
         const next = {
-          charCount,
-          lineCount,
+          charCount: lineIndex?.chars ?? 0,
+          wordCount: lineIndex?.words ?? 0,
+          lineCount: lineIndex?.total ?? 0,
           cursorRow: row,
         };
-        if (prev.charCount === next.charCount && prev.lineCount === next.lineCount && prev.cursorRow === next.cursorRow) {
+        if (
+          prev.charCount === next.charCount
+          && prev.wordCount === next.wordCount
+          && prev.lineCount === next.lineCount
+          && prev.cursorRow === next.cursorRow
+        ) {
           return prev;
         }
         return next;
@@ -104,7 +112,7 @@ interface StatusBarProps {
 
 function StatusBarImpl({ editor, hidden, locale }: StatusBarProps) {
   const styles = useStyles();
-  const { charCount, lineCount, cursorRow } = useEditorStats(editor, !hidden);
+  const { charCount, wordCount, lineCount, cursorRow } = useEditorStats(editor, !hidden);
   const i = (key: Parameters<typeof t>[0]) => t(key, locale);
 
   return (
@@ -114,6 +122,7 @@ function StatusBarImpl({ editor, hidden, locale }: StatusBarProps) {
       <div className={hidden ? `${styles.statusBar} ${styles.statusBarHidden}` : styles.statusBar}>
         <div className={styles.left}>
           <span>{charCount.toLocaleString()}{i("status.chars")}</span>
+          <span>{wordCount.toLocaleString()}{i("status.words")}</span>
           <span>{lineCount.toLocaleString()}{i("status.lines")}</span>
         </div>
         <span>{i("status.cursorRow")}{cursorRow}{i("status.cursorRowSuffix")}</span>

@@ -14,14 +14,21 @@ import type {
   ResolvedPos,
 } from "@tiptap/pm/model";
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
-import type { NoteDoc } from "../hooks/useNotesLoader";
+import type { NoteDoc, NoteGroup } from "../hooks/useNotesLoader";
 import type { Locale } from "../hooks/useSettings";
+import { normalizeNoteTitle } from "../utils/noteText";
 
 export interface WikiLinkStorage {
   docs: NoteDoc[];
+  groups: NoteGroup[];
   locale: Locale;
   activeNoteId: string | null;
-  navigateToTitle: (title: string) => void;
+  /**
+   * Opens an already-resolved note. Takes an id, not a title: resolving the
+   * title a second time on the App side let a duplicated title open a
+   * different note than the one the click handler validated.
+   */
+  navigateToDoc: (docId: string) => void;
   createNoteWithTitle: (title: string) => Promise<string | null>;
 }
 
@@ -36,35 +43,89 @@ interface CompleteWikiLinkRun {
   to: number;
 }
 
-function normalizeTitle(value: string): string {
-  return value.normalize("NFC").trim().toLowerCase();
-}
-
 // Normalized-title lookup, cached per `docs` array reference. App.tsx swaps
 // storage.docs to a fresh array whenever the note list changes (App.tsx:398),
 // so keying the cache on array identity rebuilds exactly when the data changes.
 // This keeps findDocByTitle O(1): without it, decoration rebuilds re-normalized
 // every note's title for every wiki link on every keystroke — O(links × notes).
-const titleMapCache = new WeakMap<NoteDoc[], Map<string, NoteDoc>>();
+const titleMapCache = new WeakMap<NoteDoc[], Map<string, NoteDoc[]>>();
 
-function getTitleMap(docs: NoteDoc[]): Map<string, NoteDoc> {
+// Candidate order for a duplicated title. It must NOT depend on the order of
+// `docs`, which is the sidebar sort order: under the default `updated-desc`,
+// "first entry wins" meant simply editing one of two same-titled notes silently
+// re-pointed every `[[Title]]` at it, and changing the sort setting did the
+// same. Oldest note first, id as the tiebreaker, is stable against both.
+function compareTitleCandidates(a: NoteDoc, b: NoteDoc): number {
+  if (a.createdAt !== b.createdAt) return a.createdAt - b.createdAt;
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+}
+
+function getTitleMap(docs: NoteDoc[]): Map<string, NoteDoc[]> {
   let map = titleMapCache.get(docs);
   if (!map) {
     map = new Map();
-    // First occurrence wins, matching the previous Array.find() semantics.
     for (const doc of docs) {
-      const key = normalizeTitle(doc.fileName);
-      if (key && !map.has(key)) map.set(key, doc);
+      const key = normalizeNoteTitle(doc.fileName);
+      if (!key) continue;
+      const bucket = map.get(key);
+      if (bucket) bucket.push(doc);
+      else map.set(key, [doc]);
+    }
+    // Sorting per bucket keeps the common single-match case allocation-free in
+    // practice: buckets of one skip the comparator entirely.
+    for (const bucket of map.values()) {
+      if (bucket.length > 1) bucket.sort(compareTitleCandidates);
     }
     titleMapCache.set(docs, map);
   }
   return map;
 }
 
-export function findDocByTitle(docs: NoteDoc[], title: string): NoteDoc | null {
-  const needle = normalizeTitle(title);
-  if (!needle) return null;
-  return getTitleMap(docs).get(needle) ?? null;
+export interface TitleResolutionContext {
+  /** The note the link is written in — a same-group target wins ambiguity. */
+  fromNoteId?: string | null;
+  groups?: readonly NoteGroup[];
+}
+
+const EMPTY_BUCKET: readonly NoteDoc[] = [];
+
+// The cached bucket itself, for in-module read-only use. `findDocByTitle` runs
+// once per wiki link on every decoration rebuild, so it must not allocate.
+function titleBucket(docs: NoteDoc[], title: string): readonly NoteDoc[] {
+  const needle = normalizeNoteTitle(title);
+  if (!needle) return EMPTY_BUCKET;
+  return getTitleMap(docs).get(needle) ?? EMPTY_BUCKET;
+}
+
+/**
+ * Every note carrying `title`, in stable resolution order. Returns a copy:
+ * sorting or splicing the cached bucket would corrupt link resolution for
+ * every later lookup on this `docs` identity.
+ */
+export function findDocsByTitle(docs: NoteDoc[], title: string): NoteDoc[] {
+  return titleBucket(docs, title).slice();
+}
+
+export function findDocByTitle(
+  docs: NoteDoc[],
+  title: string,
+  context?: TitleResolutionContext,
+): NoteDoc | null {
+  const candidates = titleBucket(docs, title);
+  if (candidates.length <= 1) return candidates[0] ?? null;
+
+  // Ambiguous: prefer a note grouped with the one the link lives in, so a
+  // "Meeting notes" inside a project group links within that project.
+  const fromNoteId = context?.fromNoteId;
+  const groups = context?.groups;
+  if (fromNoteId && groups?.length) {
+    const ownGroup = groups.find((group) => group.noteIds.includes(fromNoteId));
+    if (ownGroup) {
+      const sameGroup = candidates.find((doc) => ownGroup.noteIds.includes(doc.id));
+      if (sameGroup) return sameGroup;
+    }
+  }
+  return candidates[0];
 }
 
 function getWikiLinkMarkTarget(mark: ProseMirrorMark): string {
@@ -205,9 +266,10 @@ const WikiLink = Mark.create<unknown, WikiLinkStorage>({
   addStorage(): WikiLinkStorage {
     return {
       docs: [],
+      groups: [],
       locale: "en",
       activeNoteId: null,
-      navigateToTitle: () => {},
+      navigateToDoc: () => {},
       createNoteWithTitle: async () => null,
     };
   },
@@ -340,12 +402,15 @@ const WikiLink = Mark.create<unknown, WikiLinkStorage>({
             const target = (wikiMark.attrs as WikiLinkAttributes).target ?? "";
             if (!target) return false;
 
-            const hit = findDocByTitle(extension.storage.docs, target);
+            const hit = findDocByTitle(extension.storage.docs, target, {
+              fromNoteId: extension.storage.activeNoteId,
+              groups: extension.storage.groups,
+            });
             if (!hit) {
               return false;
             }
 
-            extension.storage.navigateToTitle(target);
+            extension.storage.navigateToDoc(hit.id);
             event.preventDefault();
             return true;
           },

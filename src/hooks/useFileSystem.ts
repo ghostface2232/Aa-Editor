@@ -20,6 +20,7 @@ import type { MarkdownState } from "./useMarkdownState";
 import type { TiptapEditorHandle } from "../components/TiptapEditor";
 import type { Locale, NotesSortOrder } from "./useSettings";
 import { getDefaultDocumentTitle } from "../utils/documentTitle";
+import { normalizeNoteTitle } from "../utils/noteText";
 import { duplicateNoteAssets, removeNoteAssetDir } from "../utils/imageAssetUtils";
 import { emitDocCreated, emitDocDeleted, emitDocRenamed, emitGroupsUpdated, emitNoteColorUpdated, emitNotePinnedUpdated, emitTrashUpdated } from "./useWindowSync";
 import type { NoteColorId } from "../utils/noteColors";
@@ -64,6 +65,15 @@ function sortAndPersistDocs(
   // tag travels through to the crashLog so the failure is still traceable
   // to this entry point.
   void saveManifest(sortedDocs, activeId, groups, "sortAndPersistDocs").catch(() => {});
+}
+
+export interface RenameNoteResult {
+  renamed: boolean;
+  /**
+   * The title being replaced was shared by more than one note, so `[[Old]]`
+   * links were left alone — they cannot be attributed to a single target.
+   */
+  linkRewriteSkipped: boolean;
 }
 
 export function getCurrentMarkdown(
@@ -172,7 +182,8 @@ export interface FileSystemActions {
   deleteNotes: (noteIds: string[]) => Promise<string[]>;
   duplicateNote: (index: number) => Promise<void>;
   exportNote: (index: number) => Promise<void>;
-  renameNote: (index: number, newName: string) => void;
+  /** Resolves with whether wiki-link rewriting was skipped, so the caller can say so. */
+  renameNote: (index: number, newName: string) => Promise<RenameNoteResult>;
   toggleNotePinned: (index: number) => void;
   setNotesPinned: (noteIds: string[], pinned: boolean) => void;
   setNoteColor: (index: number, color: NoteColorId | null) => void;
@@ -956,15 +967,24 @@ export function useFileSystem(
     await writeTextFile(selected, content);
   }, [activeIndex, docs, locale, tiptapRef]);
 
-  const renameNote = useCallback(async (index: number, newName: string) => {
+  const renameNote = useCallback(async (index: number, newName: string): Promise<RenameNoteResult> => {
     const { docs: liveDocs, activeDocId, activeIndex: currentActiveIndex } = getLiveDocsSnapshot();
     const doc = liveDocs[index];
-    if (!doc) return;
+    if (!doc) return { renamed: false, linkRewriteSkipped: false };
 
     const trimmed = newName.trim();
-    if (!trimmed || trimmed === doc.fileName) return;
+    if (!trimmed || trimmed === doc.fileName) return { renamed: false, linkRewriteSkipped: false };
 
     const oldName = doc.fileName;
+    // `[[OldTitle]]` identifies its target by title alone, so when two notes
+    // share the old title there is no way to tell which one any given link
+    // meant. Rewriting them all would silently re-point links that belonged to
+    // the OTHER note, so the rename proceeds but the bodies are left untouched
+    // and the caller surfaces a notice. Wrong links beat corrupted ones.
+    const oldTitleKey = normalizeNoteTitle(oldName);
+    const oldTitleIsAmbiguous = oldTitleKey !== ""
+      && liveDocs.filter((entry) => normalizeNoteTitle(entry.fileName) === oldTitleKey).length > 1;
+
     // Case-insensitive match — bracketed form `[[OldTitle]]` is the fenced
     // delimiter, so we don't need word boundaries. Case-insensitive so
     // `[[foo]]`, `[[Foo]]`, `[[FOO]]` all update together, and the new
@@ -982,7 +1002,7 @@ export function useFileSystem(
     // body (isDirty false), silently splitting memory from disk. For the
     // active doc, captureAndQueueSave also disarms the debounce timer so it
     // can't fire mid-rename with the pre-rewrite editor content.
-    const candidates = liveDocs.filter(
+    const candidates = oldTitleIsAmbiguous ? [] : liveDocs.filter(
       (entry) => entry.id !== doc.id && entry.content.includes("[["),
     );
     const flushFailed = new Set<string>();
@@ -1086,6 +1106,7 @@ export function useFileSystem(
 
     sortAndPersistDocs(nextDocs, doc.id, notesSortOrder, locale, setDocs, setActiveIndex, groupsRef.current);
     emitDocRenamed(doc.id, doc.filePath, doc.filePath, trimmed);
+    return { renamed: true, linkRewriteSkipped: oldTitleIsAmbiguous };
   }, [captureAndQueueSaveRef, flushDocSaveRef, getLiveDocsSnapshot, notesSortOrder, setActiveIndex, setDocs, state, tiptapRef]);
 
   const toggleNotePinned = useCallback((index: number) => {

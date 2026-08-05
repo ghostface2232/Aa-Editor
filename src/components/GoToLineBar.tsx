@@ -1,8 +1,8 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { makeStyles, tokens } from "@fluentui/react-components";
 import { DismissRegular } from "@fluentui/react-icons";
 import type { Editor } from "@tiptap/core";
-import { TextSelection } from "@tiptap/pm/state";
+import { buildLineIndex, lineToPos, posToLine, selectionForLinePos } from "../utils/documentLines";
 import { scrollToPos } from "../utils/scrollToPos";
 import { t } from "../i18n";
 import type { Locale } from "../hooks/useSettings";
@@ -80,10 +80,32 @@ export function GoToLineBar({ editor, onClose, locale }: GoToLineBarProps) {
   const indicatorRef = useRef<HTMLDivElement | null>(null);
   const i = (key: Parameters<typeof t>[0]) => t(key, locale);
 
-  const totalLines = editor?.state.doc.childCount ?? 0;
-  const currentLine = editor
-    ? editor.state.doc.resolve(editor.state.selection.from).index(0) + 1
-    : 1;
+  // Track the document ourselves. The bar stays open while the user keeps
+  // typing, and App does not re-render per keystroke, so deriving the total
+  // from `editor.state.doc` during render alone would freeze it at whatever it
+  // was when the bar opened — and disagree with the status bar's count.
+  const [trackedDoc, setTrackedDoc] = useState(() => editor?.state.doc ?? null);
+  useEffect(() => {
+    if (!editor) {
+      setTrackedDoc(null);
+      return;
+    }
+    const sync = () => {
+      setTrackedDoc((prev) => (prev === editor.state.doc ? prev : editor.state.doc));
+    };
+    sync();
+    editor.on("transaction", sync);
+    return () => { editor.off("transaction", sync); };
+  }, [editor]);
+
+  // Same logical-line definition the status bar reports, so the number the user
+  // reads there is the number they can type here.
+  const lineIndex = useMemo(
+    () => (trackedDoc ? buildLineIndex(trackedDoc) : null),
+    [trackedDoc],
+  );
+  const totalLines = lineIndex?.total ?? 0;
+  const currentLine = lineIndex && editor ? posToLine(lineIndex, editor.state.selection.from) : 1;
 
   const [lineValue, setLineValue] = useState(String(currentLine));
 
@@ -138,16 +160,13 @@ export function GoToLineBar({ editor, onClose, locale }: GoToLineBarProps) {
     const parsed = Number.parseInt(trimmed, 10);
     if (!editor) return;
 
-    const total = editor.state.doc.childCount;
-    const clamped = Math.max(1, Math.min(total, parsed));
-    const targetIndex = clamped - 1;
-    let targetPos = 0;
-    for (let idx = 0; idx < targetIndex; idx++) {
-      targetPos += editor.state.doc.child(idx).nodeSize;
-    }
-    const pos = targetPos + 1;
+    // Rebuild rather than reuse the memo: the document can have changed since
+    // this bar rendered, and a stale index would resolve to the wrong position.
+    const index = buildLineIndex(editor.state.doc);
+    const clamped = Math.max(1, Math.min(index.total, parsed));
+    const pos = lineToPos(index, clamped);
     const { tr } = editor.state;
-    tr.setSelection(TextSelection.create(editor.state.doc, pos));
+    tr.setSelection(selectionForLinePos(editor.state.doc, pos));
     editor.view.dispatch(tr);
     // scrollIntoView requires focus, so we drive scroll manually via scrollToPos
     scrollToPos(editor.view.dom, () => editor.view.coordsAtPos(pos));

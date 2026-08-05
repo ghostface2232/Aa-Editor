@@ -59,6 +59,7 @@ import { recoverPendingMigration } from "./utils/migrationCleanup";
 import { colorHex } from "./utils/noteColors";
 import { clampMenuToViewport } from "./utils/clampMenuPosition";
 import { clearRenderableImageSourceCache } from "./utils/imageAssetUtils";
+import { sortSignature } from "./utils/docsSignature";
 import { useFileWatcher } from "./hooks/useFileWatcher";
 import { createReconcileState } from "./utils/reconcileFolder";
 import { useWindowSync } from "./hooks/useWindowSync";
@@ -566,16 +567,13 @@ function App() {
     if (!tiptapEditor?.storage.wikiLink) return;
     const storage = tiptapEditor.storage.wikiLink;
     storage.docs = docs;
+    storage.groups = groups;
     storage.locale = locale;
     storage.activeNoteId = docs[activeIndex]?.id ?? null;
-    storage.navigateToTitle = (title: string) => {
-      const needle = title.normalize("NFC").trim().toLowerCase();
-      if (!needle) return;
-      const idx = docs.findIndex(
-        (doc) => doc.fileName.normalize("NFC").toLowerCase() === needle,
-      );
+    storage.navigateToDoc = (docId: string) => {
+      const idx = docs.findIndex((doc) => doc.id === docId);
       if (idx < 0) return;
-      const targetGroup = groups.find((g) => g.noteIds.includes(docs[idx].id));
+      const targetGroup = groups.find((g) => g.noteIds.includes(docId));
       if (targetGroup?.collapsed) {
         noteGroups.toggleGroupCollapsed(targetGroup.id);
       }
@@ -603,10 +601,7 @@ function App() {
   useEffect(() => {
     if (!settingsLoaded || docs.length < 2) return;
 
-    let sig = `${settings.notesSortOrder}|${locale}|`;
-    for (const d of docs) {
-      sig += `${d.id}|${d.fileName}|${d.updatedAt}|${d.createdAt}|${d.pinned ? 1 : 0}`;
-    }
+    const sig = sortSignature(docs, settings.notesSortOrder, locale);
     if (sig === lastSortSignatureRef.current) return;
     lastSortSignatureRef.current = sig;
 
@@ -1017,6 +1012,17 @@ function App() {
     void updateSetting("outlinePanelOpen", false);
   }, [updateSetting]);
 
+  // A rename whose old title was shared by another note leaves `[[Old]]` links
+  // alone, because they cannot be attributed to one target. Say so — silently
+  // stale links would look like a broken rename.
+  const handleRenameNote = useCallback((index: number, newName: string) => {
+    void fs.renameNote(index, newName).then((result) => {
+      if (result.linkRewriteSkipped) {
+        showEditorNotice(t("wiki.renameAmbiguous", locale));
+      }
+    });
+  }, [fs.renameNote, showEditorNotice, locale]);
+
   // Outline jump: place the clicked heading near the top of the scroll
   // container instead of wherever scrollIntoView happens to leave it.
   const outlineScrollCancelRef = useRef<(() => void) | null>(null);
@@ -1404,7 +1410,7 @@ function App() {
 
               onDuplicateNote={fs.duplicateNote}
               onExportNote={fs.exportNote}
-              onRenameNote={fs.renameNote}
+              onRenameNote={handleRenameNote}
               onToggleNotePinned={fs.toggleNotePinned}
               onSetNoteColor={fs.setNoteColor}
               onSetNotesColor={fs.setNotesColor}
