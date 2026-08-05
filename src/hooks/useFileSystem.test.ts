@@ -943,6 +943,76 @@ describe("useFileSystem — renameNote partial-failure", () => {
   });
 });
 
+// renameNote — duplicate titles: `[[Old]]` names its target by title alone, so
+// when two notes share the old title no link can be attributed to one of them.
+// Rewriting anyway would re-point links that belonged to the other note.
+
+describe("useFileSystem — renameNote with a duplicated title", () => {
+  it("leaves every back-link untouched and reports the skip", async () => {
+    const target = makeDoc("target", { fileName: "Dup", customName: true });
+    const twin = makeDoc("twin", { fileName: "Dup", customName: true });
+    const linker = makeDoc("linker", { content: "see [[Dup]]" });
+    readMock.mockImplementation(async (path: string) => (
+      path === "/notes/linker.md" ? "see [[Dup]]" : ""
+    ));
+
+    const { result, setDocs } = renderFs({ docs: [target, twin, linker] });
+
+    let outcome: Awaited<ReturnType<typeof result.current.renameNote>> | undefined;
+    await act(async () => {
+      outcome = await result.current.renameNote(0, "New");
+    });
+
+    expect(outcome).toEqual({ renamed: true, linkRewriteSkipped: true });
+
+    const lastDocs = setDocs.mock.calls[setDocs.mock.calls.length - 1][0] as NoteDoc[];
+    expect(lastDocs.find((d) => d.id === "target")!.fileName).toBe("New");
+    // The link still reads [[Dup]] — it may well have meant the twin.
+    expect(lastDocs.find((d) => d.id === "linker")!.content).toBe("see [[Dup]]");
+    expect(writeMock).not.toHaveBeenCalledWith("/notes/linker.md", expect.anything());
+  });
+
+  it("still rewrites back-links when the old title is unique", async () => {
+    const target = makeDoc("target", { fileName: "Unique", customName: true });
+    const other = makeDoc("other", { fileName: "Something else", customName: true });
+    const linker = makeDoc("linker", { content: "see [[Unique]]" });
+    readMock.mockImplementation(async (path: string) => (
+      path === "/notes/linker.md" ? "see [[Unique]]" : ""
+    ));
+
+    const { result, setDocs } = renderFs({ docs: [target, other, linker] });
+
+    let outcome: Awaited<ReturnType<typeof result.current.renameNote>> | undefined;
+    await act(async () => {
+      outcome = await result.current.renameNote(0, "New");
+    });
+
+    expect(outcome).toEqual({ renamed: true, linkRewriteSkipped: false });
+    const lastDocs = setDocs.mock.calls[setDocs.mock.calls.length - 1][0] as NoteDoc[];
+    expect(lastDocs.find((d) => d.id === "linker")!.content).toBe("see [[New]]");
+  });
+
+  it("compares titles case- and whitespace-insensitively when detecting duplicates", async () => {
+    const target = makeDoc("target", { fileName: "Dup", customName: true });
+    const twin = makeDoc("twin", { fileName: "  dup ", customName: true });
+    const linker = makeDoc("linker", { content: "see [[Dup]]" });
+    readMock.mockImplementation(async (path: string) => (
+      path === "/notes/linker.md" ? "see [[Dup]]" : ""
+    ));
+
+    const { result, setDocs } = renderFs({ docs: [target, twin, linker] });
+
+    let outcome: Awaited<ReturnType<typeof result.current.renameNote>> | undefined;
+    await act(async () => {
+      outcome = await result.current.renameNote(0, "New");
+    });
+
+    expect(outcome?.linkRewriteSkipped).toBe(true);
+    const lastDocs = setDocs.mock.calls[setDocs.mock.calls.length - 1][0] as NoteDoc[];
+    expect(lastDocs.find((d) => d.id === "linker")!.content).toBe("see [[Dup]]");
+  });
+});
+
 // renameNote — autosave coordination: every doc we may rewrite gets its
 // pending/in-flight save flushed BEFORE the rewrite write, so a late doSave
 // can never land after the rewrite and revert it on disk.

@@ -99,6 +99,10 @@ const dict = {
 
   "wiki.createNew": { en: "Create new note", ko: "새 노트 만들기" },
   "wiki.hover.edit": { en: "Edit wiki link", ko: "위키 링크 편집" },
+  "wiki.renameAmbiguous": {
+    en: "Links kept as they were — another note shares the old title",
+    ko: "같은 제목의 노트가 있어 링크는 바꾸지 않았습니다",
+  },
 
   "image.save": { en: "Save image", ko: "이미지 저장" },
   "image.copy": { en: "Copy image", ko: "이미지 복사" },
@@ -166,6 +170,7 @@ const dict = {
   "sidebar.colorFilterChip.clear": { en: "Clear filter",  ko: "필터 해제" },
 
   "status.chars": { en: " chars", ko: " 자" },
+  "status.words": { en: " words", ko: " 단어" },
   "status.lines": { en: " lines", ko: " 줄" },
   "status.cursorRow": { en: "Line ", ko: "" },
   "status.cursorRowSuffix": { en: "", ko: "행" },

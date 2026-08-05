@@ -6,10 +6,15 @@ import { Node as PMNodeClass } from "@tiptap/pm/model";
 import type { Node as PMNode, Mark as PMMark } from "@tiptap/pm/model";
 import type { NoteDoc } from "../hooks/useNotesLoader";
 import { createFastMarked } from "./fastMarkdownLexer";
-import WikiLink, { findDocByTitle, refreshWikiLinkDecorations } from "./WikiLink";
+import WikiLink, { findDocByTitle, findDocsByTitle, refreshWikiLinkDecorations } from "./WikiLink";
 
 function doc(fileName: string): NoteDoc {
   return { id: fileName, fileName } as unknown as NoteDoc;
+}
+
+/** Note with an explicit id and creation time, for duplicate-title resolution. */
+function dated(id: string, fileName: string, createdAt: number): NoteDoc {
+  return { id, fileName, createdAt } as unknown as NoteDoc;
 }
 
 function makeEditor(content: string, docs: NoteDoc[]) {
@@ -55,11 +60,46 @@ describe("findDocByTitle", () => {
     expect(findDocByTitle(docs, "Café")?.fileName).toBe("Café");
   });
 
-  it("returns the first occurrence on duplicate titles", () => {
-    const first = doc("Dup");
-    const second = doc("Dup");
-    const found = findDocByTitle([first, second], "dup");
-    expect(found).toBe(first);
+  it("resolves duplicate titles by age, not by position in the docs array", () => {
+    // `docs` is in sidebar sort order, so "first entry wins" meant editing one
+    // of two same-titled notes (default sort: updated-desc) silently re-pointed
+    // every [[Dup]] at it. Oldest-created wins instead, which no sort setting
+    // and no edit can change.
+    const older = dated("older", "Dup", 100);
+    const newer = dated("newer", "Dup", 200);
+    expect(findDocByTitle([newer, older], "dup")).toBe(older);
+    expect(findDocByTitle([older, newer], "dup")).toBe(older);
+  });
+
+  it("breaks a same-timestamp tie deterministically by id", () => {
+    const a = dated("a-id", "Dup", 100);
+    const b = dated("b-id", "Dup", 100);
+    expect(findDocByTitle([b, a], "dup")).toBe(a);
+    expect(findDocByTitle([a, b], "dup")).toBe(a);
+  });
+
+  it("prefers a candidate grouped with the note the link lives in", () => {
+    const older = dated("older", "Dup", 100);
+    const newer = dated("newer", "Dup", 200);
+    const source = dated("source", "Source", 50);
+    const groups = [
+      { id: "g1", name: "Project", noteIds: ["source", "newer"], collapsed: false, createdAt: 1 },
+      { id: "g2", name: "Other", noteIds: ["older"], collapsed: false, createdAt: 1 },
+    ];
+    const docs = [older, newer, source];
+
+    expect(findDocByTitle(docs, "Dup", { fromNoteId: "source", groups })).toBe(newer);
+    // No group context, or a source note outside every group, keeps the
+    // age-based answer.
+    expect(findDocByTitle(docs, "Dup")).toBe(older);
+    expect(findDocByTitle(docs, "Dup", { fromNoteId: "loose", groups })).toBe(older);
+  });
+
+  it("lists every candidate for a title in resolution order", () => {
+    const older = dated("older", "Dup", 100);
+    const newer = dated("newer", "Dup", 200);
+    expect(findDocsByTitle([newer, older], "dup").map((d) => d.id)).toEqual(["older", "newer"]);
+    expect(findDocsByTitle([newer, older], "missing")).toEqual([]);
   });
 
   it("reflects an updated docs array reference (cache keyed by identity)", () => {

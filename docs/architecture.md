@@ -17,7 +17,7 @@ This document is the high-level map of the current repository. Keep it concise: 
 | `bootstrapper/` | Windows installer bootstrapper that embeds and launches the NSIS payload. |
 | `maintenance-helper/` | Windows uninstall/maintenance helper bundled with the app. |
 | `noten-splash-ui/` | Shared native Windows splash/progress UI used by the helper executables. |
-| `scripts/` | Helper preparation, local release smoke build, and version synchronization scripts. |
+| `scripts/` | Helper preparation, local release smoke build, version synchronization, and the synthetic notes-directory generator used for scale measurements. |
 | `public/` | Static app icon and bundled editor fonts. |
 | `docs/` | Maintained project documentation and dated review reports. |
 | `.github/workflows/` | Windows CI and tag-triggered signed release automation. |

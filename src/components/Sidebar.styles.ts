@@ -213,6 +213,22 @@ export const useStyles = makeStyles({
       pointerEvents: "auto",
     },
   },
+  // Flat lists (All Notes, search results, colour filter) are the only views
+  // that render every note at once, and they are also the only ones where drag
+  // is inert — so skipping layout/paint for off-screen rows there costs nothing
+  // and keeps a large library scrollable. `auto` lets the browser remember each
+  // row's real height, so rows with a search snippet don't jump the scrollbar.
+  docItemSkippable: {
+    contentVisibility: "auto",
+    containIntrinsicSize: "auto 34px",
+  },
+  // A search hit renders title + snippet, so it is roughly 1.7× a plain row.
+  // `auto` only remembers a height after the row has been rendered once, so
+  // the fallback has to be close or the first scroll through a long result
+  // list visibly resizes the scroll thumb.
+  docItemSkippableSnippet: {
+    containIntrinsicSize: "auto 58px",
+  },
   docItemNew: {
     animationName: "docSlideIn",
     animationDuration: MOTION_DURATION_SLOWER,

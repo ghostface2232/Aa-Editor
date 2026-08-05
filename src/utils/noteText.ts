@@ -8,6 +8,15 @@ export function getFileBaseName(filePath: string): string {
   return filePath.replace(/\\/g, "/").split("/").pop() ?? "";
 }
 
+/**
+ * Canonical form for comparing note titles. Wiki-link resolution, duplicate-
+ * title detection, and rename rewrites must all agree on what "the same title"
+ * means, so they share this one definition.
+ */
+export function normalizeNoteTitle(value: string): string {
+  return value.normalize("NFC").trim().toLowerCase();
+}
+
 export function stripInlineMarkdown(text: string): string {
   let s = text;
   s = s.replace(/\[\[([^\[\]\n]+)\]\]/g, "$1");

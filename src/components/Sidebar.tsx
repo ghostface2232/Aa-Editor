@@ -122,6 +122,8 @@ interface NoteRowProps {
   isSearching: boolean;
   snippet: SearchSnippet | null;
   noDrag: boolean;
+  /** Row lives in a flat, drag-inert list, so off-screen rendering can be skipped. */
+  skipOffscreen: boolean;
   groupId?: string;
   selectMode: boolean;
   locale: Locale;
@@ -146,7 +148,7 @@ const NoteRow = memo(function NoteRow(props: NoteRowProps) {
   const {
     doc, originalIndex, indented,
     isActive, isSelected, isContextTarget, isEditing, isNew,
-    isSearching, snippet, noDrag, groupId, selectMode,
+    isSearching, snippet, noDrag, skipOffscreen, groupId, selectMode,
     locale, notesSortOrder, styles,
     editingValue, inputRef, onEditingValueChange, onCommitRename, onCancelRename,
     onActivate, onContextMenu, onMoreClick, onPointerDown, onCheckboxClick,
@@ -160,6 +162,8 @@ const NoteRow = memo(function NoteRow(props: NoteRowProps) {
       data-group-id={groupId}
       className={mergeClasses(
         styles.docItemWrapper,
+        skipOffscreen && styles.docItemSkippable,
+        skipOffscreen && !!snippet && styles.docItemSkippableSnippet,
         selectMode && styles.docItemSelectRow,
         selectMode && isActive && styles.docItemWrapperActive,
         selectMode && !isActive && styles.docItemWrapperHoverable,
@@ -672,15 +676,46 @@ export function Sidebar({
   }, []);
 
   const sidebarActiveRef = useRef(false);
+  // The note whose row last took the pointer or keyboard focus, or null when
+  // the activation landed on sidebar chrome or empty space. Stored as an id,
+  // not an index: sorting can move a row between activation and keypress.
+  //
+  // Shortcuts target this row rather than the open note. With focus alone able
+  // to activate the sidebar, Tab-ing to a row and pressing Delete would
+  // otherwise delete whatever note happened to be open — the row the user is
+  // looking at is the one they mean. Clicking a row outside select mode also
+  // opens it, so this changes nothing for mouse users.
+  const pointedNoteIdRef = useRef<string | null>(null);
   useEffect(() => {
-    const onMouseDown = (e: MouseEvent) => {
+    // Both pointer and focus activate the sidebar. Tracking mousedown alone
+    // left every sidebar shortcut dead for keyboard-only users, who reach the
+    // note list with Tab and never emit a mousedown (WCAG 2.1.1).
+    const activateFrom = (target: EventTarget | null) => {
+      const node = target instanceof Node ? target : null;
       const sidebar = document.querySelector("[data-sidebar]");
-      const active = !!sidebar?.contains(e.target as Node);
+      const active = !!node && !!sidebar?.contains(node);
       sidebarActiveRef.current = active;
+      const element = node instanceof Element ? node : node?.parentElement ?? null;
+      const row = active ? element?.closest("[data-note-id]") ?? null : null;
+      pointedNoteIdRef.current = row?.getAttribute("data-note-id") ?? null;
       document.documentElement.dataset.sidebarActive = active ? "1" : "";
     };
+    const onMouseDown = (e: MouseEvent) => activateFrom(e.target);
+    const onFocusIn = (e: FocusEvent) => {
+      // Focus moving out of the sidebar to document.body (e.g. a menu closing)
+      // must not silently deactivate a sidebar the user is still working in.
+      const sidebar = document.querySelector("[data-sidebar]");
+      const node = e.target instanceof Node ? e.target : null;
+      if (!node || node === document.body) return;
+      if (!sidebar?.contains(node) && !sidebarActiveRef.current) return;
+      activateFrom(e.target);
+    };
     window.addEventListener("mousedown", onMouseDown, true);
-    return () => window.removeEventListener("mousedown", onMouseDown, true);
+    window.addEventListener("focusin", onFocusIn, true);
+    return () => {
+      window.removeEventListener("mousedown", onMouseDown, true);
+      window.removeEventListener("focusin", onFocusIn, true);
+    };
   }, []);
 
   useEffect(() => {
@@ -697,19 +732,36 @@ export function Sidebar({
         return;
       }
 
+      // Target precedence: the right-clicked note, else the row the pointer or
+      // keyboard focus last landed on, else the open note.
+      //
       // While a note context menu is open, its items display these shortcut
       // hints next to actions for the RIGHT-CLICKED note. Acting on
       // activeIndex here would teach the wrong mental model ("Delete │
       // Delete" shown for note B, keypress deletes open note A) — so route
       // the shortcut to the menu's target note and close the menu, exactly
-      // as if the item had been clicked.
+      // as if the item had been clicked. A row that took focus without being
+      // opened (Tab traversal, or a click in select mode) has the same
+      // problem, so it routes the same way.
+      //
+      // Ids resolve to indices here, at keypress time: a note whose row was
+      // pointed at and has since been deleted or filtered out resolves to
+      // nothing, and the shortcut falls back rather than hitting a stale row.
       let targetIndex = activeIndex;
       let viaMenu = false;
+      let viaPointedRow = false;
       if (contextMenu?.type === "note" && contextMenu.noteId) {
         const idx = docs.findIndex((d) => d.id === contextMenu.noteId);
         if (idx >= 0) {
           targetIndex = idx;
           viaMenu = true;
+        }
+      }
+      if (!viaMenu && pointedNoteIdRef.current) {
+        const idx = docs.findIndex((d) => d.id === pointedNoteIdRef.current);
+        if (idx >= 0) {
+          targetIndex = idx;
+          viaPointedRow = true;
         }
       }
       const closeMenuIfRouted = () => { if (viaMenu) setContextMenu(null); };
@@ -744,6 +796,12 @@ export function Sidebar({
         navigator.clipboard.writeText(content).catch(() => {});
         closeMenuIfRouted();
       } else if (e.key === "Delete" && !ctrl && !e.altKey && !e.shiftKey) {
+        // Deleting is the one shortcut here that destroys work, so it needs a
+        // note the user actually pointed at: a right-clicked note (viaMenu) or
+        // a row that took the last pointer/focus. Sidebar chrome, empty space,
+        // and a pointed row that no longer exists all leave Delete inert
+        // instead of falling back to whatever note happens to be open.
+        if (!viaMenu && !viaPointedRow) return;
         e.preventDefault();
         onDeleteNote(targetIndex);
         closeMenuIfRouted();
@@ -1002,9 +1060,15 @@ export function Sidebar({
     doc: NoteDoc,
     originalIndex: number,
     indented: boolean,
-    opts: { snippet?: SearchSnippet | null; noDrag?: boolean; paneActive?: boolean; groupId?: string } = {},
+    opts: {
+      snippet?: SearchSnippet | null;
+      noDrag?: boolean;
+      skipOffscreen?: boolean;
+      paneActive?: boolean;
+      groupId?: string;
+    } = {},
   ) => {
-    const { snippet = null, noDrag = false, paneActive = true, groupId } = opts;
+    const { snippet = null, noDrag = false, skipOffscreen = false, paneActive = true, groupId } = opts;
     const isActive = originalIndex === activeIndex;
     const isSelected = selectedNoteIds.has(doc.id);
     const isContextTarget = contextMenu?.type === "note" && contextMenu.noteId === doc.id;
@@ -1025,6 +1089,7 @@ export function Sidebar({
         isSearching={isSearching}
         snippet={snippet}
         noDrag={noDrag}
+        skipOffscreen={skipOffscreen}
         groupId={groupId}
         selectMode={selectMode}
         locale={locale}
@@ -1288,7 +1353,14 @@ export function Sidebar({
                   {noteItems.map((item) => (
                     <Fragment key={item.doc.id}>
                       {exitGhostsAt(null, item.doc.id)}
-                      {renderNoteItem(item.doc, item.originalIndex, item.indented, { snippet: item.snippet, paneActive: !inAllNotes })}
+                      {renderNoteItem(item.doc, item.originalIndex, item.indented, {
+                        snippet: item.snippet,
+                        // Only the flat variants of this list render every note
+                        // at once; the grouped view stays fully laid out so
+                        // drag-to-group measurement is unaffected.
+                        skipOffscreen: flatListMode,
+                        paneActive: !inAllNotes,
+                      })}
                     </Fragment>
                   ))}
                   {exitGhostsAt(null, null)}
@@ -1330,6 +1402,7 @@ export function Sidebar({
                   renderNoteItem(doc, originalIndex, false, {
                     snippet,
                     noDrag: true,
+                    skipOffscreen: true,
                     paneActive: inAllNotes,
                   })
                 ))

@@ -3,7 +3,9 @@ use std::fs;
 use std::io;
 use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{path::BaseDirectory, AppHandle, Manager, Runtime};
 use windows_sys::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND};
 use windows_sys::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD};
@@ -33,26 +35,67 @@ fn toggle_devtools<R: Runtime>(window: tauri::WebviewWindow<R>) {
     }
 }
 
+// Headless Edge occasionally wedges (GPU/profile lock, another instance mid-
+// shutdown). Without a bound the command future never resolves and the export
+// UI waits forever, so cap the run and kill the child instead.
+const PDF_RENDER_TIMEOUT: Duration = Duration::from_secs(90);
+const PDF_POLL_INTERVAL: Duration = Duration::from_millis(50);
+
+// Per-invocation temp file stem. A fixed name let two windows exporting at the
+// same time overwrite each other's HTML, so one PDF rendered the other note's
+// body. Process id plus a monotonic counter keeps concurrent exports apart
+// within a process and across the multi-window instances of the app.
+fn print_temp_stem() -> String {
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    format!("noten_print_{}_{}_{}", std::process::id(), nanos, seq)
+}
+
 #[tauri::command]
 async fn print_to_pdf(html: String, output_path: String) -> Result<(), String> {
     let temp_dir = std::env::temp_dir();
-    let temp_html = temp_dir.join("noten_print_preview.html");
+    let stem = print_temp_stem();
+    let temp_html = temp_dir.join(format!("{stem}.html"));
+    // Edge's stderr goes to a file rather than a pipe: nothing reads the pipe
+    // while we poll for exit, so a chatty child could fill the buffer, block,
+    // and be killed by the timeout below.
+    let temp_err = temp_dir.join(format!("{stem}.log"));
+
     fs::write(&temp_html, &html).map_err(|e| format!("Failed to write temp HTML: {e}"))?;
+
+    // Every early return past this point must clear the temp files — they hold
+    // the full note body in plain text.
+    let cleanup = || {
+        let _ = fs::remove_file(&temp_html);
+        let _ = fs::remove_file(&temp_err);
+    };
 
     let edge_paths = [
         r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
         r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
     ];
 
-    let edge_path = edge_paths
+    let Some(edge_path) = edge_paths
         .iter()
         .find(|p| std::path::Path::new(p).exists())
-        .ok_or_else(|| "Microsoft Edge not found".to_string())?;
+    else {
+        cleanup();
+        return Err("Microsoft Edge not found".to_string());
+    };
 
     let temp_html_url = format!("file:///{}", temp_html.to_string_lossy().replace('\\', "/"));
     let print_arg = format!("--print-to-pdf={}", output_path);
 
-    let output = Command::new(edge_path)
+    let stderr_sink = match fs::File::create(&temp_err) {
+        Ok(file) => Stdio::from(file),
+        Err(_) => Stdio::null(),
+    };
+
+    let spawned = Command::new(edge_path)
         .args([
             "--headless",
             "--disable-gpu",
@@ -61,13 +104,46 @@ async fn print_to_pdf(html: String, output_path: String) -> Result<(), String> {
             &print_arg,
             &temp_html_url,
         ])
-        .output()
-        .map_err(|e| format!("Failed to run Edge: {e}"))?;
+        .stdout(Stdio::null())
+        .stderr(stderr_sink)
+        .spawn();
 
-    let _ = fs::remove_file(&temp_html);
+    let mut child = match spawned {
+        Ok(child) => child,
+        Err(e) => {
+            cleanup();
+            return Err(format!("Failed to run Edge: {e}"));
+        }
+    };
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
+    let deadline = Instant::now() + PDF_RENDER_TIMEOUT;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    cleanup();
+                    return Err(format!(
+                        "Edge PDF generation timed out after {}s",
+                        PDF_RENDER_TIMEOUT.as_secs()
+                    ));
+                }
+                std::thread::sleep(PDF_POLL_INTERVAL);
+            }
+            Err(e) => {
+                let _ = child.kill();
+                cleanup();
+                return Err(format!("Failed to wait for Edge: {e}"));
+            }
+        }
+    };
+
+    let stderr = fs::read_to_string(&temp_err).unwrap_or_default();
+    cleanup();
+
+    if !status.success() {
         return Err(format!("Edge PDF generation failed: {stderr}"));
     }
 
@@ -246,11 +322,19 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::wide_null;
+    use super::{print_temp_stem, wide_null};
 
     #[test]
     fn wide_null_encodes_utf16_with_one_terminator() {
         assert_eq!(wide_null("Theme"), vec![84, 104, 101, 109, 101, 0]);
         assert_eq!(wide_null("테마").last(), Some(&0));
+    }
+
+    #[test]
+    fn print_temp_stem_is_unique_per_call() {
+        let a = print_temp_stem();
+        let b = print_temp_stem();
+        assert_ne!(a, b);
+        assert!(a.starts_with("noten_print_"));
     }
 }
