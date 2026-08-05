@@ -9,6 +9,7 @@ import { TableRow } from "@tiptap/extension-table-row";
 import { TableCell } from "@tiptap/extension-table-cell";
 import { TableHeader } from "@tiptap/extension-table-header";
 import { NodeSelection, TextSelection } from "@tiptap/pm/state";
+import { Schema } from "@tiptap/pm/model";
 import {
   buildLineIndex,
   countWords,
@@ -66,14 +67,18 @@ describe("buildLineIndex", () => {
     expect(lineIndexOf("<p>a</p><hr><p>b</p>").total).toBe(3);
   });
 
-  it("exposes block starts that match cumulative node sizes", () => {
-    const editor = makeEditor("<p>one</p><p>two</p><p>three</p>");
+  it("exposes block starts in document order, matching cumulative node sizes", () => {
+    const editor = makeEditor("<p>one</p><ul><li><p>two</p></li></ul><p>three</p>");
     const index = buildLineIndex(editor.state.doc);
+    const expected: number[] = [];
     let pos = 0;
-    editor.state.doc.forEach((node, offset) => {
-      expect(index.starts[index.starts.indexOf(offset)]).toBe(offset);
+    editor.state.doc.forEach((node) => {
+      expected.push(pos);
       pos += node.nodeSize;
     });
+    // Compared positionally, not by membership: `posToLine` indexes `starts`
+    // by block index, so a reversed or shuffled array must fail here.
+    expect(index.starts).toEqual(expected);
     expect(pos).toBe(editor.state.doc.content.size);
   });
 });
@@ -244,10 +249,15 @@ describe("selectionForLinePos", () => {
     expect(selection).toBeInstanceOf(NodeSelection);
     expect((selection as NodeSelection).node.type.name).toBe("horizontalRule");
 
-    const before = editor.state.doc.childCount;
+    // Typing replaces the selected rule, the way clicking it and typing does.
+    // The old TextSelection path instead left the rule in place and inserted a
+    // paragraph before it, so assert the resulting shape, not just the count.
     editor.view.dispatch(editor.state.tr.setSelection(selection));
     editor.commands.insertContent("X");
-    expect(editor.state.doc.childCount).toBe(before);
+    const types = [] as string[];
+    editor.state.doc.forEach((node) => types.push(node.type.name));
+    expect(types).toEqual(["paragraph", "paragraph", "paragraph"]);
+    expect(editor.state.doc.child(1).textContent).toBe("X");
   });
 
   it("returns a plain text selection for ordinary lines", () => {
@@ -292,6 +302,33 @@ describe("character and word counts", () => {
     expect(buildLineIndex(editor.state.doc).words).toBe(5);
   });
 
+  it("counts an inline atom's leafText, keeping chars aligned with textContent", () => {
+    // No node in the app's schema declares `leafText` today, so this guards the
+    // invariant against a future one rather than current behavior. Built on a
+    // raw ProseMirror schema because Tiptap's node builder has no passthrough
+    // for that spec field.
+    const schema = new Schema({
+      nodes: {
+        doc: { content: "block+" },
+        paragraph: { group: "block", content: "inline*" },
+        text: { group: "inline" },
+        emoji: { group: "inline", inline: true, atom: true, leafText: () => ":)" },
+      },
+    });
+    const doc = schema.node("doc", null, [
+      schema.node("paragraph", null, [
+        schema.text("a "),
+        schema.node("emoji"),
+        schema.text(" b"),
+      ]),
+    ]);
+
+    expect(doc.textContent).toBe("a :) b");
+    const index = buildLineIndex(doc);
+    expect(index.chars).toBe(doc.textContent.length);
+    expect(index.words).toBe(3);
+  });
+
   it("reports characters identical to doc.textContent.length", () => {
     for (const [name, html] of Object.entries(NODE_CASES)) {
       const editor = makeEditor(html);
@@ -301,10 +338,47 @@ describe("character and word counts", () => {
     }
   });
 
-  it("counts nothing for an empty document", () => {
+  it("counts nothing for a document with no text", () => {
+    // Tiptap normalizes "" into a single empty paragraph — the schema is
+    // `block+`, so a truly childless doc is unreachable through the editor.
     const index = lineIndexOf("");
+    expect(index.doc.childCount).toBe(1);
     expect(index.words).toBe(0);
     expect(index.chars).toBe(0);
+    expect(index.total).toBe(1);
+  });
+
+  // The word scanner hand-rolls the `\s` class to avoid a regex per character,
+  // so these pin the exotic members a future edit could silently drop.
+  it.each([
+    ["space", "\u0020"],
+    ["tab", "\u0009"],
+    ["newline", "\u000a"],
+    ["vertical tab", "\u000b"],
+    ["form feed", "\u000c"],
+    ["carriage return", "\u000d"],
+    ["no-break space", "\u00a0"],
+    ["ogham space mark", "\u1680"],
+    ["en quad", "\u2000"],
+    ["hair space", "\u200a"],
+    ["line separator", "\u2028"],
+    ["paragraph separator", "\u2029"],
+    ["narrow no-break space", "\u202f"],
+    ["medium mathematical space", "\u205f"],
+    ["ideographic space", "\u3000"],
+    ["zero width no-break space", "\ufeff"],
+  ])("treats %s as a word separator, matching the \\s class", (_label, ch) => {
+    expect(/\s/.test(ch)).toBe(true);
+    expect(countWords(`a${ch}b`)).toBe(2);
+  });
+
+  it.each([
+    ["zero width joiner", "\u200d"],
+    ["zero width non-joiner", "\u200c"],
+    ["soft hyphen", "\u00ad"],
+  ])("does not treat %s as a separator, matching the \\s class", (_label, ch) => {
+    expect(/\s/.test(ch)).toBe(false);
+    expect(countWords(`a${ch}b`)).toBe(1);
   });
 });
 

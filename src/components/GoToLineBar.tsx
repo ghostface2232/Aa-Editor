@@ -84,18 +84,30 @@ export function GoToLineBar({ editor, onClose, locale }: GoToLineBarProps) {
   // typing, and App does not re-render per keystroke, so deriving the total
   // from `editor.state.doc` during render alone would freeze it at whatever it
   // was when the bar opened — and disagree with the status bar's count.
+  //
+  // Coalesced to one update per frame, like the status bar's own stats hook:
+  // rebuilding the line index is an O(document) walk, and running it on every
+  // transaction would walk the document twice per frame while the bar is open.
   const [trackedDoc, setTrackedDoc] = useState(() => editor?.state.doc ?? null);
   useEffect(() => {
     if (!editor) {
       setTrackedDoc(null);
       return;
     }
-    const sync = () => {
+    let frame: number | null = null;
+    const apply = () => {
+      frame = null;
       setTrackedDoc((prev) => (prev === editor.state.doc ? prev : editor.state.doc));
     };
-    sync();
-    editor.on("transaction", sync);
-    return () => { editor.off("transaction", sync); };
+    const schedule = () => {
+      if (frame === null) frame = requestAnimationFrame(apply);
+    };
+    apply();
+    editor.on("transaction", schedule);
+    return () => {
+      editor.off("transaction", schedule);
+      if (frame !== null) cancelAnimationFrame(frame);
+    };
   }, [editor]);
 
   // Same logical-line definition the status bar reports, so the number the user
@@ -105,9 +117,13 @@ export function GoToLineBar({ editor, onClose, locale }: GoToLineBarProps) {
     [trackedDoc],
   );
   const totalLines = lineIndex?.total ?? 0;
-  const currentLine = lineIndex && editor ? posToLine(lineIndex, editor.state.selection.from) : 1;
 
-  const [lineValue, setLineValue] = useState(String(currentLine));
+  // The caret's line seeds the input once, at mount. Deriving it on every
+  // render would repeat a document walk whose result is then discarded.
+  const [lineValue, setLineValue] = useState(() => {
+    if (!editor) return "1";
+    return String(posToLine(buildLineIndex(editor.state.doc), editor.state.selection.from));
+  });
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -160,8 +176,9 @@ export function GoToLineBar({ editor, onClose, locale }: GoToLineBarProps) {
     const parsed = Number.parseInt(trimmed, 10);
     if (!editor) return;
 
-    // Rebuild rather than reuse the memo: the document can have changed since
-    // this bar rendered, and a stale index would resolve to the wrong position.
+    // Rebuild rather than reuse the memo: `trackedDoc` is a frame behind by
+    // design, so during that frame the memoised index describes the previous
+    // document and would resolve the jump to the wrong position.
     const index = buildLineIndex(editor.state.doc);
     const clamped = Math.max(1, Math.min(index.total, parsed));
     const pos = lineToPos(index, clamped);

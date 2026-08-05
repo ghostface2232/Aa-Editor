@@ -154,6 +154,18 @@ interface CountState {
   atBoundary: boolean;
 }
 
+function countRun(text: string, state: CountState): void {
+  state.chars += text.length;
+  for (let i = 0; i < text.length; i++) {
+    if (isSpaceCode(text.charCodeAt(i))) {
+      state.atBoundary = true;
+    } else if (state.atBoundary) {
+      state.words++;
+      state.atBoundary = false;
+    }
+  }
+}
+
 function countTextblock(node: ProseMirrorNode, state: CountState): void {
   // A word never spans a block boundary, so each textblock starts fresh.
   state.atBoundary = true;
@@ -162,17 +174,16 @@ function countTextblock(node: ProseMirrorNode, state: CountState): void {
       state.atBoundary = true;
       return;
     }
-    if (!child.isText) return;
-    const text = child.text ?? "";
-    state.chars += text.length;
-    for (let i = 0; i < text.length; i++) {
-      if (isSpaceCode(text.charCodeAt(i))) {
-        state.atBoundary = true;
-      } else if (state.atBoundary) {
-        state.words++;
-        state.atBoundary = false;
-      }
+    if (child.isText) {
+      countRun(child.text ?? "", state);
+      return;
     }
+    // An inline leaf contributes to `doc.textContent` only through `leafText`.
+    // Honouring it keeps `chars` equal to `doc.textContent.length` even if the
+    // schema later gains such a node; its own newlines are NOT treated as line
+    // breaks, because a position inside an atom is not addressable.
+    const leafText = child.type.spec.leafText;
+    if (leafText) countRun(leafText(child), state);
   });
 }
 
@@ -331,6 +342,12 @@ export function selectionForLinePos(doc: ProseMirrorNode, pos: number): Selectio
   if (nodeAfter && NodeSelection.isSelectable(nodeAfter)) {
     return NodeSelection.create(doc, $pos.pos);
   }
+  // Last resort, and it can land on a neighbouring line: `Selection.near`
+  // searches outward for any valid selection. Every block leaf in this app's
+  // schema (horizontal rule, image) is selectable, so the branch above always
+  // wins. A future NON-selectable block atom would silently make Go to Line
+  // jump to the wrong line — give such a node `selectable: true`, or teach
+  // this function to hold the line some other way.
   return Selection.near($pos, 1);
 }
 
