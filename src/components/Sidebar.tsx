@@ -672,15 +672,40 @@ export function Sidebar({
   }, []);
 
   const sidebarActiveRef = useRef(false);
+  // Whether the pointer/focus landed on an actual note row rather than sidebar
+  // chrome or empty space. Only the destructive Delete shortcut consults this:
+  // clicking blank sidebar space and hitting Delete used to remove the open
+  // note, which reads as "Delete deleted something I never pointed at".
+  const noteRowActiveRef = useRef(false);
   useEffect(() => {
-    const onMouseDown = (e: MouseEvent) => {
+    // Both pointer and focus activate the sidebar. Tracking mousedown alone
+    // left every sidebar shortcut dead for keyboard-only users, who reach the
+    // note list with Tab and never emit a mousedown (WCAG 2.1.1).
+    const activateFrom = (target: EventTarget | null) => {
+      const node = target instanceof Node ? target : null;
       const sidebar = document.querySelector("[data-sidebar]");
-      const active = !!sidebar?.contains(e.target as Node);
+      const active = !!node && !!sidebar?.contains(node);
       sidebarActiveRef.current = active;
+      noteRowActiveRef.current = active
+        && !!(node instanceof Element ? node : node?.parentElement)?.closest("[data-note-id]");
       document.documentElement.dataset.sidebarActive = active ? "1" : "";
     };
+    const onMouseDown = (e: MouseEvent) => activateFrom(e.target);
+    const onFocusIn = (e: FocusEvent) => {
+      // Focus moving out of the sidebar to document.body (e.g. a menu closing)
+      // must not silently deactivate a sidebar the user is still working in.
+      const sidebar = document.querySelector("[data-sidebar]");
+      const node = e.target instanceof Node ? e.target : null;
+      if (!node || node === document.body) return;
+      if (!sidebar?.contains(node) && !sidebarActiveRef.current) return;
+      activateFrom(e.target);
+    };
     window.addEventListener("mousedown", onMouseDown, true);
-    return () => window.removeEventListener("mousedown", onMouseDown, true);
+    window.addEventListener("focusin", onFocusIn, true);
+    return () => {
+      window.removeEventListener("mousedown", onMouseDown, true);
+      window.removeEventListener("focusin", onFocusIn, true);
+    };
   }, []);
 
   useEffect(() => {
@@ -744,6 +769,11 @@ export function Sidebar({
         navigator.clipboard.writeText(content).catch(() => {});
         closeMenuIfRouted();
       } else if (e.key === "Delete" && !ctrl && !e.altKey && !e.shiftKey) {
+        // Deleting is the one shortcut here that destroys work, so it needs a
+        // note the user actually pointed at: a right-clicked note (viaMenu) or
+        // a row that took the last pointer/focus. Sidebar chrome and empty
+        // space no longer route Delete to whatever note happens to be open.
+        if (!viaMenu && !noteRowActiveRef.current) return;
         e.preventDefault();
         onDeleteNote(targetIndex);
         closeMenuIfRouted();

@@ -89,10 +89,24 @@ function renderSidebar() {
   return { props, view };
 }
 
-/** Click inside the sidebar so its keydown handler treats it as active. */
+/** Click sidebar chrome (not a note row) so its keydown handler treats it as active. */
 function activateSidebar() {
   const sidebar = document.querySelector("[data-sidebar]")!;
   sidebar.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+}
+
+/** Click the note row at `index`, the way a user picks the note they act on. */
+function activateNoteRow(index = 0) {
+  const row = document.querySelectorAll("[data-note-id]")[index];
+  row.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+}
+
+/** Move focus into the sidebar with no pointer event, as Tab navigation does. */
+function focusInto(selector: string) {
+  const target = document.querySelector(selector)!;
+  act(() => {
+    target.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+  });
 }
 
 /** Dispatch a keydown from app chrome and report whether the default was blocked. */
@@ -170,9 +184,9 @@ describe("Sidebar keyboard shortcuts — exact modifier matching", () => {
     expect(renameField()).not.toBeNull();
   });
 
-  it("bare Delete deletes the active note; modified Delete does not (pre-existing guard)", () => {
+  it("bare Delete deletes the note row that took the click; modified Delete does not", () => {
     const { props } = renderSidebar();
-    activateSidebar();
+    activateNoteRow(0);
 
     expect(press({ key: "Delete", ctrlKey: true })).toBe(false);
     expect(press({ key: "Delete", shiftKey: true })).toBe(false);
@@ -180,6 +194,19 @@ describe("Sidebar keyboard shortcuts — exact modifier matching", () => {
 
     expect(press({ key: "Delete" })).toBe(true);
     expect(props.onDeleteNote).toHaveBeenCalledWith(0);
+  });
+
+  it("Delete is inert when the click landed on sidebar chrome instead of a note row", () => {
+    const { props } = renderSidebar();
+    activateSidebar();
+
+    // Non-destructive shortcuts still work from anywhere in the sidebar…
+    expect(press({ key: "d", ctrlKey: true })).toBe(true);
+    expect(props.onDuplicateNote).toHaveBeenCalledTimes(1);
+
+    // …but Delete must not remove a note the user never pointed at.
+    expect(press({ key: "Delete" })).toBe(false);
+    expect(props.onDeleteNote).not.toHaveBeenCalled();
   });
 
   it("handles Ctrl+R and Ctrl+D with CapsLock on (uppercase key, no Shift) — no WebView reload leak", () => {
@@ -206,6 +233,35 @@ describe("Sidebar keyboard shortcuts — exact modifier matching", () => {
 
     expect(press({ key: "P", ctrlKey: true, altKey: true, shiftKey: true })).toBe(false);
     expect(props.onToggleNotePinned).toHaveBeenCalledTimes(1);
+  });
+
+  it("activates on keyboard focus alone, with no preceding mousedown", () => {
+    const { props } = renderSidebar();
+    // Tab traversal emits focusin without any pointer event; without it the
+    // sidebar shortcuts were unreachable for keyboard-only users.
+    focusInto("[data-note-id]");
+
+    expect(press({ key: "d", ctrlKey: true })).toBe(true);
+    expect(props.onDuplicateNote).toHaveBeenCalledTimes(1);
+    expect(press({ key: "Delete" })).toBe(true);
+    expect(props.onDeleteNote).toHaveBeenCalledWith(0);
+  });
+
+  it("deactivates when focus leaves the sidebar", () => {
+    const { props } = renderSidebar();
+    activateNoteRow(0);
+
+    const outside = document.createElement("button");
+    document.body.appendChild(outside);
+    act(() => {
+      outside.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+    });
+
+    expect(press({ key: "Delete" })).toBe(false);
+    expect(press({ key: "d", ctrlKey: true })).toBe(false);
+    expect(props.onDeleteNote).not.toHaveBeenCalled();
+    expect(props.onDuplicateNote).not.toHaveBeenCalled();
+    outside.remove();
   });
 
   it("ignores note shortcuts entirely while the sidebar is not active", () => {

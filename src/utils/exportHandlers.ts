@@ -39,6 +39,27 @@ async function buildFontFaces(): Promise<string> {
 const MD_FILTERS = [{ name: "Markdown", extensions: ["md", "markdown", "txt"] }];
 const PDF_FILTERS = [{ name: "PDF", extensions: ["pdf"] }];
 
+// Transient editor decorations that live in the DOM but are not part of the
+// document. Exporting `.ProseMirror`'s innerHTML verbatim baked them into the
+// PDF — an open find bar printed every match in highlighter yellow.
+const DECORATION_SELECTOR = ".search-match, .search-match-active";
+
+/**
+ * Copy of the editor DOM with decoration wrappers unwrapped, so the exported
+ * markup carries only real document content. The live DOM is never touched.
+ */
+export function cloneEditorContentForExport(editorEl: HTMLElement): HTMLElement {
+  const clone = editorEl.cloneNode(true) as HTMLElement;
+  // Unwrap innermost-first: a match can nest inside another decoration span,
+  // and replacing an outer node first would detach the inner ones unprocessed.
+  const decorations = Array.from(clone.querySelectorAll<HTMLElement>(DECORATION_SELECTOR)).reverse();
+  for (const node of decorations) {
+    node.replaceWith(...Array.from(node.childNodes));
+  }
+  clone.normalize();
+  return clone;
+}
+
 export async function exportAsMarkdown(markdown: string, defaultName: string, locale: Locale = "en") {
   const selected = await save({
     title: t("dialog.export", locale),
@@ -76,6 +97,7 @@ export async function exportAsPdf(editorEl: HTMLElement, defaultName: string, lo
   }
 
   const fontFaces = await buildFontFaces();
+  const exportRoot = cloneEditorContentForExport(editorEl);
 
   const htmlContent = `<!DOCTYPE html>
 <html><head><meta charset="utf-8">
@@ -177,7 +199,7 @@ export async function exportAsPdf(editorEl: HTMLElement, defaultName: string, lo
   }
 </style>
 </head><body>
-  <div class="ProseMirror">${editorEl.innerHTML}</div>
+  <div class="ProseMirror">${exportRoot.innerHTML}</div>
 </body></html>`;
 
   try {

@@ -117,6 +117,13 @@ Noten's privacy posture is "your notes never leave the disk," and it should stay
 - Mermaid SVG/PNG export uses `src/extensions/mermaidExport.ts` and context-menu helpers from `contextMenuRegistry`; user-visible Mermaid labels must go through `src/i18n.ts`.
 - Exported SVGs round-trip their source: `mermaidExport.ts` embeds the original Mermaid source via `embedMermaidSourceInSvg` (from `src/extensions/mermaidSourceMetadata.ts`), and `ImageDrop.ts` restores a marked SVG back into an editable Mermaid block via `extractMermaidSourceFromSvg`.
 
+## Note Export
+
+- Markdown export writes `editor.getMarkdown()`; PDF export serializes the live editor DOM through headless Edge (`print_to_pdf`).
+- The editor DOM also carries transient decorations, so PDF export must go through `cloneEditorContentForExport` (`src/utils/exportHandlers.ts`), which unwraps `.search-match` / `.search-match-active` spans on a *clone*. Without it an open find bar prints its highlights into the PDF. Add any future decoration class to `DECORATION_SELECTOR`.
+- `print_to_pdf` temp files are per-invocation (pid + timestamp + counter): a fixed name let two windows exporting at once overwrite each other's HTML and render the wrong note. They hold the full note body in plain text, so every return path must delete them.
+- Edge is spawned, not `output()`-ed: the run is bounded by `PDF_RENDER_TIMEOUT` and the child is killed on expiry, so a wedged headless Edge cannot leave the `invoke` pending forever. Its stderr goes to a file rather than a pipe — nothing drains a pipe while we poll for exit, so a chatty child could block and then be killed spuriously.
+
 ## Editor Decorations
 
 Per-keystroke work in the editor must be incremental — no plugin or observer may re-derive whole-document state on every transaction:
@@ -166,7 +173,8 @@ Do not use old community-package APIs such as `editor.storage.markdown.getMarkdo
 - The sidebar body slides between two panes: the root view (groups section + ungrouped notes section) and an "All Notes" drill-in — a flat list of every note (groups ignored, pinned first, current sort order). Clicking the "All Notes" entry atop the group list opens the drill-in; its header or `Escape` returns. Drag-to-group works only in the root view.
 - Sidebar multi-select supports Shift-click contiguous range selection. Batch soft-delete commits once and exposes the same short-lived one-click undo toast as single-note deletion.
 - A note's color label is set from the note context menu (or, in select mode, the bulk right-click menu) and tints the note's sidebar icon. The sidebar "filter" button opens a swatch popover; picking a color filters the sidebar to a flat list of only that color's notes (composes with search; reuses the search flat-list rendering path, so drag is inert while filtered). The active filter persists across restarts only when `persistColorFilterAcrossRestarts` is enabled; otherwise it is cleared on startup.
-- Sidebar shortcuts (Ctrl+D, Ctrl+R, F2, Ctrl+E, Ctrl+Alt+P, Ctrl+Alt+C, Delete) are active when last mousedown was inside the sidebar. Tracked via `data-sidebar-active` attribute on `document.documentElement`.
+- Sidebar shortcuts (Ctrl+D, Ctrl+R, F2, Ctrl+E, Ctrl+Alt+P, Ctrl+Alt+C, Delete) are active when the last mousedown **or focusin** landed inside the sidebar. Tracked via `data-sidebar-active` attribute on `document.documentElement`. Focus counts because keyboard-only users reach the note list with Tab and never emit a mousedown; focus leaving the sidebar deactivates it (a blur to `document.body` does not).
+- Delete is the exception: it also requires the activation to have landed on a note row (`[data-note-id]`), or the keypress to be routed through an open note context menu. Sidebar chrome and empty space must not route a destructive shortcut to whatever note happens to be active. The other shortcuts keep the broader sidebar-wide activation.
 - Toggling/resizing the sidebar updates the OS window min-size and grows a too-narrow window to fit (`ensureWindowFitsSidebar` in `App.tsx`). This is skipped while the window is maximized or fullscreen — mutating window size there pops it back to windowed (and shifts position) on Windows — and the deferred min-size is re-applied when the window is later restored, detected via `onResized`.
 - Editor shortcuts include `Ctrl+Shift+X` for strike-through, `Ctrl+G` for Go to Line, `Ctrl+H` for Find and Replace, `Ctrl+Shift+O` for the table-of-contents panel, and `F8` for focus mode. All are handled at the window level via `useKeyboardShortcuts`, not inside individual editor keymaps. `F8` works globally but is ignored while a modal dialog (role="dialog") holds focus; `Ctrl+O` (import) requires the explicit `!shiftKey` guard so `Ctrl+Shift+O` never falls through to it. `Ctrl+P` stays blocked, reserved for a future quick switcher.
 - Sidebar shortcut hints are displayed in context menus. Shortcut style is unified across all menus (opacity 0.45, 12px, 24px left padding).
@@ -241,6 +249,7 @@ Production publishing requires `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVA
 - `src/utils/migrationJournal.ts` / `migrationCleanup.ts` — crash-safe deferred cleanup of a migrated notes directory
 - `src/utils/contextMenuRegistry.ts` — `closeContextMenu`, `createMenuShell`, `createMenuItem`, `createMenuSeparator`, `isDarkTheme`
 - `src/utils/clampMenuPosition.ts` — `clampMenuToViewport`
+- `src/utils/concurrency.ts` — `mapWithConcurrency`, the bounded fan-out used for startup body reads (an unbounded `Promise.all` over every note stampedes the IPC bridge and cloud-folder placeholder hydration)
 - `src/utils/clipboardText.ts` — `sliceToPlainText` (clipboard `text/plain` serialization)
 - `src/extensions/mermaidExport.ts` — self-contained SVG serialization and transparent-background PNG export for rendered Mermaid diagrams
 - `src/extensions/mermaidSourceMetadata.ts` — `embedMermaidSourceInSvg` / `extractMermaidSourceFromSvg`, storing the Mermaid source in the SVG `<metadata>` under a private namespace so export/import round-trips losslessly

@@ -6,6 +6,7 @@ import {
   writeTextFile,
 } from "@tauri-apps/plugin-fs";
 import { tauriFileSystem } from "../utils/fs";
+import { mapWithConcurrency } from "../utils/concurrency";
 import { normalizeSep } from "../utils/pathUtils";
 import { reconcileFolder, createReconcileState, clearReconcileState, type ReconcileState } from "../utils/reconcileFolder";
 import {
@@ -322,15 +323,18 @@ async function loadDecomposedState(dir: string): Promise<DecomposedState> {
   return loadDecomposedStateImpl(tauriFileSystem, dir, getUiStateCached());
 }
 
+// Body reads run through a fixed window instead of one IPC call per note at
+// once. See mapWithConcurrency for why an unbounded fan-out hurts most on the
+// cloud-synced folders this app explicitly supports.
+const BODY_READ_CONCURRENCY = 12;
+
 async function attachDocContents(docs: NoteDoc[]): Promise<NoteDoc[]> {
-  const results = await Promise.all(
-    docs.map(async (d) => {
-      const content = await readFileContent(d.filePath);
-      if (content === null) return null;
-      if (d.filePath) setKnownDiskContent(d.filePath, content);
-      return { ...d, content } as NoteDoc;
-    }),
-  );
+  const results = await mapWithConcurrency(docs, BODY_READ_CONCURRENCY, async (d) => {
+    const content = await readFileContent(d.filePath);
+    if (content === null) return null;
+    if (d.filePath) setKnownDiskContent(d.filePath, content);
+    return { ...d, content } as NoteDoc;
+  });
   return results.filter((d): d is NoteDoc => d !== null);
 }
 
