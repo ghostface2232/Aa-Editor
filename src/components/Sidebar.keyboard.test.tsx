@@ -247,6 +247,60 @@ describe("Sidebar keyboard shortcuts — exact modifier matching", () => {
     expect(props.onDeleteNote).toHaveBeenCalledWith(0);
   });
 
+  it("acts on the focused row, not the open note, when they differ", () => {
+    const { props } = renderSidebar();
+    // Note 0 (Alpha) is the active/open one; Tab moves focus to note 1 (Beta).
+    // Targeting activeIndex here would delete the note the user is reading
+    // while looking straight at a different row.
+    focusInto('[data-note-id="b"]');
+
+    expect(press({ key: "Delete" })).toBe(true);
+    expect(props.onDeleteNote).toHaveBeenCalledWith(1);
+
+    expect(press({ key: "d", ctrlKey: true })).toBe(true);
+    expect(props.onDuplicateNote).toHaveBeenCalledWith(1);
+    expect(press({ key: "e", ctrlKey: true })).toBe(true);
+    expect(props.onExportNote).toHaveBeenCalledWith(1);
+    expect(press({ key: "p", ctrlKey: true, altKey: true })).toBe(true);
+    expect(props.onToggleNotePinned).toHaveBeenCalledWith(1);
+  });
+
+  it("acts on the clicked row, not the open note, when they differ", () => {
+    const { props } = renderSidebar();
+    activateNoteRow(1);
+
+    expect(press({ key: "Delete" })).toBe(true);
+    expect(props.onDeleteNote).toHaveBeenCalledWith(1);
+  });
+
+  it("renames the focused row rather than the open note", () => {
+    renderSidebar();
+    focusInto('[data-note-id="b"]');
+
+    expect(press({ key: "F2" })).toBe(true);
+    expect(renameField()!.value).toBe("Beta");
+  });
+
+  it("falls back to the open note once the pointed row is gone", () => {
+    const { props, view } = renderSidebar();
+    focusInto('[data-note-id="b"]');
+
+    // The pointed note disappears (deleted elsewhere, filtered out, moved to
+    // another window). Its id must not resolve to some other row by position.
+    view.rerender(
+      <FluentProvider theme={webLightTheme}>
+        <Sidebar {...props} docs={[docs[0]]} />
+      </FluentProvider>,
+    );
+
+    // Non-destructive shortcuts fall back to the open note…
+    expect(press({ key: "d", ctrlKey: true })).toBe(true);
+    expect(props.onDuplicateNote).toHaveBeenCalledWith(0);
+    // …but Delete stays inert rather than deleting a note nobody pointed at.
+    expect(press({ key: "Delete" })).toBe(false);
+    expect(props.onDeleteNote).not.toHaveBeenCalled();
+  });
+
   it("deactivates when focus leaves the sidebar", () => {
     const { props } = renderSidebar();
     activateNoteRow(0);

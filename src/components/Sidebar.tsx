@@ -676,11 +676,16 @@ export function Sidebar({
   }, []);
 
   const sidebarActiveRef = useRef(false);
-  // Whether the pointer/focus landed on an actual note row rather than sidebar
-  // chrome or empty space. Only the destructive Delete shortcut consults this:
-  // clicking blank sidebar space and hitting Delete used to remove the open
-  // note, which reads as "Delete deleted something I never pointed at".
-  const noteRowActiveRef = useRef(false);
+  // The note whose row last took the pointer or keyboard focus, or null when
+  // the activation landed on sidebar chrome or empty space. Stored as an id,
+  // not an index: sorting can move a row between activation and keypress.
+  //
+  // Shortcuts target this row rather than the open note. With focus alone able
+  // to activate the sidebar, Tab-ing to a row and pressing Delete would
+  // otherwise delete whatever note happened to be open — the row the user is
+  // looking at is the one they mean. Clicking a row outside select mode also
+  // opens it, so this changes nothing for mouse users.
+  const pointedNoteIdRef = useRef<string | null>(null);
   useEffect(() => {
     // Both pointer and focus activate the sidebar. Tracking mousedown alone
     // left every sidebar shortcut dead for keyboard-only users, who reach the
@@ -690,8 +695,9 @@ export function Sidebar({
       const sidebar = document.querySelector("[data-sidebar]");
       const active = !!node && !!sidebar?.contains(node);
       sidebarActiveRef.current = active;
-      noteRowActiveRef.current = active
-        && !!(node instanceof Element ? node : node?.parentElement)?.closest("[data-note-id]");
+      const element = node instanceof Element ? node : node?.parentElement ?? null;
+      const row = active ? element?.closest("[data-note-id]") ?? null : null;
+      pointedNoteIdRef.current = row?.getAttribute("data-note-id") ?? null;
       document.documentElement.dataset.sidebarActive = active ? "1" : "";
     };
     const onMouseDown = (e: MouseEvent) => activateFrom(e.target);
@@ -726,19 +732,36 @@ export function Sidebar({
         return;
       }
 
+      // Target precedence: the right-clicked note, else the row the pointer or
+      // keyboard focus last landed on, else the open note.
+      //
       // While a note context menu is open, its items display these shortcut
       // hints next to actions for the RIGHT-CLICKED note. Acting on
       // activeIndex here would teach the wrong mental model ("Delete │
       // Delete" shown for note B, keypress deletes open note A) — so route
       // the shortcut to the menu's target note and close the menu, exactly
-      // as if the item had been clicked.
+      // as if the item had been clicked. A row that took focus without being
+      // opened (Tab traversal, or a click in select mode) has the same
+      // problem, so it routes the same way.
+      //
+      // Ids resolve to indices here, at keypress time: a note whose row was
+      // pointed at and has since been deleted or filtered out resolves to
+      // nothing, and the shortcut falls back rather than hitting a stale row.
       let targetIndex = activeIndex;
       let viaMenu = false;
+      let viaPointedRow = false;
       if (contextMenu?.type === "note" && contextMenu.noteId) {
         const idx = docs.findIndex((d) => d.id === contextMenu.noteId);
         if (idx >= 0) {
           targetIndex = idx;
           viaMenu = true;
+        }
+      }
+      if (!viaMenu && pointedNoteIdRef.current) {
+        const idx = docs.findIndex((d) => d.id === pointedNoteIdRef.current);
+        if (idx >= 0) {
+          targetIndex = idx;
+          viaPointedRow = true;
         }
       }
       const closeMenuIfRouted = () => { if (viaMenu) setContextMenu(null); };
@@ -775,9 +798,10 @@ export function Sidebar({
       } else if (e.key === "Delete" && !ctrl && !e.altKey && !e.shiftKey) {
         // Deleting is the one shortcut here that destroys work, so it needs a
         // note the user actually pointed at: a right-clicked note (viaMenu) or
-        // a row that took the last pointer/focus. Sidebar chrome and empty
-        // space no longer route Delete to whatever note happens to be open.
-        if (!viaMenu && !noteRowActiveRef.current) return;
+        // a row that took the last pointer/focus. Sidebar chrome, empty space,
+        // and a pointed row that no longer exists all leave Delete inert
+        // instead of falling back to whatever note happens to be open.
+        if (!viaMenu && !viaPointedRow) return;
         e.preventDefault();
         onDeleteNote(targetIndex);
         closeMenuIfRouted();
