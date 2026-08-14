@@ -797,11 +797,53 @@ export function useFileSystem(
       if (doc.filePath) {
         try {
           const trashDir = await ensureTrashDir();
+          const notesDir = await getNotesDir();
           const fileName = getFileBaseName(doc.filePath);
           const trashPath = `${trashDir}/${fileName}`;
+          const trashedAt = Date.now();
+
+          // Persist the deletion intent to the sidecar BEFORE the body move
+          // (mirroring restoreNote's meta-first ordering). trashedAt otherwise
+          // only lands via the fire-and-forget manifest write at the end of
+          // this batch: a crash in between leaves a live meta whose body is in
+          // .trash — a note visible in neither the list nor the trash UI.
+          // With meta-first, a crash before the body move instead leaves
+          // "trashed meta + root body", which reconcile's root-vs-trash
+          // arbitration finishes moving into trash.
+          let previousMeta: NoteMeta | null = null;
+          let metaKnownAbsent = false;
+          try {
+            previousMeta = await readMeta(tauriFileSystem, notesDir, doc.id);
+            metaKnownAbsent = previousMeta === null;
+          } catch { /* unreadable sidecar — rebuild from the doc below */ }
+          const trashedMeta: NoteMeta = {
+            version: 2,
+            id: doc.id,
+            fileName: doc.fileName,
+            createdAt: doc.createdAt,
+            updatedAt: doc.updatedAt,
+            groupId: getGroupForNote?.(doc.id)?.id ?? null,
+            pinned: doc.pinned === true,
+            color: doc.color,
+            ...(previousMeta ?? {}),
+            trashedAt,
+            trashedFromPath: doc.filePath,
+          };
+          await writeMeta(tauriFileSystem, notesDir, trashedMeta, getMachineIdCached());
 
           markOwnWrite(doc.filePath);
-          await copyFile(doc.filePath, trashPath);
+          try {
+            await copyFile(doc.filePath, trashPath);
+          } catch (copyErr) {
+            // The deletion did not happen; roll the sidecar back so disk state
+            // matches the note that stays in the list.
+            try {
+              if (previousMeta) await writeMeta(tauriFileSystem, notesDir, previousMeta, getMachineIdCached());
+              else if (metaKnownAbsent) await removeMetaFile(tauriFileSystem, notesDir, doc.id);
+              else await writeMeta(tauriFileSystem, notesDir, { ...trashedMeta, trashedAt: null, trashedFromPath: null }, getMachineIdCached());
+            } catch { /* best-effort */ }
+            throw copyErr;
+          }
           try { await remove(doc.filePath); } catch { /* original stays; reconcile picks it up */ }
 
           trashedNotes.push({
@@ -809,7 +851,7 @@ export function useFileSystem(
             fileName: doc.fileName,
             originalFilePath: doc.filePath,
             trashFilePath: trashPath,
-            trashedAt: Date.now(),
+            trashedAt,
             groupId: getGroupForNote?.(doc.id)?.id ?? null,
             createdAt: doc.createdAt,
             updatedAt: doc.updatedAt,

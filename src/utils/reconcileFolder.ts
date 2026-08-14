@@ -109,6 +109,12 @@ export interface BodyMissingObservation {
 
 export interface ReconcileState {
   bodyMissing: Map<string, BodyMissingObservation>;
+  // Live-meta-with-trash-only-body observations (crashed-delete repair). Gated
+  // by the same prior-pass + grace rules as bodyMissing: the trigger state is
+  // legitimately transient during an in-progress restoreNote (meta flips to
+  // live before the body copy lands) and during cloud-sync propagation of a
+  // delete→restore, so flipping on first sight would re-trash a live note.
+  trashOnlyLiveMeta: Map<string, BodyMissingObservation>;
 }
 
 /**
@@ -120,11 +126,15 @@ export interface ReconcileState {
 export const ORPHAN_META_GRACE_MS = 90_000;
 
 export function createReconcileState(): ReconcileState {
-  return { bodyMissing: new Map<string, BodyMissingObservation>() };
+  return {
+    bodyMissing: new Map<string, BodyMissingObservation>(),
+    trashOnlyLiveMeta: new Map<string, BodyMissingObservation>(),
+  };
 }
 
 export function clearReconcileState(state: ReconcileState): void {
   state.bodyMissing.clear();
+  state.trashOnlyLiveMeta.clear();
 }
 
 export async function reconcileFolder(
@@ -367,15 +377,68 @@ export async function reconcileFolder(
   // bodyless across two passes AND at least ORPHAN_META_GRACE_MS of wall
   // clock (per-id grace) before removing it.
   const missingBodyIds: string[] = [];
+  const trashOnlyNow = new Set<string>();
   for (const meta of allMeta.values()) {
     const rootName = `${meta.id}.md`;
     if (meta.trashedAt == null) {
       if (folderFileNames.has(rootName)) continue;
-      if (trashFileNames.has(rootName)) continue;
+      if (trashFileNames.has(rootName)) {
+        // Live meta whose only body sits in .trash: a save re-persisting a
+        // just-deleted entry, a crashed legacy delete, or a rolled-back meta
+        // whose body move already happened. Left alone the note is invisible
+        // everywhere — no root body means no doc, trashedAt null means no
+        // trash-UI entry, and this branch shields it from orphan cleanup
+        // forever. Deletion intent wins: flip the sidecar to trashed so the
+        // note surfaces in the trash UI and the 14-day purge applies.
+        //
+        // Gated like orphan-meta deletion (prior pass + wall-clock grace):
+        // this exact disk state is legitimately transient during an
+        // in-progress restoreNote (meta flips live before the body copy
+        // lands) and while cloud sync propagates a delete→restore, and a
+        // first-sight flip would re-trash the restored note — the fresh
+        // trashedAt=now then structurally beats the copy-preserved root mtime
+        // in the root-vs-trash arbitration above. Also skip while a dirty
+        // in-memory doc holds the id — its autosave is about to recreate the
+        // root body.
+        if (docById.get(meta.id)?.isDirty) {
+          state.trashOnlyLiveMeta.delete(meta.id);
+          continue;
+        }
+        trashOnlyNow.add(meta.id);
+        const obs = state.trashOnlyLiveMeta.get(meta.id);
+        if (!obs) {
+          state.trashOnlyLiveMeta.set(meta.id, { firstSeenAt: Date.now(), passes: 1 });
+          continue;
+        }
+        if (Date.now() - obs.firstSeenAt < ORPHAN_META_GRACE_MS) {
+          obs.passes += 1;
+          continue;
+        }
+        try {
+          // trashedAt = now, not the trash file's mtime: Windows copyFile
+          // preserves the source mtime, so an old body would look "trashed"
+          // weeks ago and the 14-day purge could delete it on the next launch.
+          const repaired: NoteMeta = { ...meta, trashedAt: Date.now(), trashedFromPath: `${base}${rootName}` };
+          await writeMetaFile(fs, dir, repaired, machineId);
+          allMeta.set(meta.id, repaired);
+          state.trashOnlyLiveMeta.delete(meta.id);
+          changed = true;
+        } catch { /* retry next pass */ }
+        continue;
+      }
     } else if (trashFileNames.has(rootName)) {
       continue;
     }
     missingBodyIds.push(meta.id);
+  }
+
+  // Drop trash-only observations whose trigger state resolved (root body
+  // arrived, meta flipped, or meta gone) so a later recurrence restarts the
+  // grace clock.
+  for (const id of Array.from(state.trashOnlyLiveMeta.keys())) {
+    if (!trashOnlyNow.has(id)) {
+      state.trashOnlyLiveMeta.delete(id);
+    }
   }
 
   const looksMidSync = missingBodyIds.length >= 3

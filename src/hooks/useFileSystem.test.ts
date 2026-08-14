@@ -507,6 +507,67 @@ describe("useFileSystem — deleteNote trash-copy guard", () => {
   });
 });
 
+describe("useFileSystem — deleteNotes meta-first ordering", () => {
+  const writeMetaMock = metadataIOModule.writeMeta as ReturnType<typeof vi.fn>;
+  const readMetaMock = metadataIOModule.readMeta as ReturnType<typeof vi.fn>;
+  const removeMetaMock = metadataIOModule.removeMeta as ReturnType<typeof vi.fn>;
+
+  it("persists trashedAt to the sidecar before the body moves to trash", async () => {
+    const { result } = renderFs({ docs: [makeDoc("a"), makeDoc("b")], activeIndex: 1 });
+
+    await act(async () => {
+      await result.current.deleteNote(0);
+    });
+
+    // A crash after the body move but before the sidecar write would leave a
+    // live meta whose only body is in .trash — invisible in both the list and
+    // the trash UI. The sidecar must flip first.
+    expect(writeMetaMock).toHaveBeenCalled();
+    expect(copyFileMock).toHaveBeenCalled();
+    expect(writeMetaMock.mock.invocationCallOrder[0]).toBeLessThan(copyFileMock.mock.invocationCallOrder[0]);
+
+    const writtenMeta = writeMetaMock.mock.calls[0][2] as { trashedAt: number | null; trashedFromPath: string | null };
+    expect(writtenMeta.trashedAt).not.toBeNull();
+    expect(writtenMeta.trashedFromPath).toBe("/notes/a.md");
+  });
+
+  it("rolls the sidecar back to the previous meta when the trash copy fails", async () => {
+    refs.copyFileShouldThrow = new Error("EACCES");
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    readMetaMock.mockResolvedValueOnce({
+      version: 2, id: "a", fileName: "prev name", createdAt: 1, updatedAt: 1,
+      groupId: null, trashedAt: null,
+    });
+
+    const { result, setDocs } = renderFs({ docs: [makeDoc("a"), makeDoc("b")], activeIndex: 1 });
+
+    await act(async () => {
+      await result.current.deleteNote(0);
+    });
+
+    const metas = writeMetaMock.mock.calls.map((c) => c[2] as { fileName: string; trashedAt: number | null });
+    expect(metas[0].trashedAt).not.toBeNull();
+    expect(metas[1]).toMatchObject({ fileName: "prev name", trashedAt: null });
+    expect(setDocs).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  it("removes the sidecar it created when rollback finds none existed", async () => {
+    refs.copyFileShouldThrow = new Error("EACCES");
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    // readMeta default resolves null → the sidecar did not exist beforehand.
+
+    const { result } = renderFs({ docs: [makeDoc("a"), makeDoc("b")], activeIndex: 1 });
+
+    await act(async () => {
+      await result.current.deleteNote(0);
+    });
+
+    expect(removeMetaMock).toHaveBeenCalledWith(expect.anything(), expect.any(String), "a");
+    warnSpy.mockRestore();
+  });
+});
+
 describe("useFileSystem — deleteNote cancels pending autosave", () => {
   it("calls cancelDocSave for the deleted doc id so an in-flight timer cannot orphan-write", async () => {
     const doc = makeDoc("a");

@@ -79,6 +79,81 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+describe("reconcileFolder — live meta with trash-only body (crashed delete)", () => {
+  it("flips the sidecar to trashed only after a prior pass and the grace period", async () => {
+    const id = "22222222-2222-2222-2222-222222222222";
+    await seedMeta(fs, makeMeta(id));
+    fs.seedDir(`${DIR}/.trash`);
+    fs.seedTextFile(`${DIR}/.trash/${id}.md`, "deleted body");
+
+    // First sight: record only. The same disk state is transient during an
+    // in-progress restoreNote, so a first-pass flip would re-trash it.
+    const first = await reconcileFolder(fs, state, DIR, [], [], LOCALE);
+    expect(first.changed).toBe(false);
+    expect((await readMeta(fs, DIR, id))!.trashedAt).toBeNull();
+
+    // Within the grace window: still no flip.
+    vi.advanceTimersByTime(5_000);
+    await reconcileFolder(fs, state, DIR, [], [], LOCALE);
+    expect((await readMeta(fs, DIR, id))!.trashedAt).toBeNull();
+
+    // Grace elapsed: the crashed-delete repair lands.
+    vi.advanceTimersByTime(ORPHAN_META_GRACE_MS);
+    const third = await reconcileFolder(fs, state, DIR, [], [], LOCALE);
+    expect(third.changed).toBe(true);
+    expect(third.docs).toHaveLength(0);
+    const repaired = await readMeta(fs, DIR, id);
+    expect(repaired!.trashedAt).toBe(Date.now());
+    expect(repaired!.trashedFromPath).toBe(`${DIR}/${id}.md`);
+    // Repaired, not an orphan candidate — the sidecar must never age toward
+    // the orphan-meta delete while its body sits in trash.
+    expect(state.bodyMissing.has(id)).toBe(false);
+    expect(state.trashOnlyLiveMeta.has(id)).toBe(false);
+  });
+
+  it("a restore completing within the grace clears the observation instead of re-trashing", async () => {
+    const id = "44444444-4444-4444-4444-444444444444";
+    await seedMeta(fs, makeMeta(id));
+    fs.seedDir(`${DIR}/.trash`);
+    fs.seedTextFile(`${DIR}/.trash/${id}.md`, "restoring body");
+
+    // Pass 1 observes the transient restore window (meta already live, body
+    // copy still in flight).
+    await reconcileFolder(fs, state, DIR, [], [], LOCALE);
+    expect((await readMeta(fs, DIR, id))!.trashedAt).toBeNull();
+
+    // The restore finishes: root body lands, trash body removed.
+    fs.seedTextFile(`${DIR}/${id}.md`, "restoring body");
+    await fs.remove(`${DIR}/.trash/${id}.md`);
+
+    vi.advanceTimersByTime(ORPHAN_META_GRACE_MS + 1_000);
+    const after = await reconcileFolder(fs, state, DIR, [], [], LOCALE);
+
+    // The note is ingested live and the stale observation is dropped, so a
+    // later recurrence restarts the grace clock.
+    expect(after.docs.some((d) => d.id === id)).toBe(true);
+    expect((await readMeta(fs, DIR, id))!.trashedAt).toBeNull();
+    expect(state.trashOnlyLiveMeta.has(id)).toBe(false);
+  });
+
+  it("leaves the sidecar alone while a dirty in-memory doc still holds the id", async () => {
+    const id = "33333333-3333-3333-3333-333333333333";
+    await seedMeta(fs, makeMeta(id));
+    fs.seedDir(`${DIR}/.trash`);
+    fs.seedTextFile(`${DIR}/.trash/${id}.md`, "old body");
+    const dirty = makeDoc(id, { isDirty: true, content: "unsaved edits" });
+
+    const result = await reconcileFolder(fs, state, DIR, [dirty], [], LOCALE);
+
+    // Autosave is about to recreate the root body; flipping to trashed here
+    // would fight it. Not even an observation is recorded.
+    const meta = await readMeta(fs, DIR, id);
+    expect(meta!.trashedAt).toBeNull();
+    expect(result.docs.some((d) => d.id === id)).toBe(true);
+    expect(state.trashOnlyLiveMeta.has(id)).toBe(false);
+  });
+});
+
 describe("reconcileFolder", () => {
   it("picks up a new .md file and creates its meta sidecar", async () => {
     fs.seedTextFile(`${DIR}/note-alpha.md`, "# Hello\n");
