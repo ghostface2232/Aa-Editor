@@ -702,6 +702,35 @@ describe("useAutoSave — pathless fallback doc (loader failure stub)", () => {
   });
 });
 
+describe("useAutoSave — doSave functional commit", () => {
+  it("recomputes against prev so a concurrently deleted doc is not resurrected", async () => {
+    const { result, setDocs, setActiveIndex } = renderAutoSave({
+      docs: [makeDoc("a", { isDirty: true }), makeDoc("b")],
+    });
+
+    await act(async () => {
+      await result.current.flushAutoSave();
+    });
+
+    const lastArg = setDocs.mock.calls[setDocs.mock.calls.length - 1][0];
+    expect(typeof lastArg).toBe("function");
+    const updater = lastArg as (prev: NoteDoc[]) => NoteDoc[];
+
+    // deleteNotes removed "b" while the save was in flight: prev no longer
+    // contains it, and the commit must not bring it back.
+    const next = updater([makeDoc("a", { isDirty: true })]);
+    expect(next.some((d) => d.id === "b")).toBe(false);
+    expect(next.find((d) => d.id === "a")?.content).toBe("hello world");
+    // The active index is derived from the SAME committed array, not the
+    // stale pre-delete base.
+    expect(setActiveIndex).toHaveBeenLastCalledWith(next.findIndex((d) => d.id === "a"));
+
+    // The saved doc itself was concurrently deleted: prev stays untouched.
+    const prevWithoutSaved = [makeDoc("b")];
+    expect(updater(prevWithoutSaved)).toBe(prevWithoutSaved);
+  });
+});
+
 describe("useAutoSave — debounce queue", () => {
   it("defers Markdown serialization until the debounce fires", async () => {
     vi.useFakeTimers();

@@ -337,35 +337,61 @@ export function useAutoSave(
         ? live.state.getCachedMarkdown() === snapshot.content
         : false;
 
-      let savedDocStillExists = false;
-      const nextDocs = live.docs.map((docEntry) => {
-        if (docEntry.id !== snapshot.docId) return docEntry;
-        savedDocStillExists = true;
+      // Builds the post-save docs array from any base. Returns null when the
+      // saved doc is absent from that base (concurrently deleted).
+      const buildCommit = (base: NoteDoc[]): NoteDoc[] | null => {
+        let found = false;
+        const mapped = base.map((docEntry) => {
+          if (docEntry.id !== snapshot.docId) return docEntry;
+          found = true;
 
-        const autoTitle = docEntry.customName
-          ? docEntry.fileName
-          : deriveTitle(snapshot.content) || docEntry.fileName || getDefaultDocumentTitle(latestLocale, live.docs.map((d) => d.fileName));
-        return {
-          ...docEntry,
-          content: snapshot.content,
-          isDirty: currentActiveId === snapshot.docId ? !activeDocStillMatches : false,
-          updatedAt: Date.now(),
-          fileName: autoTitle,
-        };
-      });
+          const autoTitle = docEntry.customName
+            ? docEntry.fileName
+            : deriveTitle(snapshot.content) || docEntry.fileName || getDefaultDocumentTitle(latestLocale, base.map((d) => d.fileName));
+          return {
+            ...docEntry,
+            content: snapshot.content,
+            isDirty: currentActiveId === snapshot.docId ? !activeDocStillMatches : false,
+            updatedAt: Date.now(),
+            fileName: autoTitle,
+          };
+        });
+        return found ? sortNotes(mapped, latestSortOrder, latestLocale) : null;
+      };
 
-      if (!savedDocStillExists) {
+      const sortedDocs = buildCommit(live.docs);
+      if (!sortedDocs) {
         return false;
       }
 
-      const sortedDocs = sortNotes(nextDocs, latestSortOrder, latestLocale);
-      const nextIndex = currentActiveId
-        ? Math.max(sortedDocs.findIndex((docEntry) => docEntry.id === currentActiveId), 0)
-        : 0;
-
-      latestSetDocs(sortedDocs);
-      latestSetActiveIndex(nextIndex);
+      // Commit functionally, recomputing against `prev`. An absolute
+      // `latestSetDocs(sortedDocs)` built from stateRef could resurrect a doc
+      // a concurrent deleteNotes just removed — its setDocs may not have
+      // rendered into stateRef yet, so the stale array still contains the
+      // deleted entry (a ghost row whose file already moved to .trash). If the
+      // saved doc itself vanished from `prev`, leave `prev` untouched.
+      //
+      // The active index must come from the SAME committed array: an index
+      // computed against the stale base can point at a different note once a
+      // concurrent delete shrank the list, and the next render would repoint
+      // activeDocRef (and thus future saves) at it. Dispatching
+      // setActiveIndex from inside the updater mirrors useWindowSync's
+      // doc-deleted/note-pinned handlers; it is idempotent under StrictMode
+      // re-invocation.
+      latestSetDocs((prev) => {
+        const committed = buildCommit(prev);
+        if (!committed) return prev;
+        const nextIndex = currentActiveId
+          ? Math.max(committed.findIndex((docEntry) => docEntry.id === currentActiveId), 0)
+          : 0;
+        latestSetActiveIndex(nextIndex);
+        return committed;
+      });
       try {
+        // The manifest is still built from the pre-commit array (the updater's
+        // result isn't synchronously observable), so it can transiently
+        // re-persist a concurrently-deleted entry; reconcile repairs that from
+        // the trashed sidecar on the next pass.
         await saveManifest(sortedDocs, currentActiveId, stateRef.current.groups);
       } catch {
         return false;
