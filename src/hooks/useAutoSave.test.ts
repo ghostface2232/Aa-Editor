@@ -662,6 +662,44 @@ describe("useAutoSave — pathless fallback doc (loader failure stub)", () => {
     expect(provisionMock).toHaveBeenCalledTimes(2);
     expect(refs.files.get("/notes/local.md")).toBe("hello world");
   });
+
+  it("the doc-switch capture path bypasses the retry throttle", async () => {
+    vi.useFakeTimers();
+    refs.provisionShouldFail = true;
+    const { result } = renderAutoSave({
+      docs: [makeDoc("local", { filePath: "", isDirty: true })],
+    });
+
+    await act(async () => {
+      result.current.scheduleAutoSave();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(provisionMock).toHaveBeenCalledTimes(1);
+
+    // A doc switch inside the throttle window must still capture the content.
+    await act(async () => {
+      result.current.captureAndQueueSave();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(provisionMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("a failed provision stashes the captured text into the doc so a switch can't strand it", async () => {
+    refs.provisionShouldFail = true;
+    refs.editorContent = "typed into the stub";
+    const { result, setDocs } = renderAutoSave({
+      docs: [makeDoc("local", { filePath: "", isDirty: true })],
+    });
+
+    await act(async () => {
+      await result.current.flushAutoSave();
+    });
+
+    const updater = setDocs.mock.calls[setDocs.mock.calls.length - 1][0] as (prev: NoteDoc[]) => NoteDoc[];
+    const next = updater([makeDoc("local", { filePath: "", isDirty: true })]);
+    expect(next[0].content).toBe("typed into the stub");
+    expect(next[0].filePath).toBe("");
+  });
 });
 
 describe("useAutoSave — debounce queue", () => {

@@ -480,7 +480,16 @@ export function useAutoSave(
     const attempt = (async () => {
       try {
         const { filePath, ok } = await provisionNoteFile(target.id, content, "autosave-provision-pathless");
-        if (!ok) return false;
+        if (!ok) {
+          // Keep the captured text in React state: the caller may be about to
+          // repoint the editor (doc switch), and without this the edits would
+          // exist nowhere. The doc stays dirty+pathless, so switching back
+          // reloads this content and the next edit retries provisioning.
+          latestSetDocs((prev) => prev.map((doc) =>
+            doc.id === target.id && !doc.filePath && doc.content !== content ? { ...doc, content } : doc,
+          ));
+          return false;
+        }
         // Re-check the tombstone after the awaits: a remote deletion that
         // arrived while the provision was in flight must win — leaving this
         // write on disk would let the watcher reconcile resurrect the deleted
@@ -659,8 +668,10 @@ export function useAutoSave(
     const freshSnapshot = createSnapshot();
     if (!freshSnapshot) {
       // Pathless doc: provisioning captures the content synchronously, before
-      // the caller repoints the editor at the next doc.
-      void provisionPathlessActiveDoc();
+      // the caller repoints the editor at the next doc. Forced — the retry
+      // throttle must not skip that capture, or a switch within the throttle
+      // window would strand the edits in the repointed editor.
+      void provisionPathlessActiveDoc({ force: true });
       return;
     }
 

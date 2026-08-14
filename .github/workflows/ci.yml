@@ -66,12 +66,16 @@ jobs:
       - name: Build frontend
         run: npm run build
 
-      # The bootstrapper embeds the NSIS installer via include_bytes!; only
-      # the release workflow has the real payload, so compile against an
-      # empty placeholder here.
-      - name: Create placeholder NSIS payload
+      # The bootstrapper embeds the NSIS installer via include_bytes!, and
+      # tauri_build copies bundle.resources (maintenance-helper.exe) at
+      # compile time; only the release workflow produces the real files, so
+      # compile against empty placeholders here. The real maintenance-helper
+      # is still built and tested by `cargo test --workspace` below.
+      - name: Create placeholder embedded binaries
         shell: pwsh
-        run: New-Item -ItemType File -Path "bootstrapper\assets\nsis-payload.exe" -Force | Out-Null
+        run: |
+          New-Item -ItemType File -Path "bootstrapper\assets\nsis-payload.exe" -Force | Out-Null
+          New-Item -ItemType File -Path "src-tauri\resources\maintenance-helper.exe" -Force | Out-Null
 
       - name: Test helper workspace
         run: cargo test --workspace
