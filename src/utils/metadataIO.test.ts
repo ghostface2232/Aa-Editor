@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { createInMemoryFileSystem, type InMemoryFileSystem } from "./fs.test-utils";
+import { wrapWithFaults } from "./fs.fault.test-utils";
 import { readAllMeta, readMeta, writeMeta, removeMeta, type NoteMeta } from "./metadataIO";
 
 vi.mock("./crashLog", () => ({
@@ -68,5 +69,19 @@ describe("readMeta / writeMeta / removeMeta — content id validation", () => {
     await removeMeta(fs, DIR, "..");
     expect(removeSpy).not.toHaveBeenCalled();
     expect((await getMockedLogger()).mock.calls.length).toBeGreaterThan(0);
+  });
+
+  it("strict removal propagates errors that leave the sidecar in place", async () => {
+    fs.seedTextFile(`${DIR}/.meta/safe.json`, JSON.stringify(meta("safe")));
+    const faultFs = wrapWithFaults(fs);
+    faultFs.injectFault({
+      op: "remove",
+      path: `${DIR}/.meta/safe.json`,
+      times: 1,
+      throwError: new Error("EPERM"),
+    });
+
+    await expect(removeMeta(faultFs, DIR, "safe", { strict: true })).rejects.toThrow(/EPERM/);
+    expect(await fs.exists(`${DIR}/.meta/safe.json`)).toBe(true);
   });
 });

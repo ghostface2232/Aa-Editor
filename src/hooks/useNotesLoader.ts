@@ -38,6 +38,7 @@ import {
   type LibraryCommitToken,
   type LibraryData,
   type LibrarySnapshot,
+  type LibraryUpdater,
 } from "../utils/libraryStore";
 export type { NoteDoc, NoteGroup, TrashedNote } from "../utils/noteTypes";
 export { deriveTitle, getFileBaseName, stripInlineMarkdown, stripMarkdownContent } from "../utils/noteText";
@@ -731,47 +732,60 @@ interface LibraryPersistenceRequest {
   source?: string;
 }
 
+async function persistLatestLibrarySnapshot(
+  request: LibraryPersistenceRequest,
+  options?: { force?: boolean },
+): Promise<boolean> {
+  const latest = libraryStore.getSnapshot();
+  if (
+    latest.notesDirectory == null
+    || latest.directoryGeneration !== request.directoryGeneration
+  ) return false;
+  if (
+    !options?.force
+    && persistedLibraryGeneration === latest.directoryGeneration
+    && persistedLibraryRevision >= latest.revision
+    && persistedGroupMutationSeq >= groupMutationSeq
+  ) return true;
+
+  // Queue entries carry only a revision/generation request. The full state is
+  // read at execution time so a stale React array can never replay onto disk.
+  const docs = latest.docs.map((doc) => ({ ...doc }));
+  const noteClocks = new Map(docs.map((doc) => [doc.id, { ...noteMetadataClock(doc.id) }]));
+  const groups = latest.groups.map((group) => ({
+    ...group,
+    noteIds: [...group.noteIds],
+  }));
+  // Group tombstones are module-level durable intents rather than library
+  // entities. Capture their clock beside the execution-time group snapshot.
+  const latestGroupMutationSeq = groupMutationSeq;
+  await persistDecomposedState(
+    docs,
+    latest.activeNoteId,
+    groups,
+    request.source,
+    latestGroupMutationSeq,
+    latest.notesDirectory,
+    latest.trashedNotes.map((note) => ({ ...note })),
+  );
+
+  const afterWrite = libraryStore.getSnapshot();
+  if (
+    afterWrite.directoryGeneration !== latest.directoryGeneration
+    || afterWrite.notesDirectory !== latest.notesDirectory
+  ) return false;
+  persistedLibraryGeneration = latest.directoryGeneration;
+  persistedLibraryRevision = latest.revision;
+  persistedGroupMutationSeq = latestGroupMutationSeq;
+  for (const [noteId, clock] of noteClocks) acknowledgeNoteMetadataClock(noteId, clock);
+  return true;
+}
+
 function enqueueLatestLibraryPersistence(request: LibraryPersistenceRequest): Promise<void> {
   const job = persistChain
     .catch(() => undefined)
     .then(async () => {
-      const latest = libraryStore.getSnapshot();
-      if (
-        latest.notesDirectory == null
-        || latest.directoryGeneration !== request.directoryGeneration
-      ) return;
-      if (
-        persistedLibraryGeneration === latest.directoryGeneration
-        && persistedLibraryRevision >= latest.revision
-        && persistedGroupMutationSeq >= groupMutationSeq
-      ) return;
-
-      // Queue entries carry only a revision/generation request. The full state
-      // is read here, after older jobs drain, so a call made with a stale React
-      // array can never replay that array onto disk.
-      const docs = latest.docs.map((doc) => ({ ...doc }));
-      const noteClocks = new Map(docs.map((doc) => [doc.id, { ...noteMetadataClock(doc.id) }]));
-      const groups = latest.groups.map((group) => ({
-        ...group,
-        noteIds: [...group.noteIds],
-      }));
-      // Group tombstones are module-level durable intents rather than library
-      // entities. Capture their clock beside the execution-time group snapshot
-      // so an older request cannot pair a stale clock with newer groups.
-      const latestGroupMutationSeq = groupMutationSeq;
-      await persistDecomposedState(
-        docs,
-        latest.activeNoteId,
-        groups,
-        request.source,
-        latestGroupMutationSeq,
-        latest.notesDirectory,
-        latest.trashedNotes.map((note) => ({ ...note })),
-      );
-      persistedLibraryGeneration = latest.directoryGeneration;
-      persistedLibraryRevision = latest.revision;
-      persistedGroupMutationSeq = latestGroupMutationSeq;
-      for (const [noteId, clock] of noteClocks) acknowledgeNoteMetadataClock(noteId, clock);
+      await persistLatestLibrarySnapshot(request);
     });
   persistChain = job;
   return job;
@@ -827,6 +841,188 @@ export async function flushPersistence(source = "flushPersistence"): Promise<voi
       && groupMutationSeq <= persistedGroupMutationSeq
     ) return;
   }
+}
+
+class PersistenceTransactionInvalidatedError extends Error {}
+
+export interface PersistenceTransactionContext {
+  notesDirectory: string;
+  directoryGeneration: number;
+  snapshot: LibrarySnapshot;
+  assertCurrent: () => void;
+  readNoteMeta: (noteId: string) => Promise<NoteMeta | null>;
+  writeNoteMeta: (meta: NoteMeta) => Promise<void>;
+  removeNoteMeta: (noteId: string) => Promise<void>;
+  finalizeNoteMeta: (
+    noteId: string,
+    options?: {
+      acknowledgeFields?: { title?: boolean; pinned?: boolean; color?: boolean };
+      acknowledgeGroupMembership?: boolean;
+    },
+  ) => void;
+  discardNoteIntents: (noteId: string) => void;
+}
+
+export type PersistenceTransactionResult<T> =
+  | { status: "invalidated" }
+  | { status: "committed"; value: T; followupPersisted: boolean };
+
+/**
+ * Serialize a metadata/lifecycle transaction with targeted and full-library
+ * persistence. `publish` is awaited only while the directory generation is
+ * current, then the coordinator persists the published canonical projection
+ * before the next queued job can run.
+ * Target ids bind intent tokens at execution start. Call finalizeNoteMeta or
+ * discardNoteIntents only after that target's body/meta transition is final;
+ * provisional writes that may roll back must not finalize intents.
+ *
+ * The callbacks must use only the supplied context for durable metadata I/O.
+ * They must not await saveManifest, flushPersistence, saveNoteMetadata, or a
+ * nested transaction: those APIs enqueue behind this transaction and waiting
+ * for them here would create a self-deadlock.
+ */
+export function runPersistenceTransaction<T>(
+  source: string,
+  targetNoteIds: readonly string[],
+  operation: (context: PersistenceTransactionContext) => Promise<T>,
+  publish: (result: T, directoryGeneration: number) => LibrarySnapshot | null | Promise<LibrarySnapshot | null>,
+): Promise<PersistenceTransactionResult<T>> {
+  if (migrationInProgress) return Promise.resolve({ status: "invalidated" });
+  const requested = libraryStore.getSnapshot();
+  if (requested.notesDirectory == null) return Promise.resolve({ status: "invalidated" });
+
+  const job = persistChain
+    .catch(() => undefined)
+    .then(async () => {
+      const latest = libraryStore.getSnapshot();
+      if (
+        latest.directoryGeneration !== requested.directoryGeneration
+        || latest.notesDirectory == null
+      ) return { status: "invalidated" } as const;
+      const notesDirectory = latest.notesDirectory;
+      const directoryGeneration = latest.directoryGeneration;
+      const stagedFinalizers: Array<() => void> = [];
+      const targetIds = new Set(targetNoteIds);
+      for (const noteId of targetIds) {
+        if (!isValidNoteId(noteId)) throw new Error(`Unsafe note id: ${noteId}`);
+      }
+      const intentBaselines = new Map(Array.from(targetIds, (noteId) => [noteId, {
+        mutationClock: noteMetadataMutationClocks.get(noteId),
+        clock: { ...noteMetadataClock(noteId) },
+        pendingGroup: persistState.pendingGroupMembership.get(noteId),
+      }]));
+      const isCurrent = () => {
+        const current = libraryStore.getSnapshot();
+        return current.directoryGeneration === directoryGeneration
+          && current.notesDirectory === notesDirectory;
+      };
+      const assertCurrent = () => {
+        if (!isCurrent()) throw new PersistenceTransactionInvalidatedError();
+      };
+      const validateNoteId = (noteId: string) => {
+        if (!isValidNoteId(noteId)) throw new Error(`Unsafe note id: ${noteId}`);
+        if (!targetIds.has(noteId)) throw new Error(`Note id is outside transaction scope: ${noteId}`);
+      };
+      const result = await operation({
+        notesDirectory,
+        directoryGeneration,
+        snapshot: latest,
+        assertCurrent,
+        readNoteMeta: async (noteId) => {
+          validateNoteId(noteId);
+          assertCurrent();
+          const meta = await readMeta(tauriFileSystem, notesDirectory, noteId);
+          assertCurrent();
+          return meta;
+        },
+        writeNoteMeta: async (meta) => {
+          validateNoteId(meta.id);
+          assertCurrent();
+          await writeMetaFile(tauriFileSystem, notesDirectory, meta, getMachineIdCached());
+          assertCurrent();
+          persistState.writtenMeta.set(meta.id, metaSnapshotFromFile(meta));
+        },
+        removeNoteMeta: async (noteId) => {
+          validateNoteId(noteId);
+          assertCurrent();
+          await removeMetaFile(tauriFileSystem, notesDirectory, noteId, { strict: true });
+          assertCurrent();
+          persistState.writtenMeta.delete(noteId);
+        },
+        finalizeNoteMeta: (noteId, options) => {
+          validateNoteId(noteId);
+          const intentBaseline = intentBaselines.get(noteId)!;
+          stagedFinalizers.push(() => {
+            if (options?.acknowledgeFields) {
+              const fields = options.acknowledgeFields;
+              acknowledgeNoteMetadataClock(noteId, intentBaseline.clock, {
+                title: fields.title === true,
+                pinned: fields.pinned === true,
+                color: fields.color === true,
+              });
+            }
+            if (
+              options?.acknowledgeGroupMembership
+              && intentBaseline.pendingGroup != null
+              && persistState.pendingGroupMembership.get(noteId) === intentBaseline.pendingGroup
+            ) {
+              persistState.pendingGroupMembership.delete(noteId);
+            }
+          });
+        },
+        discardNoteIntents: (noteId) => {
+          validateNoteId(noteId);
+          const intentBaseline = intentBaselines.get(noteId)!;
+          stagedFinalizers.push(() => {
+            if (noteMetadataMutationClocks.get(noteId) === intentBaseline.mutationClock) {
+              noteMetadataMutationClocks.delete(noteId);
+              ackedNoteMetadataMutationClocks.delete(noteId);
+            }
+            if (
+              intentBaseline.pendingGroup != null
+              && persistState.pendingGroupMembership.get(noteId) === intentBaseline.pendingGroup
+            ) persistState.pendingGroupMembership.delete(noteId);
+          });
+        },
+      });
+      if (!isCurrent()) return { status: "invalidated" } as const;
+      const committed = await publish(result, directoryGeneration);
+      if (
+        !committed
+        || committed.directoryGeneration !== directoryGeneration
+        || !isCurrent()
+      ) {
+        return { status: "invalidated" } as const;
+      }
+      for (const finalize of stagedFinalizers) finalize();
+      let followupPersisted = false;
+      try {
+        followupPersisted = await persistLatestLibrarySnapshot({
+          revision: committed.revision,
+          directoryGeneration,
+          source,
+        }, { force: true });
+      } catch {
+        // The lifecycle and canonical state are already committed. Keep the
+        // persisted watermarks behind so flushPersistence retries this debt.
+      }
+      return { status: "committed", value: result, followupPersisted } as const;
+    })
+    .catch((err) => {
+      if (err instanceof PersistenceTransactionInvalidatedError) {
+        return { status: "invalidated" } as const;
+      }
+      if (import.meta.env.DEV) console.warn(`[PERSIST_TRANSACTION_FAILED] ${source}`, err);
+      void logNotenError(new NotenError(
+        "PERSIST_FAILED",
+        "fatal",
+        err instanceof Error ? err.message : String(err),
+        { context: { source }, cause: err },
+      ));
+      throw err;
+    });
+  persistChain = job;
+  return job;
 }
 
 /**
@@ -963,6 +1159,17 @@ export function useNotesLoader(
     const committed = token == null
       ? libraryStore.commit(data, origin)
       : libraryStore.commitIfCurrent(token, data, origin);
+    if (!committed) return null;
+    syncAllReactState(committed);
+    return committed;
+  }, [syncAllReactState]);
+
+  const commitLibraryForGeneration = useCallback((
+    directoryGeneration: number,
+    update: LibraryUpdater,
+    origin: LibraryCommitOrigin = "local",
+  ) => {
+    const committed = libraryStore.commitForGeneration(directoryGeneration, update, origin);
     if (!committed) return null;
     syncAllReactState(committed);
     return committed;
@@ -1382,6 +1589,7 @@ export function useNotesLoader(
     trashedNotes,
     setTrashedNotes,
     setTrashedNotesFromRemote,
+    commitLibraryForGeneration,
     isLoading,
   };
 }

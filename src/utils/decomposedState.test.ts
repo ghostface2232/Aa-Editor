@@ -241,6 +241,38 @@ describe("pendingGroupMembership consumption", () => {
 
     expect(state.pendingGroupMembership.has(doc.id)).toBe(false);
   });
+
+  it("does not consume a newer membership staged while an older meta write is pending", async () => {
+    const doc = makeDoc("abababab-abab-abab-abab-abababababab");
+    const older = { groupId: "g-old", updatedAt: 5000 };
+    const newer = { groupId: "g-new", updatedAt: 6000 };
+    state.pendingGroupMembership.set(doc.id, older);
+    let releaseWrite!: () => void;
+    const writeGate = new Promise<void>((resolve) => { releaseWrite = resolve; });
+    let markWriteStarted!: () => void;
+    const writeStarted = new Promise<void>((resolve) => { markWriteStarted = resolve; });
+    const gatedFs: InMemoryFileSystem = {
+      ...fs,
+      writeTextFile: async (path, content) => {
+        if (path.includes(doc.id)) {
+          markWriteStarted();
+          await writeGate;
+        }
+        return fs.writeTextFile(path, content);
+      },
+    };
+
+    const persist = persistDecomposedState(
+      gatedFs, DIR, state, [doc], null, [], persistOpts(),
+    );
+    await writeStarted;
+    state.pendingGroupMembership.set(doc.id, newer);
+    releaseWrite();
+    await persist;
+
+    expect(state.pendingGroupMembership.get(doc.id)).toBe(newer);
+    expect((await readMeta(fs, DIR, doc.id))?.groupId).toBe("g-old");
+  });
 });
 
 describe("local cache", () => {

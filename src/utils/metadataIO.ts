@@ -160,7 +160,12 @@ export async function writeMeta(fs: FileSystem, notesDir: string, meta: NoteMeta
   return serialized;
 }
 
-export async function removeMeta(fs: FileSystem, notesDir: string, noteId: string): Promise<void> {
+export async function removeMeta(
+  fs: FileSystem,
+  notesDir: string,
+  noteId: string,
+  options?: { strict?: boolean },
+): Promise<void> {
   // Defense-in-depth: never let an unsafe id reach a filesystem remove.
   // Validation upstream should already exclude these, so reaching here is a bug.
   if (!isValidNoteId(noteId)) {
@@ -179,7 +184,13 @@ export async function removeMeta(fs: FileSystem, notesDir: string, noteId: strin
   try {
     await fs.remove(path);
     dropCachedMeta(fs, notesDir, noteId);
-  } catch { /* already gone */ }
+  } catch (error) {
+    if (!options?.strict) return;
+    // Missing is idempotent success. Any error that leaves the sidecar in
+    // place is a real lifecycle failure and must propagate to the caller.
+    if (await fs.exists(path)) throw error;
+    dropCachedMeta(fs, notesDir, noteId);
+  }
 }
 
 export async function listMetaFiles(fs: FileSystem, notesDir: string): Promise<string[]> {

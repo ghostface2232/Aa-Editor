@@ -354,6 +354,7 @@ export async function persistDecomposedState(
 
   const metaWrites: Promise<unknown>[] = [];
   for (const doc of docs) {
+    const pendingGroup = state.pendingGroupMembership.get(doc.id);
     const groupSnap = resolveGroupSnapshot(doc.id, noteIdToGroupId.get(doc.id) ?? null);
     const snap: MetaSnapshot = {
       fileName: doc.fileName,
@@ -368,7 +369,9 @@ export async function persistDecomposedState(
     };
     const prev = state.writtenMeta.get(doc.id);
     if (prev && metaSnapshotEqual(prev, snap)) {
-      state.pendingGroupMembership.delete(doc.id);
+      if (pendingGroup != null && state.pendingGroupMembership.get(doc.id) === pendingGroup) {
+        state.pendingGroupMembership.delete(doc.id);
+      }
       continue;
     }
 
@@ -387,12 +390,15 @@ export async function persistDecomposedState(
         trashedAt: null,
       }, machineId).then(() => {
         state.writtenMeta.set(doc.id, snap);
-        state.pendingGroupMembership.delete(doc.id);
+        if (pendingGroup != null && state.pendingGroupMembership.get(doc.id) === pendingGroup) {
+          state.pendingGroupMembership.delete(doc.id);
+        }
       }),
     );
   }
 
   for (const t of trashedNotes) {
+    const pendingGroup = state.pendingGroupMembership.get(t.id);
     const groupSnap = resolveGroupSnapshot(t.id, t.groupId ?? null);
     const snap: MetaSnapshot = {
       fileName: t.fileName,
@@ -407,7 +413,9 @@ export async function persistDecomposedState(
     };
     const prev = state.writtenMeta.get(t.id);
     if (prev && metaSnapshotEqual(prev, snap)) {
-      state.pendingGroupMembership.delete(t.id);
+      if (pendingGroup != null && state.pendingGroupMembership.get(t.id) === pendingGroup) {
+        state.pendingGroupMembership.delete(t.id);
+      }
       continue;
     }
 
@@ -427,7 +435,9 @@ export async function persistDecomposedState(
         trashedFromPath: t.originalFilePath,
       }, machineId).then(() => {
         state.writtenMeta.set(t.id, snap);
-        state.pendingGroupMembership.delete(t.id);
+        if (pendingGroup != null && state.pendingGroupMembership.get(t.id) === pendingGroup) {
+          state.pendingGroupMembership.delete(t.id);
+        }
       }),
     );
   }

@@ -128,7 +128,7 @@ vi.mock("../utils/reconcileFolder", async (importOriginal) => {
 });
 
 // Loader is imported AFTER all mocks. Tests then drive it with renderHook.
-import { useNotesLoader, resetNotesDir, restoreNotesDir, setNotesDir, saveManifest, saveNoteMetadata, flushPersistence, markGroupAsDeleted, markNotesPinnedChanged, purgeExpiredTrash } from "./useNotesLoader";
+import { useNotesLoader, resetNotesDir, restoreNotesDir, setNotesDir, saveManifest, saveNoteMetadata, flushPersistence, runPersistenceTransaction, markGroupAsDeleted, markGroupMembershipChanged, markNotesPinnedChanged, purgeExpiredTrash } from "./useNotesLoader";
 import * as reconcileFolderModule from "../utils/reconcileFolder";
 import * as decomposedStateModule from "../utils/decomposedState";
 import * as crashLogModule from "../utils/crashLog";
@@ -323,6 +323,40 @@ describe("useNotesLoader — canonical library store adapter", () => {
     act(() => result.current.setDocs((prev) => prev));
 
     expect(libraryStore.getSnapshot()).toBe(before);
+  });
+
+  it("commits a generation-bound whole-library transition in one revision", async () => {
+    const a = makeDoc("a");
+    refs.fs!.seedTextFile(a.filePath, "body-a");
+    refs.decomposedDocs = [a];
+    const { result } = renderHook(() => useNotesLoader("en", "updated-desc"));
+    await waitFor(() => expect(result.current.isLoading).toBe(false), { timeout: 2000 });
+    const before = libraryStore.getSnapshot();
+    const trashed: TrashedNote = {
+      id: "a",
+      fileName: "Note a",
+      originalFilePath: a.filePath,
+      trashFilePath: "/test-appdata/notes/.trash/a.md",
+      trashedAt: 5000,
+      groupId: null,
+      createdAt: 1000,
+      updatedAt: 1000,
+    };
+
+    act(() => {
+      result.current.commitLibraryForGeneration(before.directoryGeneration, () => ({
+        docs: [],
+        groups: [],
+        trashedNotes: [trashed],
+        activeNoteId: null,
+      }));
+    });
+
+    expect(libraryStore.getSnapshot().revision).toBe(before.revision + 1);
+    expect(result.current.docs).toEqual([]);
+    expect(result.current.groups).toEqual([]);
+    expect(result.current.trashedNotes.map((entry) => entry.id)).toEqual(["a"]);
+    expect(result.current.activeIndex).toBe(0);
   });
 
   it("resolves a nested active-index update against the docs returned by its updater", async () => {
@@ -684,6 +718,303 @@ describe("useNotesLoader — saveManifest persistChain", () => {
       groupsSnapshotSeq: number;
     };
     expect(options.groupsSnapshotSeq).toBeGreaterThan(0);
+  });
+
+  it("serializes lifecycle transactions behind older full persistence", async () => {
+    const doc = makeDoc("a");
+    libraryStore.seedDirectory("/test-appdata/notes", {
+      docs: [doc],
+      groups: [],
+      trashedNotes: [],
+      activeNoteId: "a",
+    });
+    let releaseFull!: () => void;
+    const fullGate = new Promise<void>((resolve) => { releaseFull = resolve; });
+    persistMock.mockImplementationOnce(async () => { await fullGate; });
+    const full = saveManifest([doc], "a", [], "older-full");
+    full.catch(() => {});
+    await flushAll();
+    let transactionStarted = false;
+    const transaction = runPersistenceTransaction("delete-a", ["a"], async ({ notesDirectory }) => {
+      transactionStarted = true;
+      expect(notesDirectory).toBe("/test-appdata/notes");
+      return "done";
+    }, () => libraryStore.getSnapshot());
+    transaction.catch(() => {});
+
+    await flushAll();
+    expect(transactionStarted).toBe(false);
+    releaseFull();
+    await full;
+    await expect(transaction).resolves.toEqual({
+      status: "committed",
+      value: "done",
+      followupPersisted: true,
+    });
+    expect(transactionStarted).toBe(true);
+    expect(persistMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("holds a later full persist until a lifecycle transaction publishes", async () => {
+    const doc = makeDoc("a");
+    libraryStore.seedDirectory("/test-appdata/notes", {
+      docs: [doc],
+      groups: [],
+      trashedNotes: [],
+      activeNoteId: "a",
+    });
+    let releaseTransaction!: () => void;
+    const transactionGate = new Promise<void>((resolve) => { releaseTransaction = resolve; });
+    const transaction = runPersistenceTransaction("trash-a", ["a"], async ({ writeNoteMeta }) => {
+      await writeNoteMeta({
+        version: 2,
+        id: "a",
+        fileName: "Note a",
+        createdAt: 1000,
+        updatedAt: 1000,
+        groupId: null,
+        groupUpdatedAt: 1000,
+        trashedAt: 9000,
+      });
+      await transactionGate;
+      return true;
+    }, () => libraryStore.commit({ docs: [], activeNoteId: null }, "local"));
+    transaction.catch(() => {});
+    await flushAll();
+    persistMock.mockResolvedValueOnce(undefined);
+    const full = saveManifest([doc], "a", [], "behind-lifecycle");
+    full.catch(() => {});
+
+    await flushAll();
+    expect(persistMock).not.toHaveBeenCalled();
+    releaseTransaction();
+    await transaction;
+    await full;
+
+    expect(persistMock).toHaveBeenCalledTimes(1);
+    expect(persistMock.mock.calls[0][3]).toEqual([]);
+  });
+
+  it("drops a transaction result when the directory changes during metadata I/O", async () => {
+    const doc = makeDoc("a");
+    libraryStore.seedDirectory("/test-appdata/notes", {
+      docs: [doc],
+      groups: [],
+      trashedNotes: [],
+      activeNoteId: "a",
+    });
+    let releaseWrite!: () => void;
+    refs.writeGate = new Promise<void>((resolve) => { releaseWrite = resolve; });
+    let markWriteStarted!: () => void;
+    const writeStarted = new Promise<void>((resolve) => { markWriteStarted = resolve; });
+    refs.onWriteStart = (path) => {
+      if (path.includes("/.meta/") || path.includes("\\.meta\\")) markWriteStarted();
+    };
+    const publish = vi.fn(() => libraryStore.getSnapshot());
+    const transaction = runPersistenceTransaction("generation-switch", ["a"], async ({ writeNoteMeta }) => {
+      await writeNoteMeta({
+        version: 2,
+        id: "a",
+        fileName: "Note a",
+        createdAt: 1000,
+        updatedAt: 1000,
+        groupId: null,
+        groupUpdatedAt: 1000,
+        trashedAt: 9000,
+      });
+      return true;
+    }, publish);
+    transaction.catch(() => {});
+
+    await writeStarted;
+    refs.fs!.seedDir("D:/other-notes");
+    libraryStore.seedDirectory("D:/other-notes", {
+      docs: [makeDoc("other")],
+      groups: [],
+      trashedNotes: [],
+      activeNoteId: "other",
+    });
+    releaseWrite();
+
+    await expect(transaction).resolves.toEqual({ status: "invalidated" });
+    expect(publish).not.toHaveBeenCalled();
+    expect(libraryStore.getSnapshot().docs.map((entry) => entry.id)).toEqual(["other"]);
+    expect(await readMeta(refs.fs!, "D:/other-notes", "a")).toBeNull();
+  });
+
+  it("awaits canonical publish before forcing the follow-up projection", async () => {
+    const doc = makeDoc("a");
+    libraryStore.seedDirectory("/test-appdata/notes", {
+      docs: [doc],
+      groups: [],
+      trashedNotes: [],
+      activeNoteId: "a",
+    });
+    let releasePublish!: () => void;
+    const publishGate = new Promise<void>((resolve) => { releasePublish = resolve; });
+    const transaction = runPersistenceTransaction("async-publish", ["a"], async () => true, async () => {
+      await publishGate;
+      return libraryStore.commit({ docs: [], activeNoteId: null }, "local");
+    });
+    transaction.catch(() => {});
+
+    await flushAll();
+    expect(persistMock).not.toHaveBeenCalled();
+    releasePublish();
+    await expect(transaction).resolves.toEqual({
+      status: "committed",
+      value: true,
+      followupPersisted: true,
+    });
+    expect(persistMock.mock.calls[0][3]).toEqual([]);
+  });
+
+  it("invalidates when the directory changes while async publish is pending", async () => {
+    const doc = makeDoc("a");
+    libraryStore.seedDirectory("/test-appdata/notes", {
+      docs: [doc],
+      groups: [],
+      trashedNotes: [],
+      activeNoteId: "a",
+    });
+    let releasePublish!: () => void;
+    const publishGate = new Promise<void>((resolve) => { releasePublish = resolve; });
+    let markPublished!: () => void;
+    const published = new Promise<void>((resolve) => { markPublished = resolve; });
+    const transaction = runPersistenceTransaction("publish-generation", ["a"], async () => true, async () => {
+      const committed = libraryStore.commit({ docs: [], activeNoteId: null }, "local");
+      markPublished();
+      await publishGate;
+      return committed;
+    });
+    transaction.catch(() => {});
+
+    await published;
+    refs.fs!.seedDir("D:/other-notes");
+    libraryStore.seedDirectory("D:/other-notes", {
+      docs: [makeDoc("other")],
+      groups: [],
+      trashedNotes: [],
+      activeNoteId: "other",
+    });
+    releasePublish();
+
+    await expect(transaction).resolves.toEqual({ status: "invalidated" });
+    expect(persistMock).not.toHaveBeenCalled();
+    expect(libraryStore.getSnapshot().docs.map((entry) => entry.id)).toEqual(["other"]);
+  });
+
+  it("does not finalize an intent created after the execution snapshot", async () => {
+    const doc = makeDoc("a");
+    const group: NoteGroup = {
+      id: "g-new",
+      name: "New",
+      noteIds: ["a"],
+      collapsed: false,
+      createdAt: 1000,
+    };
+    libraryStore.seedDirectory("/test-appdata/notes", {
+      docs: [doc],
+      groups: [group],
+      trashedNotes: [],
+      activeNoteId: "a",
+    });
+    markGroupMembershipChanged("a", "g-old", 5000);
+    let releaseOperation!: () => void;
+    const operationGate = new Promise<void>((resolve) => { releaseOperation = resolve; });
+    let markOperationStarted!: () => void;
+    const operationStarted = new Promise<void>((resolve) => { markOperationStarted = resolve; });
+    const transaction = runPersistenceTransaction(
+      "intent-baseline",
+      ["a"],
+      async ({ writeNoteMeta, finalizeNoteMeta }) => {
+        markOperationStarted();
+        await operationGate;
+        await writeNoteMeta({
+          version: 2,
+          id: "a",
+          fileName: "Note a",
+          createdAt: 1000,
+          updatedAt: 1000,
+          groupId: "g-old",
+          groupUpdatedAt: 5000,
+          trashedAt: null,
+        });
+        finalizeNoteMeta("a", { acknowledgeGroupMembership: true });
+        return true;
+      },
+      () => libraryStore.getSnapshot(),
+    );
+    transaction.catch(() => {});
+
+    await operationStarted;
+    markGroupMembershipChanged("a", "g-new", 6000);
+    releaseOperation();
+    await expect(transaction).resolves.toMatchObject({ status: "committed" });
+
+    libraryStore.commit((current) => ({
+      docs: current.docs.map((entry) => ({ ...entry, content: "changed" })),
+    }), "local");
+    const actual = await vi.importActual<typeof import("../utils/decomposedState")>("../utils/decomposedState");
+    persistMock.mockImplementationOnce(actual.persistDecomposedState);
+    await saveManifest([], null, [], "intent-baseline-followup");
+
+    expect((await readMeta(refs.fs!, "/test-appdata/notes", "a"))?.groupId).toBe("g-new");
+  });
+
+  it("reports follow-up persistence debt without undoing a committed lifecycle", async () => {
+    const doc = makeDoc("a");
+    libraryStore.seedDirectory("/test-appdata/notes", {
+      docs: [doc],
+      groups: [],
+      trashedNotes: [],
+      activeNoteId: "a",
+    });
+    persistMock.mockRejectedValueOnce(new Error("groups EPERM"));
+    const transaction = runPersistenceTransaction("followup-failure", ["a"], async () => true, () => (
+      libraryStore.commit({ docs: [], activeNoteId: null }, "local")
+    ));
+
+    await expect(transaction).resolves.toEqual({
+      status: "committed",
+      value: true,
+      followupPersisted: false,
+    });
+    expect(libraryStore.getSnapshot().docs).toEqual([]);
+
+    persistMock.mockResolvedValueOnce(undefined);
+    await expect(flushPersistence("retry-followup")).resolves.toBeUndefined();
+    expect(persistMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects unsafe note ids and lets the next persistence job recover", async () => {
+    const doc = makeDoc("a");
+    libraryStore.seedDirectory("/test-appdata/notes", {
+      docs: [doc],
+      groups: [],
+      trashedNotes: [],
+      activeNoteId: "a",
+    });
+    const transaction = runPersistenceTransaction("unsafe-id", [".."], async ({ writeNoteMeta }) => {
+      await writeNoteMeta({
+        version: 2,
+        id: "..",
+        fileName: "Unsafe",
+        createdAt: 1000,
+        updatedAt: 1000,
+        groupId: null,
+        groupUpdatedAt: 1000,
+        trashedAt: null,
+      });
+      return true;
+    }, () => libraryStore.getSnapshot());
+    transaction.catch(() => {});
+
+    await expect(transaction).rejects.toThrow(/Unsafe note id/);
+    persistMock.mockResolvedValueOnce(undefined);
+    await expect(saveManifest([doc], "a", [], "after-failed-transaction")).resolves.toBeUndefined();
+    expect(persistMock).toHaveBeenCalledTimes(1);
+    expect(logNotenErrorMock).toHaveBeenCalledWith(expect.objectContaining({ code: "PERSIST_FAILED" }));
   });
 });
 
