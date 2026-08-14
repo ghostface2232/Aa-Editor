@@ -749,7 +749,10 @@ export function useNotesLoader(
         } else {
           const timestamp = Date.now();
           setDocs([{
-            id: "local",
+            // A fresh id per stub: a fixed sentinel could collide with a note
+            // another window/session persisted after provisioning ITS stub,
+            // reopening the remote-deletion race for that id.
+            id: crypto.randomUUID(),
             filePath: "",
             fileName: getDefaultDocumentTitle(locale),
             isDirty: false,

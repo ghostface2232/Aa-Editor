@@ -12,6 +12,7 @@ const refs = vi.hoisted(() => ({
   backupShouldThrow: null as Error | null,
   remoteBackupShouldThrow: null as Error | null,
   writeShouldThrow: null as Error | null,
+  provisionShouldFail: false,
   editorContent: "",
   files: new Map<string, string>(),
 }));
@@ -49,6 +50,12 @@ vi.mock("./useNotesLoader", () => ({
 
 vi.mock("./useFileSystem", () => ({
   getCurrentMarkdown: vi.fn(() => refs.editorContent),
+  provisionNoteFile: vi.fn(async (id: string, content: string) => {
+    if (refs.provisionShouldFail) return { filePath: "", ok: false };
+    const filePath = `/notes/${id}.md`;
+    refs.files.set(filePath, content);
+    return { filePath, ok: true };
+  }),
 }));
 
 vi.mock("../utils/conflictBackup", () => ({
@@ -203,6 +210,7 @@ beforeEach(() => {
   refs.backupShouldThrow = null;
   refs.remoteBackupShouldThrow = null;
   refs.writeShouldThrow = null;
+  refs.provisionShouldFail = false;
   refs.editorContent = "hello world";
   refs.files.clear();
 });
@@ -482,6 +490,177 @@ describe("useAutoSave — backup-failure defers save", () => {
     expect(logged).toBeDefined();
     const ne = logged![0] as NotenError;
     expect(ne.context).toMatchObject({ noteId: "a", filePath: "/notes/a.md" });
+  });
+});
+
+describe("useAutoSave — pathless fallback doc (loader failure stub)", () => {
+  const provisionMock = useFileSystemModule.provisionNoteFile as ReturnType<typeof vi.fn>;
+
+  it("hasUnsaveableChanges reports a dirty pathless doc; hasUnsavedChanges stays pending-only", () => {
+    refs.provisionShouldFail = true;
+    const { result } = renderAutoSave({
+      docs: [makeDoc("local", { filePath: "", isDirty: true })],
+    });
+
+    act(() => result.current.scheduleAutoSave());
+    // Never folded into hasUnsavedChanges: its consumers treat `true` as
+    // "drain and retry", which a structurally unsaveable doc cannot satisfy.
+    expect(result.current.hasUnsavedChanges()).toBe(false);
+    expect(result.current.hasUnsaveableChanges()).toBe(true);
+  });
+
+  it("hasUnsaveableChanges stays false for a clean pathless doc and clears when the doc leaves", () => {
+    const { result, rerenderWith } = renderAutoSave({
+      docs: [makeDoc("local", { filePath: "", isDirty: false })],
+      state: makeState({ isDirty: false }),
+    });
+    expect(result.current.hasUnsaveableChanges()).toBe(false);
+
+    rerenderWith({ docs: [makeDoc("local", { filePath: "", isDirty: true })] });
+    expect(result.current.hasUnsaveableChanges()).toBe(true);
+
+    rerenderWith({ docs: [makeDoc("a", { isDirty: true })] });
+    expect(result.current.hasUnsaveableChanges()).toBe(false);
+  });
+
+  it("an edit provisions a real file with the live editor content", async () => {
+    const { result, setDocs } = renderAutoSave({
+      docs: [makeDoc("local", { filePath: "", isDirty: true })],
+    });
+
+    await act(async () => {
+      result.current.scheduleAutoSave();
+      await Promise.resolve();
+    });
+
+    expect(provisionMock).toHaveBeenCalledWith("local", "hello world", "autosave-provision-pathless");
+    expect(refs.files.get("/notes/local.md")).toBe("hello world");
+    // The docs commit adopts the provisioned path.
+    const updater = setDocs.mock.calls[setDocs.mock.calls.length - 1][0] as (prev: NoteDoc[]) => NoteDoc[];
+    const next = updater([makeDoc("local", { filePath: "", isDirty: true })]);
+    expect(next[0].filePath).toBe("/notes/local.md");
+  });
+
+  it("after provisioning, the next edit arms a normal debounced save", async () => {
+    vi.useFakeTimers();
+    const { result } = renderAutoSave({
+      docs: [makeDoc("local", { filePath: "", isDirty: true })],
+    });
+
+    await act(async () => {
+      result.current.scheduleAutoSave();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(result.current.hasUnsaveableChanges()).toBe(false);
+
+    refs.editorContent = "typed after provisioning";
+    act(() => result.current.scheduleAutoSave());
+    expect(result.current.hasUnsavedChanges()).toBe(true);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(writeMock).toHaveBeenCalledWith("/notes/local.md", "typed after provisioning");
+  });
+
+  it("flushAutoSave provisions and re-snapshots, but still reports false so stale-snapshot callers don't mark the doc clean", async () => {
+    const { result } = renderAutoSave({
+      docs: [makeDoc("local", { filePath: "", isDirty: true })],
+    });
+
+    let flushed = true;
+    await act(async () => {
+      flushed = await result.current.flushAutoSave();
+    });
+
+    // The content IS persisted...
+    expect(refs.files.get("/notes/local.md")).toBe("hello world");
+    // ...through the normal pipeline via the post-provision re-snapshot...
+    expect(writeMock).toHaveBeenCalledWith("/notes/local.md", "hello world");
+    // ...but callers that snapshotted docs before the flush would commit a
+    // clean-but-pathless entry on `true`, so the flush stays conservative.
+    expect(flushed).toBe(false);
+  });
+
+  it("flushAutoSave does not provision while a migration is in progress", async () => {
+    refs.migrationInProgress = true;
+    const { result } = renderAutoSave({
+      docs: [makeDoc("local", { filePath: "", isDirty: true })],
+    });
+
+    let flushed = true;
+    await act(async () => {
+      flushed = await result.current.flushAutoSave();
+    });
+
+    expect(flushed).toBe(false);
+    expect(provisionMock).not.toHaveBeenCalled();
+  });
+
+  it("a remote deletion arriving mid-provision wins: the provisioned file is removed, nothing adopted", async () => {
+    const removeMock = fsModule.tauriFileSystem.remove as ReturnType<typeof vi.fn>;
+    let release!: (value: { filePath: string; ok: boolean }) => void;
+    provisionMock.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+
+    const { result, setDocs } = renderAutoSave({
+      docs: [makeDoc("stub", { filePath: "", isDirty: true })],
+    });
+
+    act(() => result.current.scheduleAutoSave());
+
+    let settled!: Promise<boolean>;
+    act(() => { settled = result.current.settleRemoteDeletedDoc("stub"); });
+
+    await act(async () => {
+      refs.files.set("/notes/stub.md", "hello world");
+      release({ filePath: "/notes/stub.md", ok: true });
+      await settled;
+    });
+
+    expect(removeMock).toHaveBeenCalledWith("/notes/stub.md");
+    expect(setDocs).not.toHaveBeenCalled();
+  });
+
+  it("flushAutoSave returns false and hasUnsaveableChanges stays true while provisioning fails", async () => {
+    refs.provisionShouldFail = true;
+    const { result } = renderAutoSave({
+      docs: [makeDoc("local", { filePath: "", isDirty: true })],
+    });
+
+    let flushed = true;
+    await act(async () => {
+      flushed = await result.current.flushAutoSave();
+    });
+
+    expect(flushed).toBe(false);
+    expect(writeMock).not.toHaveBeenCalled();
+    expect(result.current.hasUnsaveableChanges()).toBe(true);
+  });
+
+  it("failed provisioning retries are throttled for edits but not for an explicit flush", async () => {
+    vi.useFakeTimers();
+    refs.provisionShouldFail = true;
+    const { result } = renderAutoSave({
+      docs: [makeDoc("local", { filePath: "", isDirty: true })],
+    });
+
+    await act(async () => {
+      result.current.scheduleAutoSave();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(provisionMock).toHaveBeenCalledTimes(1);
+
+    // A keystroke right after the failure does not hammer the dead dir...
+    await act(async () => {
+      result.current.scheduleAutoSave();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(provisionMock).toHaveBeenCalledTimes(1);
+
+    // ...but the close-time flush always makes a fresh attempt.
+    refs.provisionShouldFail = false;
+    await act(async () => {
+      await result.current.flushAutoSave();
+    });
+    expect(provisionMock).toHaveBeenCalledTimes(2);
+    expect(refs.files.get("/notes/local.md")).toBe("hello world");
   });
 });
 

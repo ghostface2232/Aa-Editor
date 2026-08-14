@@ -282,6 +282,14 @@ const dict = {
     en: "Some changes could not be saved, so the window stayed open. Check your storage location and permissions, then try again.",
     ko: "일부 변경 사항을 저장하지 못해 창을 닫지 않았습니다. 저장 위치와 권한을 확인한 뒤 다시 시도해 주세요.",
   },
+  "close.unsaveableDiscard": {
+    en: "Changes to this note could not be saved because the notes folder is unavailable. Close anyway and discard them?",
+    ko: "노트 폴더를 사용할 수 없어 이 노트의 변경 사항을 저장하지 못했습니다. 그래도 창을 닫고 변경 사항을 버리시겠습니까?",
+  },
+  "settings.notesDirectory.unsaveableDiscard": {
+    en: "Changes to an unsaved note could not be written to disk and will be lost. Continue anyway?",
+    ko: "저장되지 못한 노트의 변경 사항을 디스크에 기록할 수 없어 사라집니다. 그래도 계속하시겠습니까?",
+  },
 
   "settings.tab.trash": { en: "Recently Deleted", ko: "최근 삭제한 노트" },
   "trash.count": { en: "{n} deleted notes", ko: "삭제된 노트 {n}개" },

@@ -87,7 +87,7 @@ export function getCurrentMarkdown(
 // markOwnWrite, writeTextFile) with the SAVE_FAILED logging that every caller
 // repeated. Returns the would-be filePath and whether the write landed, so a
 // caller can either abort on `!ok` or commit a dirty doc pointing at the path.
-async function provisionNoteFile(
+export async function provisionNoteFile(
   id: string,
   content: string,
   stage: string,

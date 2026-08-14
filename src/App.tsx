@@ -413,6 +413,7 @@ function App() {
 
   const flushAutoSaveRef = useRef<(() => Promise<boolean>) | null>(null);
   const hasUnsavedChangesRef = useRef<(() => boolean) | null>(null);
+  const hasUnsaveableChangesRef = useRef<(() => boolean) | null>(null);
   const flushManifestRef = useRef<(() => Promise<boolean>) | null>(null);
   const captureAndQueueSaveRef = useRef<(() => void) | null>(null);
   const awaitInFlightSavesRef = useRef<(() => Promise<void>) | null>(null);
@@ -442,7 +443,7 @@ function App() {
     flushDocSaveRef,
   );
 
-  const { scheduleAutoSave, flushAutoSave, hasUnsavedChanges, captureAndQueueSave, awaitInFlightSaves, flushDocSave, flushPendingSnapshots, notifyActiveDoc, cancelDocSave, settleRemoteDeletedDoc } = useAutoSave(
+  const { scheduleAutoSave, flushAutoSave, hasUnsavedChanges, hasUnsaveableChanges, captureAndQueueSave, awaitInFlightSaves, flushDocSave, flushPendingSnapshots, notifyActiveDoc, cancelDocSave, settleRemoteDeletedDoc } = useAutoSave(
     state,
     tiptapRef,
     docs,
@@ -455,6 +456,7 @@ function App() {
   );
   flushAutoSaveRef.current = flushAutoSave;
   hasUnsavedChangesRef.current = hasUnsavedChanges;
+  hasUnsaveableChangesRef.current = hasUnsaveableChanges;
   flushManifestRef.current = () => saveManifest(
     docsRef.current,
     docsRef.current[activeIndexRef.current]?.id ?? null,
@@ -799,6 +801,15 @@ function App() {
       await message(t("settings.notesDirectory.drainFailed", locale), { kind: "error" });
       return;
     }
+    // A dirty pathless doc (loader-failure stub) can never drain — the flush
+    // above is a no-op for it — and its content lives only in this editor, so
+    // the reload after the directory change would drop it. Get explicit
+    // consent instead of losing it silently (or blocking the very action that
+    // recovers from the failed notes dir).
+    if (hasUnsaveableChangesRef.current?.()) {
+      const proceed = await confirm(t("settings.notesDirectory.unsaveableDiscard", locale), { kind: "warning" });
+      if (!proceed) return;
+    }
 
     setMigrationInProgress(true);
     // Other windows flush and block their saves before any destructive step.
@@ -902,6 +913,15 @@ function App() {
     if (hasUnsavedChangesRef.current?.() || !manifestSaved) {
       await message(t("settings.notesDirectory.drainFailed", locale), { kind: "error" });
       return;
+    }
+    // A dirty pathless doc (loader-failure stub) can never drain — the flush
+    // above is a no-op for it — and its content lives only in this editor, so
+    // the reload after the directory change would drop it. Get explicit
+    // consent instead of losing it silently (or blocking the very action that
+    // recovers from the failed notes dir).
+    if (hasUnsaveableChangesRef.current?.()) {
+      const proceed = await confirm(t("settings.notesDirectory.unsaveableDiscard", locale), { kind: "warning" });
+      if (!proceed) return;
     }
 
     setMigrationInProgress(true);
@@ -1167,6 +1187,12 @@ function App() {
       if (hasUnsavedChangesRef.current?.() || !manifestOk) {
         event.preventDefault();
         await message(t("close.unsavedBlocked", localeRef.current), { kind: "error" });
+      } else if (hasUnsaveableChangesRef.current?.()) {
+        // A dirty doc with no filePath (loader-failure stub whose provisioning
+        // keeps failing) can never drain, so blocking would wedge the window
+        // forever. Ask instead of silently discarding the edits.
+        const discard = await confirm(t("close.unsaveableDiscard", localeRef.current), { kind: "warning" });
+        if (!discard) event.preventDefault();
       }
     }).then((fn) => { unlisten = fn; });
     return () => unlisten?.();

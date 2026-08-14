@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef } from "react";
 import { tauriFileSystem } from "../utils/fs";
 import type { NoteDoc, NoteGroup } from "./useNotesLoader";
 import { deriveTitle, saveManifest, sortNotes, getNotesDir, migrationInProgress } from "./useNotesLoader";
-import { getCurrentMarkdown } from "./useFileSystem";
+import { getCurrentMarkdown, provisionNoteFile } from "./useFileSystem";
 import type { TiptapEditorHandle } from "../components/TiptapEditor";
 import type { MarkdownState } from "./useMarkdownState";
 import type { Locale, NotesSortOrder } from "./useSettings";
@@ -17,6 +17,9 @@ import { markdownEqual } from "../utils/markdownEqual";
 import { normalizeSep } from "../utils/pathUtils";
 
 const DEBOUNCE_MS = 1000;
+// Failed provisioning of a pathless doc retries on later edits, but at most
+// this often — a dead notes dir would otherwise log SAVE_FAILED per keystroke.
+const PROVISION_RETRY_MS = 5000;
 
 interface SaveSnapshot {
   docId: string;
@@ -440,21 +443,121 @@ export function useAutoSave(
     return trackInFlight(snapshot, save);
   }, [clearPendingSnapshotIfCurrent, doSave, refreshHasPendingChanges, trackInFlight]);
 
-  const flushAutoSave = useCallback((): Promise<boolean> => {
+  // A doc without a filePath (the loader-failure fallback stub, or a
+  // replacement doc whose provisioning failed in deleteNotes) is invisible to
+  // the whole save pipeline: markActiveDocEdited and createSnapshot both bail
+  // on it, so nothing ever becomes pending and its edits would be silently
+  // discarded at close. Provisioning writes the live editor content to a real
+  // `<notesDir>/<id>.md` and adopts the path, after which the normal save
+  // machinery applies. Retried on later edits (throttled) because the usual
+  // cause — an unreadable notes dir at launch — can recover mid-session.
+  // Single-flight per doc; concurrent callers share the same attempt.
+  const provisioningDocsRef = useRef(new Map<string, Promise<boolean>>());
+  const provisionAttemptAtRef = useRef(new Map<string, number>());
+  const provisionPathlessActiveDoc = useCallback((opts?: { force?: boolean }): Promise<boolean> => {
+    // Same gate as doSave: never write into a directory that a migration may
+    // be about to clear (getNotesDir still resolves to the OLD dir until the
+    // migrating window commits the new one).
+    if (migrationInProgress) return Promise.resolve(false);
+    const target = activeDocRef.current;
+    if (!target || target.filePath) return Promise.resolve(false);
+    if (remoteDeletedDocsRef.current.has(target.id)) return Promise.resolve(false);
+
+    const inFlight = provisioningDocsRef.current.get(target.id);
+    if (inFlight) return inFlight;
+    const lastAttemptAt = provisionAttemptAtRef.current.get(target.id) ?? 0;
+    if (!opts?.force && Date.now() - lastAttemptAt < PROVISION_RETRY_MS) {
+      return Promise.resolve(false);
+    }
+    provisionAttemptAtRef.current.set(target.id, Date.now());
+
+    // Capture the content synchronously: captureAndQueueSave calls this right
+    // before the editor is repointed at another doc.
+    const { state: latestState, tiptapRef: latestEditorRef, setDocs: latestSetDocs } = stateRef.current;
+    const content = getCurrentMarkdown(latestEditorRef);
+    latestState.primeMarkdown(content);
+
+    const attempt = (async () => {
+      try {
+        const { filePath, ok } = await provisionNoteFile(target.id, content, "autosave-provision-pathless");
+        if (!ok) return false;
+        // Re-check the tombstone after the awaits: a remote deletion that
+        // arrived while the provision was in flight must win — leaving this
+        // write on disk would let the watcher reconcile resurrect the deleted
+        // note. Mirrors the re-check doSave does inside its write section.
+        if (remoteDeletedDocsRef.current.has(target.id)) {
+          markOwnWrite(filePath);
+          await tauriFileSystem.remove(filePath).catch(() => {});
+          return false;
+        }
+        // Adopt the path in the synchronous ref first so the very next edit
+        // (or a flush retry in the same task) arms a normal pending save
+        // without waiting for a re-render.
+        if (activeDocRef.current?.id === target.id && !activeDocRef.current.filePath) {
+          activeDocRef.current = { id: target.id, filePath };
+          latestState.setFilePath(filePath);
+        }
+        latestSetDocs((prev) => prev.map((doc) =>
+          doc.id === target.id && !doc.filePath ? { ...doc, filePath, content } : doc,
+        ));
+        return true;
+      } finally {
+        provisioningDocsRef.current.delete(target.id);
+      }
+    })();
+    provisioningDocsRef.current.set(target.id, attempt);
+    // Register like a body save so close/migration drains and
+    // settleRemoteDeletedDoc's awaitDocSave wait for the provision to settle
+    // before acting on this doc.
+    inFlightSavesRef.current.add(attempt);
+    let docSaves = inFlightSavesByDocRef.current.get(target.id);
+    if (!docSaves) {
+      docSaves = new Set();
+      inFlightSavesByDocRef.current.set(target.id, docSaves);
+    }
+    docSaves.add(attempt);
+    const cleanup = () => {
+      inFlightSavesRef.current.delete(attempt);
+      const currentDocSaves = inFlightSavesByDocRef.current.get(target.id);
+      currentDocSaves?.delete(attempt);
+      if (currentDocSaves?.size === 0) {
+        inFlightSavesByDocRef.current.delete(target.id);
+      }
+    };
+    void attempt.then(cleanup, cleanup);
+    return attempt;
+  }, []);
+
+  const flushAutoSave = useCallback(async (): Promise<boolean> => {
     for (const timer of timersRef.current.values()) {
       clearTimeout(timer);
     }
     timersRef.current.clear();
 
     if (!hasPendingChangesRef.current && !stateRef.current.state.isDirty) {
-      return Promise.resolve(true);
+      return true;
     }
 
     const freshSnapshot = createSnapshot();
-    if (!freshSnapshot) return Promise.resolve(false);
+    if (!freshSnapshot) {
+      // A pathless active doc cannot snapshot. Provisioning writes the live
+      // content itself; on success re-snapshot so edits that landed while the
+      // provision was in flight are saved too. Still report `false` even when
+      // everything was written: callers that took a docs snapshot BEFORE this
+      // flush (leaveCurrentDoc &c.) mark the doc clean on `true`, and their
+      // stale entry still has filePath "" — committing a clean-but-pathless
+      // doc that orphans the provisioned file and blinds hasUnsaveableChanges.
+      // The conservative signal keeps the doc dirty; the next edit saves
+      // normally through the adopted path.
+      if (await provisionPathlessActiveDoc({ force: true })) {
+        const retry = createSnapshot();
+        if (retry) await startBackgroundSave(retry);
+      }
+      return false;
+    }
 
     return startBackgroundSave(freshSnapshot);
-  }, [createSnapshot, startBackgroundSave]);
+  }, [createSnapshot, provisionPathlessActiveDoc, startBackgroundSave]);
 
   // Synchronous "is anything still unsaved" probe for close/migration drain
   // gates. Reads only the synchronously-maintained pending refs (via
@@ -462,6 +565,22 @@ export function useAutoSave(
   // successful save until the next render and would falsely report unsaved
   // work inside an awaited close handler that never re-renders.
   const hasUnsavedChanges = useCallback((): boolean => hasPendingChangesRef.current, []);
+
+  // Complementary probe for edits the pending refs can never see: a dirty doc
+  // with no filePath whose provisioning has not succeeded. Deliberately a
+  // SEPARATE signal from hasUnsavedChanges — every consumer of that one treats
+  // `true` as "drain and retry", which a structurally unsaveable doc can never
+  // satisfy; folding this in would turn those gates into permanent latches.
+  // Callers should offer an explicit discard instead of blocking. The isDirty
+  // lag concern above does not apply here: no save can clear a pathless doc's
+  // isDirty, and a doc that just gained a path is exempted via activeDocRef,
+  // which provisioning updates synchronously.
+  const hasUnsaveableChanges = useCallback((): boolean =>
+    stateRef.current.docs.some((doc) => {
+      if (!doc.isDirty || doc.filePath) return false;
+      if (activeDocRef.current?.id === doc.id && activeDocRef.current.filePath) return false;
+      return true;
+    }), []);
 
   // Awaits every save currently in flight (whether queued by scheduleAutoSave,
   // flushAutoSave, or captureAndQueueSave). Used by close handlers and
@@ -538,16 +657,24 @@ export function useAutoSave(
     timersRef.current.delete(activeDocId);
 
     const freshSnapshot = createSnapshot();
-    if (!freshSnapshot) return;
+    if (!freshSnapshot) {
+      // Pathless doc: provisioning captures the content synchronously, before
+      // the caller repoints the editor at the next doc.
+      void provisionPathlessActiveDoc();
+      return;
+    }
 
     void startBackgroundSave(freshSnapshot);
-  }, [createSnapshot, hasPendingForDoc, startBackgroundSave]);
+  }, [createSnapshot, hasPendingForDoc, provisionPathlessActiveDoc, startBackgroundSave]);
 
   const scheduleAutoSave = useCallback(() => {
     if (migrationInProgress) return;
 
     const pending = markActiveDocEdited();
-    if (!pending) return;
+    if (!pending) {
+      void provisionPathlessActiveDoc();
+      return;
+    }
 
     const existingTimer = timersRef.current.get(pending.docId);
     if (existingTimer) {
@@ -568,7 +695,7 @@ export function useAutoSave(
     }, DEBOUNCE_MS);
 
     timersRef.current.set(pending.docId, timer);
-  }, [createSnapshot, discardPendingTarget, markActiveDocEdited, startBackgroundSave]);
+  }, [createSnapshot, discardPendingTarget, markActiveDocEdited, provisionPathlessActiveDoc, startBackgroundSave]);
 
   useEffect(() => {
     return () => {
@@ -728,5 +855,5 @@ export function useAutoSave(
     return settlement;
   }, [awaitDocSave, hasPendingForDoc, refreshHasPendingChanges]);
 
-  return { scheduleAutoSave, flushAutoSave, hasUnsavedChanges, captureAndQueueSave, awaitInFlightSaves, awaitDocSave, flushDocSave, flushPendingSnapshots, notifyActiveDoc, cancelDocSave, settleRemoteDeletedDoc };
+  return { scheduleAutoSave, flushAutoSave, hasUnsavedChanges, hasUnsaveableChanges, captureAndQueueSave, awaitInFlightSaves, awaitDocSave, flushDocSave, flushPendingSnapshots, notifyActiveDoc, cancelDocSave, settleRemoteDeletedDoc };
 }

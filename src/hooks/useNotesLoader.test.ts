@@ -168,11 +168,11 @@ describe("useNotesLoader — outer catch preserves already-loaded docs (bug 3 re
     await waitFor(() => expect(result.current.isLoading).toBe(false), { timeout: 2000 });
 
     // Pre-fix behavior would have replaced everything with a single blank stub
-    // ("local" id, empty filePath). The fix preserves the safeDocs snapshot.
+    // (empty filePath). The fix preserves the safeDocs snapshot.
     expect(result.current.docs).toHaveLength(5);
     expect(result.current.docs.map((d) => d.id).sort()).toEqual(seeded.map((d) => d.id).sort());
     // None of the preserved docs should be the synthetic stub.
-    expect(result.current.docs.some((d) => d.id === "local")).toBe(false);
+    expect(result.current.docs.some((d) => d.filePath === "")).toBe(false);
   });
 
   it("falls back to the synthetic stub only when no docs were ever loaded", async () => {
@@ -184,8 +184,8 @@ describe("useNotesLoader — outer catch preserves already-loaded docs (bug 3 re
     await waitFor(() => expect(result.current.isLoading).toBe(false), { timeout: 2000 });
 
     expect(result.current.docs).toHaveLength(1);
-    expect(result.current.docs[0].id).toBe("local");
     expect(result.current.docs[0].filePath).toBe("");
+    expect(result.current.docs[0].content).toBe("");
   });
 });
 
@@ -200,7 +200,7 @@ describe("useNotesLoader — all body reads fail closed", () => {
     await waitFor(() => expect(result.current.isLoading).toBe(false), { timeout: 2000 });
 
     expect(result.current.docs).toHaveLength(1);
-    expect(result.current.docs[0].id).toBe("local");
+    expect(result.current.docs[0].filePath).toBe("");
 
     const rootMarkdownFiles = Array.from(refs.fs!.snapshot().keys())
       .filter((path) => path.startsWith("/test-appdata/notes/") && path.endsWith(".md"));
