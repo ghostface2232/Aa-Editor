@@ -68,7 +68,7 @@ The active notes directory contains shared, syncable data:
   .conflicts/...
 ```
 
-- Note bodies are autosaved with a 1-second debounce using fail-closed atomic writes serialized per note. After a body lands, autosave patches only that note's title/timestamp metadata on the shared persistence chain; it re-reads the sidecar at execution time and never replays a full library snapshot.
+- Note bodies are autosaved with a 1-second debounce using fail-closed atomic writes serialized per note. After a body lands, autosave patches only that note on the shared persistence chain; it merges the execution-time canonical note with the sidecar and per-field local mutation clocks, then publishes the durable body/metadata result before the queue advances. It never replays a full library snapshot.
 - Window-local library state is committed through a revisioned `libraryStore` containing docs, groups, trash, and `activeNoteId`. React hook state is a projection of that immutable snapshot; a hydration epoch (`directoryGeneration`) invalidates async work captured before reload, reset, or directory change.
 - The metadata persistence queue stores revision/generation requests rather than React arrays. When a job reaches the head it reads the latest canonical snapshot; close and migration barriers repeat until the persisted revision catches the store.
 - Per-note metadata carries title, timestamps, trash state, group membership clocks, pinned state, and color. Shared group definitions live in `.groups.json`.

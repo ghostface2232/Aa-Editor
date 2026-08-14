@@ -128,7 +128,7 @@ vi.mock("../utils/reconcileFolder", async (importOriginal) => {
 });
 
 // Loader is imported AFTER all mocks. Tests then drive it with renderHook.
-import { useNotesLoader, resetNotesDir, restoreNotesDir, setNotesDir, saveManifest, saveNoteMetadata, flushPersistence, markGroupAsDeleted, purgeExpiredTrash } from "./useNotesLoader";
+import { useNotesLoader, resetNotesDir, restoreNotesDir, setNotesDir, saveManifest, saveNoteMetadata, flushPersistence, markGroupAsDeleted, markNotesPinnedChanged, purgeExpiredTrash } from "./useNotesLoader";
 import * as reconcileFolderModule from "../utils/reconcileFolder";
 import * as decomposedStateModule from "../utils/decomposedState";
 import * as crashLogModule from "../utils/crashLog";
@@ -812,6 +812,250 @@ describe("useNotesLoader — targeted autosave metadata", () => {
       customName: true,
       updatedAt: 7000,
     });
+  });
+
+  it("preserves an explicit ungroup instead of reviving a stale fallback group", async () => {
+    refs.fs!.seedTextFile("/test-appdata/notes/a.md", "body a");
+    await writeMeta(refs.fs!, "/test-appdata/notes", meta("a", {
+      groupId: null,
+      groupUpdatedAt: 9000,
+    }), "test-machine");
+    libraryStore.seedDirectory("/test-appdata/notes", {
+      docs: [makeDoc("a")],
+      groups: [],
+      trashedNotes: [],
+      activeNoteId: "a",
+    });
+
+    await expect(saveNoteMetadata({
+      ...makeDoc("a"),
+      updatedAt: 7000,
+    }, "stale-group")).resolves.toMatchObject({
+      groupId: null,
+      groupUpdatedAt: 9000,
+    });
+    expect(await readMeta(refs.fs!, "/test-appdata/notes", "a")).toMatchObject({
+      groupId: null,
+      groupUpdatedAt: 9000,
+    });
+  });
+
+  it("uses execution-time canonical membership when creating a missing sidecar", async () => {
+    refs.fs!.seedTextFile("/test-appdata/notes/a.md", "body a");
+    libraryStore.seedDirectory("/test-appdata/notes", {
+      docs: [makeDoc("a")],
+      groups: [],
+      trashedNotes: [],
+      activeNoteId: "a",
+    });
+
+    await saveNoteMetadata({ ...makeDoc("a"), updatedAt: 7000 }, "stale-group");
+
+    expect(await readMeta(refs.fs!, "/test-appdata/notes", "a")).toMatchObject({
+      groupId: null,
+    });
+  });
+
+  it("keeps canonical pin and color intents committed after metadata enqueue", async () => {
+    const original = makeDoc("a");
+    original.color = "blue";
+    refs.fs!.seedTextFile(original.filePath, "body a");
+    await writeMeta(refs.fs!, "/test-appdata/notes", meta("a", {
+      pinned: false,
+      color: "blue",
+    }), "test-machine");
+    libraryStore.seedDirectory("/test-appdata/notes", {
+      docs: [original],
+      groups: [],
+      trashedNotes: [],
+      activeNoteId: "a",
+    });
+    let releaseOlder!: () => void;
+    const olderGate = new Promise<void>((resolve) => { releaseOlder = resolve; });
+    persistMock.mockImplementationOnce(async () => { await olderGate; });
+    persistMock.mockResolvedValueOnce(undefined);
+    const older = saveManifest([original], "a", [], "older");
+    older.catch(() => {});
+    await flushAll();
+
+    const metadata = saveNoteMetadata(
+      { ...original, fileName: "Autosaved", updatedAt: 7000 },
+      null,
+      "autosave-before-pin",
+      undefined,
+    );
+    metadata.catch(() => {});
+    libraryStore.commit((current) => ({
+      docs: current.docs.map((entry) => entry.id === "a"
+        ? { ...entry, pinned: true, color: "red" }
+        : entry),
+    }), "local");
+    const newerFull = saveManifest([original], "a", [], "pin-and-color");
+    newerFull.catch(() => {});
+    releaseOlder();
+    await older;
+
+    await expect(metadata).resolves.toMatchObject({ pinned: true, color: "red" });
+    await newerFull;
+    expect(await readMeta(refs.fs!, "/test-appdata/notes", "a")).toMatchObject({
+      pinned: true,
+      color: "red",
+    });
+  });
+
+  it("still adopts newer disk pin and color after an unrelated canonical change", async () => {
+    const original = makeDoc("a");
+    original.color = "blue";
+    refs.fs!.seedTextFile(original.filePath, "body a");
+    await writeMeta(refs.fs!, "/test-appdata/notes", meta("a", {
+      pinned: false,
+      color: "blue",
+    }), "test-machine");
+    libraryStore.seedDirectory("/test-appdata/notes", {
+      docs: [original],
+      groups: [],
+      trashedNotes: [],
+      activeNoteId: "a",
+    });
+    let releaseOlder!: () => void;
+    const olderGate = new Promise<void>((resolve) => { releaseOlder = resolve; });
+    persistMock.mockImplementationOnce(async () => { await olderGate; });
+    const older = saveManifest([original], "a", [], "older");
+    older.catch(() => {});
+    await flushAll();
+    const metadata = saveNoteMetadata({
+      ...original,
+      fileName: "Autosaved",
+      updatedAt: 7000,
+    }, null);
+    metadata.catch(() => {});
+
+    libraryStore.commit((current) => ({
+      docs: current.docs.map((entry) => entry.id === "a"
+        ? { ...entry, content: "new canonical body" }
+        : entry),
+    }), "local");
+    await writeMeta(refs.fs!, "/test-appdata/notes", meta("a", {
+      pinned: true,
+      color: "red",
+    }), "remote-machine");
+    releaseOlder();
+    await older;
+
+    await expect(metadata).resolves.toMatchObject({ pinned: true, color: "red" });
+  });
+
+  it("reports a pin ABA mutation that occurs during the metadata write", async () => {
+    const original = makeDoc("a");
+    refs.fs!.seedTextFile(original.filePath, "body a");
+    await writeMeta(refs.fs!, "/test-appdata/notes", meta("a", {
+      pinned: true,
+    }), "remote-machine");
+    libraryStore.seedDirectory("/test-appdata/notes", {
+      docs: [original],
+      groups: [],
+      trashedNotes: [],
+      activeNoteId: "a",
+    });
+    let releaseWrite!: () => void;
+    refs.writeGate = new Promise<void>((resolve) => { releaseWrite = resolve; });
+    let markWriteStarted!: () => void;
+    const writeStarted = new Promise<void>((resolve) => { markWriteStarted = resolve; });
+    refs.onWriteStart = (path) => {
+      if (path.includes("/.meta/") || path.includes("\\.meta\\")) markWriteStarted();
+    };
+    const publish = vi.fn();
+    const metadata = saveNoteMetadata({
+      ...original,
+      fileName: "Autosaved",
+      updatedAt: 7000,
+    }, null, "pin-aba", publish);
+    metadata.catch(() => {});
+    await writeStarted;
+
+    markNotesPinnedChanged(["a"]);
+    libraryStore.commit((current) => ({
+      docs: current.docs.map((entry) => entry.id === "a" ? { ...entry, pinned: true } : entry),
+    }), "local");
+    markNotesPinnedChanged(["a"]);
+    libraryStore.commit((current) => ({
+      docs: current.docs.map((entry) => entry.id === "a" ? { ...entry, pinned: undefined } : entry),
+    }), "local");
+    releaseWrite();
+    await metadata;
+
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({ pinned: true }),
+      expect.objectContaining({ id: "a" }),
+      expect.objectContaining({ pinned: true }),
+    );
+  });
+
+  it("keeps an unacknowledged pin intent after an earlier full write fails", async () => {
+    const original = makeDoc("a");
+    refs.fs!.seedTextFile(original.filePath, "body a");
+    await writeMeta(refs.fs!, "/test-appdata/notes", meta("a", {
+      pinned: false,
+    }), "test-machine");
+    libraryStore.seedDirectory("/test-appdata/notes", {
+      docs: [original],
+      groups: [],
+      trashedNotes: [],
+      activeNoteId: "a",
+    });
+    markNotesPinnedChanged(["a"]);
+    libraryStore.commit((current) => ({
+      docs: current.docs.map((entry) => entry.id === "a" ? { ...entry, pinned: true } : entry),
+    }), "local");
+    persistMock.mockRejectedValueOnce(new Error("EPERM: full metadata write failed"));
+
+    await expect(saveManifest([original], "a", [], "failed-pin-write")).rejects.toThrow("EPERM");
+    const current = libraryStore.getSnapshot().docs[0];
+    await expect(saveNoteMetadata({
+      ...current,
+      fileName: "Autosaved",
+      updatedAt: 7000,
+    }, null)).resolves.toMatchObject({ pinned: true });
+    expect(await readMeta(refs.fs!, "/test-appdata/notes", "a")).toMatchObject({
+      pinned: true,
+    });
+  });
+
+  it("allows disk merge after a preceding full write acknowledges the local intent", async () => {
+    const original = makeDoc("a");
+    refs.fs!.seedTextFile(original.filePath, "body a");
+    await writeMeta(refs.fs!, "/test-appdata/notes", meta("a", { pinned: false }), "test-machine");
+    libraryStore.seedDirectory("/test-appdata/notes", {
+      docs: [original],
+      groups: [],
+      trashedNotes: [],
+      activeNoteId: "a",
+    });
+    markNotesPinnedChanged(["a"]);
+    libraryStore.commit((current) => ({
+      docs: current.docs.map((entry) => entry.id === "a" ? { ...entry, pinned: true } : entry),
+    }), "local");
+    let releaseFull!: () => void;
+    const fullGate = new Promise<void>((resolve) => { releaseFull = resolve; });
+    persistMock.mockImplementationOnce(async () => { await fullGate; });
+    const full = saveManifest([original], "a", [], "pin-full");
+    full.catch(() => {});
+    await flushAll();
+    const metadata = saveNoteMetadata({
+      ...libraryStore.getSnapshot().docs[0],
+      fileName: "Autosaved",
+      updatedAt: 7000,
+    }, null);
+    metadata.catch(() => {});
+
+    // A peer update lands after the full writer's note phase. Once that writer
+    // succeeds, its local pin intent is acknowledged and this newer disk value
+    // must be eligible for the following autosave merge.
+    await writeMeta(refs.fs!, "/test-appdata/notes", meta("a", { pinned: false }), "remote-machine");
+    releaseFull();
+    await full;
+
+    await expect(metadata).resolves.toMatchObject({ pinned: false });
   });
 
   it("publishes effective note metadata before a queued full-library job executes", async () => {

@@ -517,9 +517,24 @@ describe("useAutoSave — doSave golden path", () => {
   });
 
   it("does not overwrite metadata changed locally while the writer is pending", async () => {
+    const initial = makeDoc("a", {
+      fileName: "Initial title",
+      pinned: false,
+      color: "blue",
+      updatedAt: 1000,
+    });
     let releaseWriter!: () => void;
-    saveNoteMetadataMock.mockImplementationOnce(() => new Promise((resolve) => {
-      releaseWriter = () => resolve({
+    saveNoteMetadataMock.mockImplementationOnce((
+      _doc: NoteDoc,
+      _groupId: string | null,
+      _source: string,
+      publish: (
+        meta: unknown,
+        executionBase: NoteDoc,
+        changed: { title: boolean; pinned: boolean; color: boolean },
+      ) => void,
+    ) => new Promise((resolve) => {
+      const effective = {
         version: 2,
         id: "a",
         fileName: "Disk title before local action",
@@ -530,14 +545,12 @@ describe("useAutoSave — doSave golden path", () => {
         groupId: null,
         groupUpdatedAt: 1000,
         trashedAt: null,
-      });
+      };
+      releaseWriter = () => {
+        publish(effective, initial, { title: true, pinned: true, color: true });
+        resolve(effective);
+      };
     }));
-    const initial = makeDoc("a", {
-      fileName: "Initial title",
-      pinned: false,
-      color: "blue",
-      updatedAt: 1000,
-    });
     const { result, setDocs, rerenderWith } = renderAutoSave({
       docs: [initial],
       state: makeState({ isDirty: true }),
@@ -560,13 +573,17 @@ describe("useAutoSave — doSave golden path", () => {
       expect(await save).toBe(true);
     });
 
-    const updater = setDocs.mock.calls[setDocs.mock.calls.length - 1][0] as (prev: NoteDoc[]) => NoteDoc[];
-    expect(updater([locallyChanged])[0]).toMatchObject({
+    let committed = [locallyChanged];
+    for (const [action] of setDocs.mock.calls) {
+      committed = typeof action === "function" ? action(committed) : action;
+    }
+    expect(committed[0]).toMatchObject({
       fileName: "Newest local rename",
       customName: true,
       pinned: true,
       color: "red",
       updatedAt: 8000,
+      content: "hello world",
     });
     expect(emitDocUpdatedMock).toHaveBeenCalledWith("a", "hello world", 7000);
   });
@@ -578,7 +595,11 @@ describe("useAutoSave — doSave golden path", () => {
       doc: NoteDoc,
       fallbackGroupId: string | null,
       _source: string,
-      publish: (meta: unknown, executionBase: NoteDoc) => void,
+      publish: (
+        meta: unknown,
+        executionBase: NoteDoc,
+        changed: { title: boolean; pinned: boolean; color: boolean },
+      ) => void,
     ) => {
       const executionBase = canonicalDocs.find((entry) => entry.id === doc.id)!;
       const meta = {
@@ -595,7 +616,7 @@ describe("useAutoSave — doSave golden path", () => {
         trashedAt: null,
         trashedFromPath: null,
       };
-      publish(meta, executionBase);
+      publish(meta, executionBase, { title: false, pinned: false, color: false });
       return meta;
     };
     saveNoteMetadataMock

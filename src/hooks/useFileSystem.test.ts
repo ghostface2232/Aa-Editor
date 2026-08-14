@@ -52,6 +52,9 @@ vi.mock("./useNotesLoader", () => ({
   ensureTrashDir: vi.fn(async () => "/notes/.trash"),
   getTrashedNotesCache: vi.fn(() => []),
   markGroupAsDeleted: vi.fn(),
+  markNoteTitleChanged: vi.fn(),
+  markNotesPinnedChanged: vi.fn(),
+  markNotesColorChanged: vi.fn(),
 }));
 
 vi.mock("../utils/fs", () => ({

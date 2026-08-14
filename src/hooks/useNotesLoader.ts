@@ -99,6 +99,64 @@ const persistState = createPersistState();
 // save whose groups snapshot predates the delete, so the latter can no longer
 // cancel the tombstone and revive the group (P0-4).
 let groupMutationSeq = 0;
+let noteMetadataMutationSeq = 0;
+const noteMetadataMutationClocks = new Map<string, {
+  title: number;
+  pinned: number;
+  color: number;
+}>();
+const ackedNoteMetadataMutationClocks = new Map<string, {
+  title: number;
+  pinned: number;
+  color: number;
+}>();
+
+function noteMetadataClock(noteId: string) {
+  return noteMetadataMutationClocks.get(noteId) ?? { title: 0, pinned: 0, color: 0 };
+}
+
+function ackedNoteMetadataClock(noteId: string) {
+  return ackedNoteMetadataMutationClocks.get(noteId) ?? { title: 0, pinned: 0, color: 0 };
+}
+
+function acknowledgeNoteMetadataClock(
+  noteId: string,
+  clock: { title: number; pinned: number; color: number },
+  fields: { title: boolean; pinned: boolean; color: boolean } = {
+    title: true,
+    pinned: true,
+    color: true,
+  },
+): void {
+  const acknowledged = ackedNoteMetadataClock(noteId);
+  ackedNoteMetadataMutationClocks.set(noteId, {
+    title: fields.title ? Math.max(acknowledged.title, clock.title) : acknowledged.title,
+    pinned: fields.pinned ? Math.max(acknowledged.pinned, clock.pinned) : acknowledged.pinned,
+    color: fields.color ? Math.max(acknowledged.color, clock.color) : acknowledged.color,
+  });
+}
+
+function markNoteMetadataFieldChanged(
+  noteIds: string[],
+  field: "title" | "pinned" | "color",
+): void {
+  const seq = ++noteMetadataMutationSeq;
+  for (const noteId of noteIds) {
+    noteMetadataMutationClocks.set(noteId, { ...noteMetadataClock(noteId), [field]: seq });
+  }
+}
+
+export function markNoteTitleChanged(noteId: string): void {
+  markNoteMetadataFieldChanged([noteId], "title");
+}
+
+export function markNotesPinnedChanged(noteIds: string[]): void {
+  markNoteMetadataFieldChanged(noteIds, "pinned");
+}
+
+export function markNotesColorChanged(noteIds: string[]): void {
+  markNoteMetadataFieldChanged(noteIds, "color");
+}
 
 export function markGroupMembershipChanged(noteId: string, groupId: string | null, updatedAt = Date.now()): void {
   persistState.pendingGroupMembership.set(noteId, { groupId, updatedAt });
@@ -124,6 +182,8 @@ export function unmarkGroupAsDeleted(id: string): void {
 
 function resetWriteSnapshots() {
   clearPersistState(persistState);
+  noteMetadataMutationClocks.clear();
+  ackedNoteMetadataMutationClocks.clear();
 }
 
 async function seedWriteSnapshots(dir: string): Promise<void> {
@@ -558,6 +618,12 @@ async function persistSavedNoteMetadata(
   fallbackGroupId: string | null,
   dir: string,
   source?: string,
+  preferCanonical?: {
+    title: boolean;
+    createdAt: boolean;
+    pinned: boolean;
+    color: boolean;
+  },
 ): Promise<NoteMeta | null> {
   try {
     // Read lifecycle at execution time, after older jobs on this window's
@@ -576,20 +642,29 @@ async function persistSavedNoteMetadata(
     // Autosave owns title/body timestamps only. Pin, color, group membership,
     // and lifecycle have independent mutation paths and clocks, so preserve
     // their latest disk values rather than replaying the editor's snapshot.
-    const groupId = disk?.groupId ?? fallbackGroupId;
-    const groupUpdatedAt = disk?.groupUpdatedAt ?? disk?.updatedAt ?? doc.updatedAt;
-    const customName = disk?.customName === true || doc.customName === true;
+    const pendingGroup = persistState.pendingGroupMembership.get(doc.id);
+    const groupId = pendingGroup
+      ? pendingGroup.groupId
+      : disk ? (disk.groupId ?? null) : fallbackGroupId;
+    const groupUpdatedAt = pendingGroup?.updatedAt
+      ?? disk?.groupUpdatedAt
+      ?? disk?.updatedAt
+      ?? doc.updatedAt;
+    const diskOwnsTitle = disk?.customName === true && !preferCanonical?.title;
+    const customName = diskOwnsTitle || doc.customName === true;
     const next: NoteMeta = {
       version: 2,
       id: doc.id,
       // Once a title is manual it is permanent. A stale autosave from a peer
       // that has not observed the rename must not re-enable auto-title.
-      fileName: disk?.customName ? disk.fileName : doc.fileName,
+      fileName: diskOwnsTitle ? disk.fileName : doc.fileName,
       customName,
-      createdAt: disk?.createdAt ?? doc.createdAt,
+      createdAt: disk && !preferCanonical?.createdAt ? disk.createdAt : doc.createdAt,
       updatedAt: doc.updatedAt,
-      pinned: disk ? disk.pinned === true : doc.pinned === true,
-      color: disk?.color ?? doc.color,
+      pinned: disk && !preferCanonical?.pinned
+        ? disk.pinned === true
+        : doc.pinned === true,
+      color: disk && !preferCanonical?.color ? disk.color : doc.color,
       groupId,
       groupUpdatedAt,
       trashedAt: null,
@@ -675,6 +750,7 @@ function enqueueLatestLibraryPersistence(request: LibraryPersistenceRequest): Pr
       // is read here, after older jobs drain, so a call made with a stale React
       // array can never replay that array onto disk.
       const docs = latest.docs.map((doc) => ({ ...doc }));
+      const noteClocks = new Map(docs.map((doc) => [doc.id, { ...noteMetadataClock(doc.id) }]));
       const groups = latest.groups.map((group) => ({
         ...group,
         noteIds: [...group.noteIds],
@@ -695,6 +771,7 @@ function enqueueLatestLibraryPersistence(request: LibraryPersistenceRequest): Pr
       persistedLibraryGeneration = latest.directoryGeneration;
       persistedLibraryRevision = latest.revision;
       persistedGroupMutationSeq = latestGroupMutationSeq;
+      for (const [noteId, clock] of noteClocks) acknowledgeNoteMetadataClock(noteId, clock);
     });
   persistChain = job;
   return job;
@@ -760,13 +837,20 @@ export async function flushPersistence(source = "flushPersistence"): Promise<voi
  */
 export async function saveNoteMetadata(
   doc: NoteDoc,
-  fallbackGroupId: string | null,
+  _fallbackGroupId: string | null,
   source = "autosave",
-  publish?: (persisted: NoteMeta, executionBase: NoteDoc) => void,
+  publish?: (
+    persisted: NoteMeta,
+    executionBase: NoteDoc,
+    changedDuringWrite: { title: boolean; pinned: boolean; color: boolean },
+  ) => void,
 ): Promise<NoteMeta | null> {
   if (migrationInProgress) return null;
   const requested = libraryStore.getSnapshot();
   if (requested.notesDirectory == null) return null;
+  const requestedBase = requested.docs.find((entry) => entry.id === doc.id);
+  if (!requestedBase) return null;
+  const requestedClock = noteMetadataClock(doc.id);
   const job = persistChain
     .catch(() => undefined)
     .then(async () => {
@@ -785,12 +869,32 @@ export async function saveNoteMetadata(
       };
       const executionGroupId = latest.groups.find(
         (group) => group.noteIds.includes(doc.id),
-      )?.id ?? fallbackGroupId;
+      )?.id ?? null;
+      const executionClock = noteMetadataClock(doc.id);
+      const executionAck = ackedNoteMetadataClock(doc.id);
+      const canonicalFields = {
+        title: executionBase.fileName !== requestedBase.fileName
+          || !!executionBase.customName !== !!requestedBase.customName
+          || executionClock.title !== requestedClock.title
+          || executionClock.title > executionAck.title,
+        pinned: (executionBase.pinned === true) !== (requestedBase.pinned === true)
+          || executionClock.pinned !== requestedClock.pinned
+          || executionClock.pinned > executionAck.pinned,
+        color: executionBase.color !== requestedBase.color
+          || executionClock.color !== requestedClock.color
+          || executionClock.color > executionAck.color,
+      };
       const persisted = await persistSavedNoteMetadata(
         executionCandidate,
         executionGroupId,
         latest.notesDirectory,
         source,
+        {
+          title: canonicalFields.title,
+          createdAt: executionBase.createdAt !== requestedBase.createdAt,
+          pinned: canonicalFields.pinned,
+          color: canonicalFields.color,
+        },
       );
       if (!persisted) return null;
       const afterWrite = libraryStore.getSnapshot();
@@ -798,10 +902,16 @@ export async function saveNoteMetadata(
         afterWrite.directoryGeneration !== requested.directoryGeneration
         || afterWrite.notesDirectory !== latest.notesDirectory
       ) return null;
+      acknowledgeNoteMetadataClock(doc.id, executionClock, canonicalFields);
       // This callback must commit through useNotesLoader's adapter before the
       // queue advances. That keeps canonical and React projections aligned and
       // ensures a full-library job queued behind this patch sees its result.
-      publish?.(persisted, executionBase);
+      const afterWriteClock = noteMetadataClock(doc.id);
+      publish?.(persisted, executionBase, {
+        title: afterWriteClock.title !== executionClock.title,
+        pinned: afterWriteClock.pinned !== executionClock.pinned,
+        color: afterWriteClock.color !== executionClock.color,
+      });
       return persisted;
     });
   persistChain = job;

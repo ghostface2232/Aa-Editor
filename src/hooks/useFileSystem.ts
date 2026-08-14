@@ -12,6 +12,9 @@ import {
   ensureTrashDir,
   getTrashedNotesCache,
   markGroupAsDeleted,
+  markNoteTitleChanged,
+  markNotesPinnedChanged,
+  markNotesColorChanged,
   type NoteDoc,
   type NoteGroup,
   type TrashedNote,
@@ -385,6 +388,7 @@ export function useFileSystem(
       };
     });
 
+    markNoteTitleChanged(doc.id);
     sortAndPersistDocs(nextDocs, doc.id, notesSortOrder, locale, setDocs, setActiveIndex, groupsRef.current);
     state.setIsDirty(false);
     state.primeMarkdown(markdown);
@@ -1146,6 +1150,7 @@ export function useFileSystem(
       state.setIsDirty(false);
     }
 
+    markNoteTitleChanged(doc.id);
     sortAndPersistDocs(nextDocs, doc.id, notesSortOrder, locale, setDocs, setActiveIndex, groupsRef.current);
     emitDocRenamed(doc.id, doc.filePath, doc.filePath, trimmed);
     return { renamed: true, linkRewriteSkipped: oldTitleIsAmbiguous };
@@ -1161,6 +1166,7 @@ export function useFileSystem(
       i === index ? { ...entry, pinned: nextPinned } : entry
     ));
 
+    markNotesPinnedChanged([doc.id]);
     sortAndPersistDocs(nextDocs, activeId, notesSortOrder, locale, setDocs, setActiveIndex, groupsRef.current);
     emitNotePinnedUpdated(doc.id, nextPinned);
   }, [locale, notesSortOrder, setActiveIndex, setDocs]);
@@ -1174,6 +1180,7 @@ export function useFileSystem(
       idSet.has(entry.id) ? { ...entry, pinned } : entry
     ));
 
+    markNotesPinnedChanged(Array.from(idSet));
     sortAndPersistDocs(nextDocs, activeId, notesSortOrder, locale, setDocs, setActiveIndex, groupsRef.current);
     for (const id of idSet) emitNotePinnedUpdated(id, pinned);
   }, [locale, notesSortOrder, setActiveIndex, setDocs]);
@@ -1188,6 +1195,7 @@ export function useFileSystem(
       i === index ? { ...entry, color: color ?? undefined } : entry
     ));
 
+    markNotesColorChanged([doc.id]);
     sortAndPersistDocs(nextDocs, activeId, notesSortOrder, locale, setDocs, setActiveIndex, groupsRef.current);
     emitNoteColorUpdated(doc.id, color);
   }, [locale, notesSortOrder, setActiveIndex, setDocs]);
@@ -1202,6 +1210,7 @@ export function useFileSystem(
       idSet.has(entry.id) ? { ...entry, color: next } : entry
     ));
 
+    markNotesColorChanged(Array.from(idSet));
     sortAndPersistDocs(nextDocs, activeId, notesSortOrder, locale, setDocs, setActiveIndex, groupsRef.current);
     for (const id of idSet) emitNoteColorUpdated(id, color);
   }, [locale, notesSortOrder, setActiveIndex, setDocs]);

@@ -15,6 +15,7 @@ import { NotenError } from "../utils/notenError";
 import { logNotenError } from "../utils/crashLog";
 import { markdownEqual } from "../utils/markdownEqual";
 import { normalizeSep } from "../utils/pathUtils";
+import { libraryStore } from "../utils/libraryStore";
 
 const DEBOUNCE_MS = 1000;
 // Failed provisioning of a pathless doc retries on later edits, but at most
@@ -338,13 +339,15 @@ export function useAutoSave(
         : false;
 
       const savedAt = Date.now();
-      const liveDoc = live.docs.find((docEntry) => docEntry.id === snapshot.docId);
+      const canonicalAtEnqueue = libraryStore.getSnapshot();
+      const liveDoc = canonicalAtEnqueue.docs.find((docEntry) => docEntry.id === snapshot.docId)
+        ?? live.docs.find((docEntry) => docEntry.id === snapshot.docId);
       if (!liveDoc) return false;
       const autoTitle = liveDoc.customName
         ? liveDoc.fileName
         : deriveTitle(snapshot.content) || liveDoc.fileName || getDefaultDocumentTitle(
           latestLocale,
-          live.docs.map((docEntry) => docEntry.fileName),
+          canonicalAtEnqueue.docs.map((docEntry) => docEntry.fileName),
         );
       const candidate: NoteDoc = {
         ...liveDoc,
@@ -360,6 +363,7 @@ export function useAutoSave(
       const publishPersistedMetadata = (
         effective: NonNullable<Awaited<ReturnType<typeof saveNoteMetadata>>>,
         executionBase: NoteDoc,
+        changedDuringWrite: { title: boolean; pinned: boolean; color: boolean },
       ) => {
         persistedBase = executionBase;
         latestSetDocs((prev) => {
@@ -371,10 +375,12 @@ export function useAutoSave(
             const titleUnchanged = (
               docEntry.fileName === executionBase.fileName
               && !!docEntry.customName === !!executionBase.customName
-            );
+            ) && !changedDuringWrite.title;
             const createdAtUnchanged = docEntry.createdAt === executionBase.createdAt;
-            const pinUnchanged = (docEntry.pinned === true) === (executionBase.pinned === true);
-            const colorUnchanged = docEntry.color === executionBase.color;
+            const pinUnchanged = (docEntry.pinned === true) === (executionBase.pinned === true)
+              && !changedDuringWrite.pinned;
+            const colorUnchanged = docEntry.color === executionBase.color
+              && !changedDuringWrite.color;
             const contentUnchanged = docEntry.content === executionBase.content;
             const merged = {
               ...docEntry,
@@ -436,6 +442,12 @@ export function useAutoSave(
         const mapped = base.map((docEntry) => {
           if (docEntry.id !== snapshot.docId) return docEntry;
           found = true;
+          if (persistedBase) {
+            return {
+              ...docEntry,
+              isDirty: commitActiveId === snapshot.docId ? !editorStillMatches : false,
+            };
+          }
           // Metadata actions can commit while the writer above is awaiting
           // disk. Adopt its merged disk value only when that field is still at
           // the execution-time canonical base; otherwise `prev` is the newer
