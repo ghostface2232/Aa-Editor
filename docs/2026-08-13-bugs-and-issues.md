@@ -31,6 +31,7 @@
 - **수정 방향**: 본문 이동 전에 `writeMeta({ trashedAt, trashedFromPath })`를 await(restoreNote와 대칭), 또는 reconcile이 "live meta + trash 본문" 상태를 휴지통 노트로 복원.
 
 ### B5. `doSave`가 절대 `docs` 배열을 커밋 — 방금 삭제한 노트가 부활할 수 있는 레이스
+- **상태 (2026-08-14)**: 해결. `5963e54`가 React state/active-index 커밋을 함수형으로 바꿨고, 후속 수정에서 autosave persistence를 저장 대상 note sidecar만 갱신하도록 분리했다. 따라서 A 저장은 삭제된 B의 sidecar를 전혀 쓰지 않으며, A의 pin/color/group처럼 autosave가 소유하지 않는 필드도 disk 값을 보존한다. 동일 note의 cross-window lifecycle 전이는 별도 coordinator의 직렬화 대상으로 남는다.
 - **위치**: `src/hooks/useAutoSave.ts:323-369` (`stateRef.current.docs` 기반 `latestSetDocs(sortedDocs)` + `saveManifest`)
 - **시나리오**: 노트 A의 백그라운드 저장이 느리게 진행 중 사용자가 노트 B 삭제. doSave 후속 처리가 React 커밋 전의 stale `stateRef`를 읽으면 B가 포함된 배열을 다시 커밋 + 매니페스트에 live로 영속화 → 파일은 이미 `.trash`에 있는 유령 사이드바 행. 다음 reconcile까지 지속. (`deleteNotes`의 주석 `:748-752`가 같은 클래스의 버그를 벌크 삭제에서 이미 고쳤음을 보여줌 — doSave만 남음.)
 - **수정 방향**: doSave 내부에서 함수형 `setDocs(prev => ...)` 사용.

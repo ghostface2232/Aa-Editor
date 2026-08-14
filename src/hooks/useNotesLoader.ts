@@ -19,6 +19,7 @@ import {
   readLocalCache as readLocalCacheImpl,
   writeLocalCache as writeLocalCacheImpl,
   buildGroupsFromShared,
+  type MetaSnapshot,
   type LocalCache,
   type DecomposedState,
 } from "../utils/decomposedState";
@@ -38,9 +39,11 @@ import {
   metaPathFor,
   metaDirFor,
   readAllMeta,
+  readMeta,
   writeMeta as writeMetaFile,
   removeMeta as removeMetaFile,
   invalidateReadAllMetaCache,
+  type NoteMeta,
 } from "../utils/metadataIO";
 import {
   groupsPathFor,
@@ -503,6 +506,105 @@ async function persistDecomposedState(
   }
 }
 
+function metaSnapshotFromFile(meta: NoteMeta): MetaSnapshot {
+  return {
+    fileName: meta.fileName,
+    customName: !!meta.customName,
+    createdAt: meta.createdAt,
+    updatedAt: meta.updatedAt,
+    pinned: meta.pinned === true,
+    color: meta.color ?? null,
+    groupId: meta.groupId ?? null,
+    groupUpdatedAt: meta.groupUpdatedAt ?? meta.updatedAt,
+    trashedAt: meta.trashedAt ?? null,
+  };
+}
+
+async function persistSavedNoteMetadata(
+  doc: NoteDoc,
+  fallbackGroupId: string | null,
+  source?: string,
+): Promise<NoteMeta | null> {
+  const dir = await getNotesDir();
+  try {
+    // Read lifecycle at execution time, after older jobs on this window's
+    // metadata chain have drained. This rejects a trash transition already on
+    // disk; cross-window read/write exclusion belongs to the lifecycle
+    // coordinator rather than this ordinary metadata patch.
+    const disk = await readMeta(tauriFileSystem, dir, doc.id);
+    if (disk?.trashedAt != null) {
+      persistState.writtenMeta.set(doc.id, metaSnapshotFromFile(disk));
+      return null;
+    }
+    if (!disk && (!doc.filePath || !(await tauriFileSystem.exists(doc.filePath)))) {
+      return null;
+    }
+
+    // Autosave owns title/body timestamps only. Pin, color, group membership,
+    // and lifecycle have independent mutation paths and clocks, so preserve
+    // their latest disk values rather than replaying the editor's snapshot.
+    const groupId = disk?.groupId ?? fallbackGroupId;
+    const groupUpdatedAt = disk?.groupUpdatedAt ?? disk?.updatedAt ?? doc.updatedAt;
+    const customName = disk?.customName === true || doc.customName === true;
+    const next: NoteMeta = {
+      version: 2,
+      id: doc.id,
+      // Once a title is manual it is permanent. A stale autosave from a peer
+      // that has not observed the rename must not re-enable auto-title.
+      fileName: disk?.customName ? disk.fileName : doc.fileName,
+      customName,
+      createdAt: disk?.createdAt ?? doc.createdAt,
+      updatedAt: doc.updatedAt,
+      pinned: disk ? disk.pinned === true : doc.pinned === true,
+      color: disk?.color ?? doc.color,
+      groupId,
+      groupUpdatedAt,
+      trashedAt: null,
+      trashedFromPath: disk?.trashedFromPath ?? null,
+    };
+
+    await writeMetaFile(tauriFileSystem, dir, next, getMachineIdCached());
+    persistState.writtenMeta.set(doc.id, metaSnapshotFromFile(next));
+
+    // Keep the per-machine quick-paint cache current without rebuilding it
+    // from the autosave's pre-commit full docs array.
+    const cachePath = await getLocalCachePath();
+    const cache = await readLocalCacheImpl(tauriFileSystem, cachePath, dir);
+    if (cache) {
+      const cachedDoc = {
+        id: doc.id,
+        filePath: doc.filePath,
+        fileName: next.fileName,
+        createdAt: next.createdAt,
+        updatedAt: next.updatedAt,
+        ...(next.customName ? { customName: true } : {}),
+        ...(next.pinned ? { pinned: true } : {}),
+        ...(next.color ? { color: next.color } : {}),
+      };
+      const existingIndex = cache.notes.findIndex((entry) => entry.id === doc.id);
+      const notes = existingIndex >= 0
+        ? cache.notes.map((entry, index) => index === existingIndex ? cachedDoc : entry)
+        : [...cache.notes, cachedDoc];
+      const nextCache: LocalCache = { ...cache, notes };
+      const serialized = JSON.stringify(nextCache, null, 2);
+      if (persistState.lastWrittenLocalCache !== serialized) {
+        await writeLocalCacheImpl(tauriFileSystem, cachePath, nextCache);
+        persistState.lastWrittenLocalCache = serialized;
+      }
+    }
+    return next;
+  } catch (err) {
+    if (import.meta.env.DEV) console.warn("[PERSIST_FAILED]", err);
+    void logNotenError(new NotenError(
+      "PERSIST_FAILED",
+      "fatal",
+      err instanceof Error ? err.message : String(err),
+      { context: { dir, noteId: doc.id, source }, cause: err },
+    ));
+    throw err;
+  }
+}
+
 // Serializes ALL manifest writes within this window through a single chain.
 // Without it, concurrent callers (autosave + watcher reconcile, sidebar action
 // + autosave, etc.) raced: the later call's stale snapshot could finish first
@@ -526,6 +628,25 @@ export async function saveManifest(
   const job = persistChain
     .catch(() => undefined)
     .then(() => persistDecomposedState(docs, activeId, groups, source, snapshotSeq));
+  persistChain = job;
+  return job;
+}
+
+/**
+ * Persist metadata changed by a successful body autosave without replaying an
+ * unrelated full-library snapshot. Returns the effective metadata after
+ * merging independently-owned disk fields, or null when the note is no longer
+ * live at execution time.
+ */
+export async function saveNoteMetadata(
+  doc: NoteDoc,
+  fallbackGroupId: string | null,
+  source = "autosave",
+): Promise<NoteMeta | null> {
+  if (migrationInProgress) return null;
+  const job = persistChain
+    .catch(() => undefined)
+    .then(() => persistSavedNoteMetadata(doc, fallbackGroupId, source));
   persistChain = job;
   return job;
 }

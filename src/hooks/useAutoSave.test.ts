@@ -37,7 +37,20 @@ vi.mock("@tauri-apps/plugin-fs", () => ({
 }));
 
 vi.mock("./useNotesLoader", () => ({
-  saveManifest: vi.fn(async () => {}),
+  saveNoteMetadata: vi.fn(async (doc: NoteDoc, fallbackGroupId: string | null) => ({
+    version: 2 as const,
+    id: doc.id,
+    fileName: doc.fileName,
+    customName: doc.customName,
+    createdAt: doc.createdAt,
+    updatedAt: doc.updatedAt,
+    pinned: doc.pinned,
+    color: doc.color,
+    groupId: fallbackGroupId,
+    groupUpdatedAt: doc.updatedAt,
+    trashedAt: null,
+    trashedFromPath: null,
+  })),
   deriveTitle: (s: string) => s.split("\n")[0]?.replace(/^#+\s*/, "") || "",
   sortNotes: <T,>(docs: T[]) => docs,
   getNotesDir: vi.fn(async () => "/notes"),
@@ -117,13 +130,15 @@ import * as useFileSystemModule from "./useFileSystem";
 import * as conflictBackupModule from "../utils/conflictBackup";
 import * as fsModule from "../utils/fs";
 import * as crashLogModule from "../utils/crashLog";
+import * as windowSyncModule from "./useWindowSync";
 
-const saveManifestMock = useNotesLoaderModule.saveManifest as ReturnType<typeof vi.fn>;
+const saveNoteMetadataMock = useNotesLoaderModule.saveNoteMetadata as ReturnType<typeof vi.fn>;
 const getCurrentMarkdownMock = useFileSystemModule.getCurrentMarkdown as ReturnType<typeof vi.fn>;
 const backupMock = conflictBackupModule.backupIfRemoteWroteFirst as ReturnType<typeof vi.fn>;
 const localDeletionBackupMock = conflictBackupModule.backupLocalDeletionVersion as ReturnType<typeof vi.fn>;
 const writeMock = fsModule.tauriFileSystem.writeTextFile as ReturnType<typeof vi.fn>;
 const logMock = crashLogModule.logNotenError as ReturnType<typeof vi.fn>;
+const emitDocUpdatedMock = windowSyncModule.emitDocUpdated as ReturnType<typeof vi.fn>;
 
 function makeDoc(id: string, overrides: Partial<NoteDoc> = {}): NoteDoc {
   return {
@@ -431,7 +446,7 @@ describe("useAutoSave — remote deletion tombstone lifecycle", () => {
 
 
 describe("useAutoSave — doSave golden path", () => {
-  it("writes the body, calls saveManifest, and clears isDirty when the editor still matches", async () => {
+  it("writes the body, persists only that note's metadata, and clears isDirty when the editor still matches", async () => {
     refs.editorContent = "# Title\nbody";
     const setIsDirty = vi.fn();
     const state = makeState({ isDirty: true, setIsDirty });
@@ -445,8 +460,121 @@ describe("useAutoSave — doSave golden path", () => {
     expect(backupMock).toHaveBeenCalledTimes(1);
     expect(writeMock).toHaveBeenCalledTimes(1);
     expect(writeMock).toHaveBeenCalledWith("/notes/a.md", "# Title\nbody");
-    expect(saveManifestMock).toHaveBeenCalledTimes(1);
+    expect(saveNoteMetadataMock).toHaveBeenCalledTimes(1);
+    expect(saveNoteMetadataMock).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "a", content: "# Title\nbody" }),
+      null,
+    );
     expect(setIsDirty).toHaveBeenCalledWith(false);
+  });
+
+  it("commits and broadcasts the effective metadata returned by the writer", async () => {
+    refs.editorContent = "# Stale derived title\nbody";
+    saveNoteMetadataMock.mockResolvedValueOnce({
+      version: 2,
+      id: "a",
+      fileName: "Peer manual title",
+      customName: true,
+      createdAt: 250,
+      updatedAt: 7000,
+      pinned: true,
+      color: "purple",
+      groupId: null,
+      groupUpdatedAt: 6000,
+      trashedAt: null,
+      trashedFromPath: null,
+    });
+    const { result, setDocs } = renderAutoSave({
+      docs: [makeDoc("a", { fileName: "Old auto title", createdAt: 1000 })],
+      state: makeState({ isDirty: true }),
+    });
+
+    await act(async () => {
+      expect(await result.current.flushAutoSave()).toBe(true);
+    });
+
+    const updater = setDocs.mock.calls[setDocs.mock.calls.length - 1][0] as (prev: NoteDoc[]) => NoteDoc[];
+    expect(updater([makeDoc("a", { fileName: "Old auto title", createdAt: 1000 })])[0]).toMatchObject({
+      fileName: "Peer manual title",
+      customName: true,
+      createdAt: 250,
+      updatedAt: 7000,
+      pinned: true,
+      color: "purple",
+    });
+    expect(emitDocUpdatedMock).toHaveBeenCalledWith("a", "# Stale derived title\nbody", 7000);
+  });
+
+  it("does not overwrite metadata changed locally while the writer is pending", async () => {
+    let releaseWriter!: () => void;
+    saveNoteMetadataMock.mockImplementationOnce(() => new Promise((resolve) => {
+      releaseWriter = () => resolve({
+        version: 2,
+        id: "a",
+        fileName: "Disk title before local action",
+        createdAt: 1000,
+        updatedAt: 7000,
+        pinned: false,
+        color: "purple",
+        groupId: null,
+        groupUpdatedAt: 1000,
+        trashedAt: null,
+      });
+    }));
+    const initial = makeDoc("a", {
+      fileName: "Initial title",
+      pinned: false,
+      color: "blue",
+      updatedAt: 1000,
+    });
+    const { result, setDocs, rerenderWith } = renderAutoSave({
+      docs: [initial],
+      state: makeState({ isDirty: true }),
+    });
+
+    let save!: Promise<boolean>;
+    act(() => { save = result.current.flushAutoSave(); });
+    await waitFor(() => expect(saveNoteMetadataMock).toHaveBeenCalledTimes(1));
+    const locallyChanged = makeDoc("a", {
+      fileName: "Newest local rename",
+      customName: true,
+      pinned: true,
+      color: "red",
+      updatedAt: 8000,
+    });
+    act(() => rerenderWith({ docs: [locallyChanged] }));
+
+    await act(async () => {
+      releaseWriter();
+      expect(await save).toBe(true);
+    });
+
+    const updater = setDocs.mock.calls[setDocs.mock.calls.length - 1][0] as (prev: NoteDoc[]) => NoteDoc[];
+    expect(updater([locallyChanged])[0]).toMatchObject({
+      fileName: "Newest local rename",
+      customName: true,
+      pinned: true,
+      color: "red",
+      updatedAt: 8000,
+    });
+    expect(emitDocUpdatedMock).toHaveBeenCalledWith("a", "hello world", 7000);
+  });
+
+  it("leaves state dirty and emits nothing when the metadata patch is superseded", async () => {
+    saveNoteMetadataMock.mockResolvedValueOnce(null);
+    const setIsDirty = vi.fn();
+    const { result, setDocs } = renderAutoSave({
+      state: makeState({ isDirty: true, setIsDirty }),
+    });
+
+    await act(async () => {
+      expect(await result.current.flushAutoSave()).toBe(false);
+    });
+
+    expect(writeMock).toHaveBeenCalledTimes(1);
+    expect(setDocs).not.toHaveBeenCalled();
+    expect(emitDocUpdatedMock).not.toHaveBeenCalled();
+    expect(setIsDirty).not.toHaveBeenCalledWith(false);
   });
 });
 
@@ -468,7 +596,7 @@ describe("useAutoSave — backup-failure defers save", () => {
 
     expect(ok).toBe(false);
     expect(writeMock).not.toHaveBeenCalled();
-    expect(saveManifestMock).not.toHaveBeenCalled();
+    expect(saveNoteMetadataMock).not.toHaveBeenCalled();
     expect(setIsDirty).not.toHaveBeenCalled();
     const logged = logMock.mock.calls.find(
       (c) => (c[0] as NotenError).code === "BACKUP_FAILED",
@@ -811,7 +939,7 @@ describe("useAutoSave — revision-mismatch guard", () => {
     // The stale snapshot must bail before body write; protecting only the
     // manifest would still allow old content to land on disk.
     expect(writeMock).not.toHaveBeenCalled();
-    expect(saveManifestMock).not.toHaveBeenCalled();
+    expect(saveNoteMetadataMock).not.toHaveBeenCalled();
   });
 
   it("an older in-flight save cannot overwrite a newer flushed body", async () => {
@@ -954,7 +1082,7 @@ describe("useAutoSave — cancelDocSave", () => {
 });
 
 describe("useAutoSave — writeTextFile failure logs SAVE_FAILED", () => {
-  it("logs SAVE_FAILED (fatal) and skips saveManifest when the body write throws", async () => {
+  it("logs SAVE_FAILED (fatal) and skips metadata persistence when the body write throws", async () => {
     // doSave's outer catch warns in DEV ([SAVE_FAILED] ...); silence it so the
     // intentional fault doesn't pollute test output.
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -969,7 +1097,7 @@ describe("useAutoSave — writeTextFile failure logs SAVE_FAILED", () => {
 
     expect(ok).toBe(false);
     expect(writeMock).toHaveBeenCalledTimes(1);
-    expect(saveManifestMock).not.toHaveBeenCalled();
+    expect(saveNoteMetadataMock).not.toHaveBeenCalled();
     expect(setIsDirty).not.toHaveBeenCalled();
     const logged = logMock.mock.calls.find(
       (c) => (c[0] as NotenError).code === "SAVE_FAILED",
@@ -982,9 +1110,9 @@ describe("useAutoSave — writeTextFile failure logs SAVE_FAILED", () => {
   });
 });
 
-describe("useAutoSave — manifest failure remains retryable", () => {
-  it("returns false and leaves the editor dirty so a later flush retries saveManifest", async () => {
-    saveManifestMock.mockRejectedValueOnce(new Error("EPERM: meta sidecar locked"));
+describe("useAutoSave — metadata failure remains retryable", () => {
+  it("returns false and leaves the editor dirty so a later flush retries note metadata", async () => {
+    saveNoteMetadataMock.mockRejectedValueOnce(new Error("EPERM: meta sidecar locked"));
     const setIsDirty = vi.fn();
     const { result } = renderAutoSave({
       state: makeState({ isDirty: true, setIsDirty }),
@@ -997,7 +1125,7 @@ describe("useAutoSave — manifest failure remains retryable", () => {
 
     expect(first).toBe(false);
     expect(writeMock).toHaveBeenCalledTimes(1);
-    expect(saveManifestMock).toHaveBeenCalledTimes(1);
+    expect(saveNoteMetadataMock).toHaveBeenCalledTimes(1);
     expect(setIsDirty).not.toHaveBeenCalledWith(false);
 
     let second: boolean | undefined;
@@ -1007,7 +1135,7 @@ describe("useAutoSave — manifest failure remains retryable", () => {
 
     expect(second).toBe(true);
     expect(writeMock).toHaveBeenCalledTimes(2);
-    expect(saveManifestMock).toHaveBeenCalledTimes(2);
+    expect(saveNoteMetadataMock).toHaveBeenCalledTimes(2);
     expect(setIsDirty).toHaveBeenCalledWith(false);
   });
 });
@@ -1019,7 +1147,7 @@ describe("useAutoSave — savedDocStillExists race", () => {
   // skips writeTextFile entirely so the deleted file is not resurrected at its
   // old path. The post-write savedDocStillExists guard remains as a second
   // line of defense against a doc removed between write and commit.
-  it("skips both the body write and manifest commit for a doc removed mid-save", async () => {
+  it("skips both the body write and metadata commit for a doc removed mid-save", async () => {
     vi.useFakeTimers();
     let releaseBackup: () => void = () => {};
     backupMock.mockImplementationOnce(
@@ -1069,7 +1197,7 @@ describe("useAutoSave — savedDocStillExists race", () => {
     // body nor the manifest is touched. Without this guard the file would
     // reappear on disk right after delete moved it to .trash.
     expect(writeMock).not.toHaveBeenCalled();
-    expect(saveManifestMock).not.toHaveBeenCalled();
+    expect(saveNoteMetadataMock).not.toHaveBeenCalled();
     expect(setDocs).not.toHaveBeenCalled();
   });
 });
@@ -1232,16 +1360,31 @@ describe("useAutoSave — flushPendingSnapshots (orphaned-failure retry)", () =>
     await act(async () => { await result.current.awaitInFlightSaves(); });
 
     // First attempt failed (write threw). The snapshot is still pending and
-    // saveManifest hasn't been called.
+    // Note metadata persistence hasn't been called.
     expect(writeMock).toHaveBeenCalledTimes(1);
-    expect(saveManifestMock).not.toHaveBeenCalled();
+    expect(saveNoteMetadataMock).not.toHaveBeenCalled();
 
     // Clear the throw and run the close-time retry.
     refs.writeShouldThrow = null;
     await act(async () => { await result.current.flushPendingSnapshots(); });
 
     expect(writeMock).toHaveBeenCalledTimes(2);
-    expect(saveManifestMock).toHaveBeenCalledTimes(1);
+    expect(saveNoteMetadataMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries a background snapshot whose metadata write failed", async () => {
+    saveNoteMetadataMock.mockRejectedValueOnce(new Error("EPERM: meta sidecar locked"));
+    const { result } = renderAutoSave({ state: makeState({ isDirty: true }) });
+
+    act(() => result.current.captureAndQueueSave());
+    await act(async () => { await result.current.awaitInFlightSaves(); });
+    expect(writeMock).toHaveBeenCalledTimes(1);
+    expect(saveNoteMetadataMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => { await result.current.flushPendingSnapshots(); });
+
+    expect(writeMock).toHaveBeenCalledTimes(2);
+    expect(saveNoteMetadataMock).toHaveBeenCalledTimes(2);
   });
 
   it("is a no-op when no snapshots are pending", async () => {

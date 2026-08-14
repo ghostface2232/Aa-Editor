@@ -68,7 +68,7 @@ The active notes directory contains shared, syncable data:
   .conflicts/...
 ```
 
-- Note bodies are autosaved with a 1-second debounce using fail-closed atomic writes serialized per note.
+- Note bodies are autosaved with a 1-second debounce using fail-closed atomic writes serialized per note. After a body lands, autosave patches only that note's title/timestamp metadata on the shared persistence chain; it re-reads the sidecar at execution time and never replays a full library snapshot.
 - Per-note metadata carries title, timestamps, trash state, group membership clocks, pinned state, and color. Shared group definitions live in `.groups.json`.
 - `useNotesLoader` loads and persists decomposed note state; `useFileSystem` implements note lifecycle operations; `useAutoSave` owns body snapshots and save draining.
 - The app-data directory holds per-machine state such as `settings.json`, `ui-state.json`, `manifest-cache.json`, `machine-id`, the migration journal, and `crash.log`. Sidebar open state and width are kept in localStorage.

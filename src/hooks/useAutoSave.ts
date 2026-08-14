@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef } from "react";
 import { tauriFileSystem } from "../utils/fs";
 import type { NoteDoc, NoteGroup } from "./useNotesLoader";
-import { deriveTitle, saveManifest, sortNotes, getNotesDir, migrationInProgress } from "./useNotesLoader";
+import { deriveTitle, saveNoteMetadata, sortNotes, getNotesDir, migrationInProgress } from "./useNotesLoader";
 import { getCurrentMarkdown, provisionNoteFile } from "./useFileSystem";
 import type { TiptapEditorHandle } from "../components/TiptapEditor";
 import type { MarkdownState } from "./useMarkdownState";
@@ -266,7 +266,7 @@ export function useAutoSave(
       // the user deletes the note in that window, writing now would resurrect
       // the file at its old path right after deleteNote moved it to .trash,
       // leaving a ghost the next reconcile has to clean up. The post-write
-      // savedDocStillExists check below still guards the manifest commit, but
+      // savedDocStillExists check below still guards the metadata commit, but
       // skipping the write itself avoids the wasted I/O and the ghost file.
       if (!stateRef.current.docs.some((d) => d.id === snapshot.docId)) {
         return false;
@@ -281,7 +281,7 @@ export function useAutoSave(
       // queues the next save) would otherwise both write `${path}.tmp` at once
       // and clobber each other — the snapshot revision guards above bracket the
       // write but don't make it mutually exclusive. Only the write itself is
-      // serialized; backup (above) and the manifest commit (below) stay outside
+      // serialized; backup (above) and the metadata commit (below) stay outside
       // the lock so a slow remote-backup on an older save can't hold up a newer
       // one. Re-check the revision INSIDE the lock so a save superseded while it
       // waited bails without writing, leaving only the newest content on disk.
@@ -337,6 +337,45 @@ export function useAutoSave(
         ? live.state.getCachedMarkdown() === snapshot.content
         : false;
 
+      const savedAt = Date.now();
+      const liveDoc = live.docs.find((docEntry) => docEntry.id === snapshot.docId);
+      if (!liveDoc) return false;
+      const autoTitle = liveDoc.customName
+        ? liveDoc.fileName
+        : deriveTitle(snapshot.content) || liveDoc.fileName || getDefaultDocumentTitle(
+          latestLocale,
+          live.docs.map((docEntry) => docEntry.fileName),
+        );
+      const candidate: NoteDoc = {
+        ...liveDoc,
+        content: snapshot.content,
+        isDirty: currentActiveId === snapshot.docId ? !activeDocStillMatches : false,
+        updatedAt: savedAt,
+        fileName: autoTitle,
+      };
+      const fallbackGroupId = live.groups.find(
+        (group) => group.noteIds.includes(snapshot.docId),
+      )?.id ?? null;
+      let persisted: Awaited<ReturnType<typeof saveNoteMetadata>>;
+      try {
+        // A body autosave changes only this note's title/timestamps. Persisting
+        // the entire pre-commit docs array here let an unrelated concurrent
+        // delete be replayed as live metadata.
+        persisted = await saveNoteMetadata(candidate, fallbackGroupId);
+      } catch {
+        return false;
+      }
+      if (!persisted || !snapshotIsCurrent(snapshot)) return false;
+
+      const commitState = stateRef.current;
+      if (!commitState.docs.some((docEntry) => docEntry.id === snapshot.docId)) return false;
+      const commitActiveId = activeDocRef.current?.id
+        ?? commitState.docs[commitState.activeIndex]?.id
+        ?? null;
+      const editorStillMatches = commitActiveId === snapshot.docId
+        ? commitState.state.getCachedMarkdown() === snapshot.content
+        : false;
+
       // Builds the post-save docs array from any base. Returns null when the
       // saved doc is absent from that base (concurrently deleted).
       const buildCommit = (base: NoteDoc[]): NoteDoc[] | null => {
@@ -344,28 +383,38 @@ export function useAutoSave(
         const mapped = base.map((docEntry) => {
           if (docEntry.id !== snapshot.docId) return docEntry;
           found = true;
-
-          const autoTitle = docEntry.customName
-            ? docEntry.fileName
-            : deriveTitle(snapshot.content) || docEntry.fileName || getDefaultDocumentTitle(latestLocale, base.map((d) => d.fileName));
+          // Metadata actions can commit while the writer above is awaiting
+          // disk. Adopt its merged disk value only when that field is still at
+          // the value captured in liveDoc; otherwise `prev` is the newer local
+          // intent and must win.
+          const titleUnchanged = docEntry.fileName === liveDoc.fileName
+            && !!docEntry.customName === !!liveDoc.customName;
+          const pinUnchanged = (docEntry.pinned === true) === (liveDoc.pinned === true);
+          const colorUnchanged = docEntry.color === liveDoc.color;
+          const contentUnchanged = docEntry.content === liveDoc.content;
           return {
             ...docEntry,
-            content: snapshot.content,
-            isDirty: currentActiveId === snapshot.docId ? !activeDocStillMatches : false,
-            updatedAt: Date.now(),
-            fileName: autoTitle,
+            content: contentUnchanged ? snapshot.content : docEntry.content,
+            isDirty: commitActiveId === snapshot.docId ? !editorStillMatches : false,
+            fileName: titleUnchanged ? persisted.fileName : docEntry.fileName,
+            customName: titleUnchanged
+              ? persisted.customName || undefined
+              : docEntry.customName,
+            createdAt: docEntry.createdAt === liveDoc.createdAt
+              ? persisted.createdAt
+              : docEntry.createdAt,
+            updatedAt: Math.max(docEntry.updatedAt, persisted.updatedAt),
+            pinned: pinUnchanged
+              ? persisted.pinned === true ? true : undefined
+              : docEntry.pinned,
+            color: colorUnchanged ? persisted.color : docEntry.color,
           };
         });
         return found ? sortNotes(mapped, latestSortOrder, latestLocale) : null;
       };
 
-      const sortedDocs = buildCommit(live.docs);
-      if (!sortedDocs) {
-        return false;
-      }
-
       // Commit functionally, recomputing against `prev`. An absolute
-      // `latestSetDocs(sortedDocs)` built from stateRef could resurrect a doc
+      // docs array built from stateRef could resurrect a doc
       // a concurrent deleteNotes just removed — its setDocs may not have
       // rendered into stateRef yet, so the stale array still contains the
       // deleted entry (a ghost row whose file already moved to .trash). If the
@@ -381,27 +430,16 @@ export function useAutoSave(
       latestSetDocs((prev) => {
         const committed = buildCommit(prev);
         if (!committed) return prev;
-        const nextIndex = currentActiveId
-          ? Math.max(committed.findIndex((docEntry) => docEntry.id === currentActiveId), 0)
+        const nextIndex = commitActiveId
+          ? Math.max(committed.findIndex((docEntry) => docEntry.id === commitActiveId), 0)
           : 0;
         latestSetActiveIndex(nextIndex);
         return committed;
       });
-      try {
-        // The manifest is still built from the pre-commit array (the updater's
-        // result isn't synchronously observable), so it can transiently
-        // re-persist a concurrently-deleted entry; reconcile repairs that from
-        // the trashed sidecar on the next pass.
-        await saveManifest(sortedDocs, currentActiveId, stateRef.current.groups);
-      } catch {
-        return false;
-      }
+      emitDocUpdated(snapshot.docId, snapshot.content, persisted.updatedAt);
 
-      const saved = sortedDocs.find((d) => d.id === snapshot.docId);
-      if (saved) emitDocUpdated(saved.id, snapshot.content, saved.fileName);
-
-      if (activeDocStillMatches) {
-        live.state.setIsDirty(false);
+      if (editorStillMatches) {
+        commitState.state.setIsDirty(false);
       }
       return true;
     } catch (err) {

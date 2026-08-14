@@ -79,6 +79,38 @@ beforeEach(() => {
   refs.handlers.clear();
 });
 
+describe("useWindowSync — remote body update", () => {
+  it("updates content without letting a delayed body event overwrite the title", async () => {
+    const newerMetadata = {
+      ...makeDoc("b"),
+      fileName: "Newest sidecar title",
+      updatedAt: 10_000,
+    };
+    const { result } = renderWindowSync(async () => true, [makeDoc("a"), newerMetadata]);
+    await waitFor(() => expect(refs.handlers.has("doc-updated")).toBe(true));
+
+    act(() => {
+      refs.handlers.get("doc-updated")?.({
+        payload: {
+          sourceWindow: "window-b",
+          docId: "b",
+          content: "remote body",
+          updatedAt: 9000,
+          // Older app versions included a title in this event. It must remain
+          // outside the body event's ownership even when present on the wire.
+          fileName: "Stale event title",
+        },
+      });
+    });
+
+    expect(result.current.docs.find((doc) => doc.id === "b")).toMatchObject({
+      content: "remote body",
+      fileName: "Newest sidecar title",
+      updatedAt: 10_000,
+    });
+  });
+});
+
 describe("useWindowSync — remote deletion", () => {
   it("removes the live document immediately after synchronous preservation capture", async () => {
     let finish!: (value: boolean) => void;

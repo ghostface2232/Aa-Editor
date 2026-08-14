@@ -3,7 +3,7 @@ import { renderHook, waitFor, act } from "@testing-library/react";
 import { createInMemoryFileSystem, type InMemoryFileSystem } from "../utils/fs.test-utils";
 import { createReconcileState, type ReconcileState } from "../utils/reconcileFolder";
 import type { NoteDoc, NoteGroup, TrashedNote } from "../utils/noteTypes";
-import type { DecomposedState } from "../utils/decomposedState";
+import type { DecomposedState, LocalCache } from "../utils/decomposedState";
 
 // Module-mock refs that survive hoist. The mocks below capture `refs` by
 // reference and read its fields at call time, so beforeEach can swap the
@@ -16,6 +16,8 @@ const refs = vi.hoisted(() => ({
   decomposedDocs: [] as NoteDoc[],
   decomposedGroups: [] as NoteGroup[],
   decomposedTrashed: [] as TrashedNote[],
+  localCache: null as LocalCache | null,
+  writtenLocalCache: null as LocalCache | null,
 }));
 
 vi.mock("@tauri-apps/api/path", () => ({
@@ -85,8 +87,10 @@ vi.mock("../utils/decomposedState", async (importOriginal) => {
       activeNoteId: null,
       trashedNotes: refs.decomposedTrashed,
     })),
-    readLocalCache: vi.fn(async () => null),
-    writeLocalCache: vi.fn(async () => {}),
+    readLocalCache: vi.fn(async () => refs.localCache),
+    writeLocalCache: vi.fn(async (_fs: unknown, _path: string, cache: LocalCache) => {
+      refs.writtenLocalCache = cache;
+    }),
     seedWriteSnapshots: vi.fn(async () => {}),
     persistDecomposedState: vi.fn(async () => {}),
     syncGroupsSnapshotFromDisk: vi.fn(async () => {}),
@@ -110,10 +114,11 @@ vi.mock("../utils/reconcileFolder", async (importOriginal) => {
 });
 
 // Loader is imported AFTER all mocks. Tests then drive it with renderHook.
-import { useNotesLoader, resetNotesDir, saveManifest, purgeExpiredTrash } from "./useNotesLoader";
+import { useNotesLoader, resetNotesDir, saveManifest, saveNoteMetadata, purgeExpiredTrash } from "./useNotesLoader";
 import * as reconcileFolderModule from "../utils/reconcileFolder";
 import * as decomposedStateModule from "../utils/decomposedState";
 import * as crashLogModule from "../utils/crashLog";
+import { readMeta, writeMeta, type NoteMeta } from "../utils/metadataIO";
 
 const clearReconcileSpy = reconcileFolderModule.clearReconcileState as unknown as ReturnType<typeof vi.fn>;
 const persistMock = decomposedStateModule.persistDecomposedState as ReturnType<typeof vi.fn>;
@@ -140,6 +145,8 @@ beforeEach(() => {
   refs.decomposedDocs = [];
   refs.decomposedGroups = [];
   refs.decomposedTrashed = [];
+  refs.localCache = null;
+  refs.writtenLocalCache = null;
   // Reset the hook's module-level dir cache so each test starts clean.
   resetNotesDir();
 });
@@ -339,6 +346,173 @@ describe("useNotesLoader — saveManifest persistChain", () => {
       (c) => (c[0] as { code: string }).code === "PERSIST_FAILED",
     );
     expect(logged).toBeDefined();
+  });
+});
+
+describe("useNotesLoader — targeted autosave metadata", () => {
+  const flushAll = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+  beforeEach(async () => {
+    await flushAll();
+    persistMock.mockReset();
+  });
+
+  const meta = (id: string, overrides: Partial<NoteMeta> = {}): NoteMeta => ({
+    version: 2,
+    id,
+    fileName: `Note ${id}`,
+    createdAt: 1000,
+    updatedAt: 1000,
+    groupId: null,
+    groupUpdatedAt: 1000,
+    trashedAt: null,
+    ...overrides,
+  });
+
+  it("updates only the saved note while preserving independently-owned metadata", async () => {
+    refs.fs!.seedTextFile("/test-appdata/notes/a.md", "body a");
+    refs.fs!.seedTextFile("/test-appdata/notes/.trash/b.md", "body b");
+    refs.localCache = {
+      version: 2,
+      notesDirectory: "/test-appdata/notes",
+      notes: [
+        { id: "a", filePath: "/test-appdata/notes/a.md", fileName: "Note a", createdAt: 1000, updatedAt: 1000 },
+        { id: "c", filePath: "/test-appdata/notes/c.md", fileName: "Untouched c", createdAt: 1000, updatedAt: 1000 },
+      ],
+      groups: [{ id: "group-1", name: "Group", noteIds: ["a"], collapsed: false, createdAt: 1 }],
+      trashedNotes: [{
+        id: "b",
+        fileName: "Note b",
+        originalFilePath: "/test-appdata/notes/b.md",
+        trashFilePath: "/test-appdata/notes/.trash/b.md",
+        trashedAt: 5000,
+        groupId: null,
+        createdAt: 1000,
+        updatedAt: 1000,
+      }],
+    };
+    await writeMeta(refs.fs!, "/test-appdata/notes", meta("a", {
+      createdAt: 250,
+      pinned: true,
+      color: "purple",
+      groupId: "group-1",
+      groupUpdatedAt: 9000,
+    }), "test-machine");
+    await writeMeta(refs.fs!, "/test-appdata/notes", meta("b", {
+      trashedAt: 5000,
+      trashedFromPath: "/test-appdata/notes/b.md",
+    }), "remote-machine");
+
+    const saved = makeDoc("a");
+    saved.fileName = "Renamed from body";
+    saved.updatedAt = 7000;
+    saved.pinned = false;
+    saved.color = undefined;
+
+    await expect(saveNoteMetadata(saved, null)).resolves.toMatchObject({
+      id: "a",
+      fileName: "Renamed from body",
+      createdAt: 250,
+      pinned: true,
+      color: "purple",
+      groupId: "group-1",
+      groupUpdatedAt: 9000,
+      trashedAt: null,
+    });
+
+    expect(await readMeta(refs.fs!, "/test-appdata/notes", "a")).toMatchObject({
+      fileName: "Renamed from body",
+      createdAt: 250,
+      updatedAt: 7000,
+      pinned: true,
+      color: "purple",
+      groupId: "group-1",
+      groupUpdatedAt: 9000,
+      trashedAt: null,
+    });
+    expect(await readMeta(refs.fs!, "/test-appdata/notes", "b")).toMatchObject({
+      fileName: "Note b",
+      trashedAt: 5000,
+      trashedFromPath: "/test-appdata/notes/b.md",
+      lastWriterMachineId: "remote-machine",
+    });
+    expect(refs.writtenLocalCache?.notes).toEqual([
+      expect.objectContaining({ id: "a", fileName: "Renamed from body", updatedAt: 7000, pinned: true, color: "purple" }),
+      expect.objectContaining({ id: "c", fileName: "Untouched c" }),
+    ]);
+    expect(refs.writtenLocalCache?.trashedNotes?.map((entry) => entry.id)).toEqual(["b"]);
+    expect(refs.writtenLocalCache?.groups?.[0]?.noteIds).toEqual(["a"]);
+  });
+
+  it("does not let a stale autosave re-enable auto-title after a manual rename", async () => {
+    refs.fs!.seedTextFile("/test-appdata/notes/a.md", "body a");
+    await writeMeta(refs.fs!, "/test-appdata/notes", meta("a", {
+      fileName: "Manual title",
+      customName: true,
+      updatedAt: 6000,
+    }), "test-machine");
+
+    await expect(saveNoteMetadata({
+      ...makeDoc("a"),
+      fileName: "Derived stale title",
+      customName: false,
+      updatedAt: 7000,
+    }, null)).resolves.toMatchObject({
+      fileName: "Manual title",
+      customName: true,
+      updatedAt: 7000,
+    });
+
+    expect(await readMeta(refs.fs!, "/test-appdata/notes", "a")).toMatchObject({
+      fileName: "Manual title",
+      customName: true,
+      updatedAt: 7000,
+    });
+  });
+
+  it("re-checks lifecycle when the queue drains and cannot revive a trashed note", async () => {
+    refs.fs!.seedTextFile("/test-appdata/notes/a.md", "stale root body");
+    await writeMeta(refs.fs!, "/test-appdata/notes", meta("a"), "test-machine");
+
+    let releaseOlderJob: () => void = () => {};
+    const olderGate = new Promise<void>((resolve) => { releaseOlderJob = resolve; });
+    persistMock.mockImplementationOnce(async () => { await olderGate; });
+
+    const older = saveManifest([makeDoc("a")], "a", [], "older-full-snapshot");
+    const staleAutosave = saveNoteMetadata({
+      ...makeDoc("a"),
+      fileName: "Stale live title",
+      updatedAt: 8000,
+    }, null);
+    older.catch(() => {});
+    staleAutosave.catch(() => {});
+
+    await flushAll();
+    expect(persistMock).toHaveBeenCalledTimes(1);
+
+    await writeMeta(refs.fs!, "/test-appdata/notes", meta("a", {
+      trashedAt: 9000,
+      trashedFromPath: "/test-appdata/notes/a.md",
+    }), "test-machine");
+
+    releaseOlderJob();
+    await older;
+    await expect(staleAutosave).resolves.toBeNull();
+    expect(await readMeta(refs.fs!, "/test-appdata/notes", "a")).toMatchObject({
+      fileName: "Note a",
+      trashedAt: 9000,
+    });
+  });
+
+  it("does not recreate an absent sidecar when the live body is also gone", async () => {
+    await expect(saveNoteMetadata({
+      ...makeDoc("gone"),
+      fileName: "Stale title",
+      updatedAt: 9000,
+    }, null)).resolves.toBeNull();
+
+    expect(await readMeta(refs.fs!, "/test-appdata/notes", "gone")).toBeNull();
+    expect(refs.writtenLocalCache).toBeNull();
   });
 });
 

@@ -12,7 +12,6 @@ interface DocUpdatedPayload {
   sourceWindow: string;
   docId: string;
   content: string;
-  fileName: string;
   updatedAt: number;
 }
 
@@ -58,9 +57,9 @@ interface TrashUpdatedPayload {
 
 const WINDOW_LABEL = getCurrentWindow().label;
 
-export function emitDocUpdated(docId: string, content: string, fileName: string) {
+export function emitDocUpdated(docId: string, content: string, updatedAt: number) {
   emit("doc-updated", {
-    sourceWindow: WINDOW_LABEL, docId, content, fileName, updatedAt: Date.now(),
+    sourceWindow: WINDOW_LABEL, docId, content, updatedAt,
   } satisfies DocUpdatedPayload).catch(() => {});
 }
 
@@ -138,7 +137,7 @@ export function useWindowSync(
 
     Promise.all([
       listen<DocUpdatedPayload>("doc-updated", (event) => {
-        const { sourceWindow, docId, content, fileName, updatedAt } = event.payload;
+        const { sourceWindow, docId, content, updatedAt } = event.payload;
         if (sourceWindow === WINDOW_LABEL) return;
 
         let needsSyncMarkdown = false;
@@ -156,7 +155,14 @@ export function useWindowSync(
             // (our own autosave) resolves conflicts, not remote events.
             if (prev[idx].isDirty) return prev;
             const updated = [...prev];
-            updated[idx] = { ...updated[idx], content, fileName, updatedAt, isDirty: false };
+            // Titles are sidecar/rename metadata. A delayed body notification
+            // must not roll a newer rename back in the receiving window.
+            updated[idx] = {
+              ...updated[idx],
+              content,
+              updatedAt: Math.max(updated[idx].updatedAt, updatedAt),
+              isDirty: false,
+            };
 
             if (updated[idx].id === getRoutedActiveDocId()) {
               needsSyncMarkdown = true;
