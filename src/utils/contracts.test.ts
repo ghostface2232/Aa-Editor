@@ -158,6 +158,23 @@ describe("contract: notes directory setting commits after copy, before source cl
     expect(persistAt).toBeLessThan(clearSourceAt);
     expect(body.slice(migrateAt, persistAt)).toContain("clearSource: false");
   });
+
+  it("both local migration paths enqueue the metadata barrier before raising the guard", () => {
+    const text = read(APP);
+    const change = text.match(/const handleChangeNotesDir[\s\S]*?\n  const handleResetNotesDir/)?.[0];
+    const reset = text.match(/const handleResetNotesDir[\s\S]*?\n  const \{/)?.[0];
+    expect(change, "handleChangeNotesDir not found").toBeDefined();
+    expect(reset, "handleResetNotesDir not found").toBeDefined();
+
+    for (const body of [change!, reset!]) {
+      const enqueueAt = body.indexOf("const manifestDrain = flushPersistence(");
+      const guardAt = body.indexOf("setMigrationInProgress(true)");
+      const awaitAt = body.indexOf("const manifestSaved = await manifestDrain");
+      expect(enqueueAt).toBeGreaterThanOrEqual(0);
+      expect(guardAt).toBeGreaterThan(enqueueAt);
+      expect(awaitAt).toBeGreaterThan(guardAt);
+    }
+  });
 });
 
 describe("contract: autosave failures remain flushable", () => {

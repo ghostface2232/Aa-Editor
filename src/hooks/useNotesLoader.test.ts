@@ -19,6 +19,8 @@ const refs = vi.hoisted(() => ({
   localCache: null as LocalCache | null,
   writtenLocalCache: null as LocalCache | null,
   reconcileGate: null as Promise<void> | null,
+  writeGate: null as Promise<void> | null,
+  onWriteStart: null as ((path: string) => void) | null,
 }));
 
 vi.mock("@tauri-apps/api/path", () => ({
@@ -37,7 +39,11 @@ vi.mock("@tauri-apps/plugin-fs", () => {
       if (fault) throw fault;
       return get().readTextFile(p);
     },
-    writeTextFile: (p: string, c: string) => get().writeTextFile(p, c),
+    writeTextFile: async (p: string, c: string) => {
+      refs.onWriteStart?.(p);
+      if (refs.writeGate) await refs.writeGate;
+      return get().writeTextFile(p, c);
+    },
     readFile: (p: string) => get().readFile(p),
     writeFile: (p: string, d: Uint8Array) => get().writeFile(p, d),
     remove: (p: string, o?: { recursive?: boolean }) => get().remove(p, o),
@@ -122,7 +128,7 @@ vi.mock("../utils/reconcileFolder", async (importOriginal) => {
 });
 
 // Loader is imported AFTER all mocks. Tests then drive it with renderHook.
-import { useNotesLoader, resetNotesDir, restoreNotesDir, setNotesDir, saveManifest, saveNoteMetadata, purgeExpiredTrash } from "./useNotesLoader";
+import { useNotesLoader, resetNotesDir, restoreNotesDir, setNotesDir, saveManifest, saveNoteMetadata, flushPersistence, markGroupAsDeleted, purgeExpiredTrash } from "./useNotesLoader";
 import * as reconcileFolderModule from "../utils/reconcileFolder";
 import * as decomposedStateModule from "../utils/decomposedState";
 import * as crashLogModule from "../utils/crashLog";
@@ -157,6 +163,8 @@ beforeEach(() => {
   refs.localCache = null;
   refs.writtenLocalCache = null;
   refs.reconcileGate = null;
+  refs.writeGate = null;
+  refs.onWriteStart = null;
   // Reset the hook's module-level dir cache so each test starts clean.
   resetNotesDir();
 });
@@ -468,11 +476,23 @@ describe("useNotesLoader — saveManifest persistChain", () => {
   beforeEach(async () => {
     await flushAll();
     persistMock.mockReset();
+    libraryStore.seedDirectory("/test-appdata/notes", {
+      docs: [],
+      groups: [],
+      trashedNotes: [],
+      activeNoteId: null,
+    });
   });
 
   it("invokes persistDecomposedState in call-time order even when the first call resolves last", async () => {
     const docsA = [makeDoc("a")];
     const docsB = [makeDoc("a"), makeDoc("b")];
+    libraryStore.seedDirectory("/test-appdata/notes", {
+      docs: docsA,
+      groups: [],
+      trashedNotes: [],
+      activeNoteId: "a",
+    });
     let bStarted = false;
     // Both promises are constructed up-front so the resolvers exist before any
     // impl runs. Otherwise calling resolveB() before B's mock impl evaluates
@@ -487,13 +507,17 @@ describe("useNotesLoader — saveManifest persistChain", () => {
     persistMock.mockImplementationOnce(async () => { bStarted = true; await bGate; });
 
     const p1 = saveManifest(docsA, null, undefined, "A");
-    const p2 = saveManifest(docsB, null, undefined, "B");
     p1.catch(() => {});
-    p2.catch(() => {});
 
     await flushAll();
     expect(persistMock).toHaveBeenCalledTimes(1);
     expect(bStarted).toBe(false);
+
+    libraryStore.commit({ docs: docsB }, "local");
+    // The legacy array argument is deliberately stale. Execution must read B
+    // from the canonical store after A drains.
+    const p2 = saveManifest(docsA, null, undefined, "B");
+    p2.catch(() => {});
 
     // Resolve B's gate prematurely. The chain must still hold B back until A
     // finishes — even though B's await will be immediately satisfied once it
@@ -521,6 +545,12 @@ describe("useNotesLoader — saveManifest persistChain", () => {
   it("isolates a rejected entry so the next enqueue still runs", async () => {
     const docsA = [makeDoc("a")];
     const docsB = [makeDoc("a"), makeDoc("b")];
+    libraryStore.seedDirectory("/test-appdata/notes", {
+      docs: docsB,
+      groups: [],
+      trashedNotes: [],
+      activeNoteId: "a",
+    });
     persistMock.mockRejectedValueOnce(new Error("EPERM: cache locked"));
     persistMock.mockResolvedValueOnce(undefined);
 
@@ -550,6 +580,111 @@ describe("useNotesLoader — saveManifest persistChain", () => {
     );
     expect(logged).toBeDefined();
   });
+
+  it("repeats when a revision commits during the barrier's own persistence pass", async () => {
+    const docsA = [makeDoc("a")];
+    const docsB = [makeDoc("a"), makeDoc("b")];
+    libraryStore.seedDirectory("/test-appdata/notes", {
+      docs: docsA,
+      groups: [],
+      trashedNotes: [],
+      activeNoteId: "a",
+    });
+    let releaseOlder!: () => void;
+    const olderGate = new Promise<void>((resolve) => { releaseOlder = resolve; });
+    persistMock.mockImplementationOnce(async () => { await olderGate; });
+    persistMock.mockResolvedValueOnce(undefined);
+
+    const barrier = flushPersistence("test-barrier");
+    barrier.catch(() => {});
+    await flushAll();
+    expect(persistMock).toHaveBeenCalledTimes(1);
+    expect((persistMock.mock.calls[0][3] as NoteDoc[]).map((doc) => doc.id)).toEqual(["a"]);
+
+    // Commit while the barrier's own first write is suspended. A one-shot
+    // implementation would return after that write and lose B.
+    libraryStore.commit({ docs: docsB }, "local");
+    releaseOlder();
+    await barrier;
+
+    expect(persistMock).toHaveBeenCalledTimes(2);
+    const barrierDocs = persistMock.mock.calls[1][3] as NoteDoc[];
+    expect(barrierDocs.map((doc) => doc.id)).toEqual(["a", "b"]);
+  });
+
+  it("re-checks an unbound snapshot after the prior chain drains", async () => {
+    const docsA = [makeDoc("a")];
+    libraryStore.seedDirectory("/test-appdata/notes", {
+      docs: docsA,
+      groups: [],
+      trashedNotes: [],
+      activeNoteId: "a",
+    });
+    let releaseOld!: () => void;
+    const oldGate = new Promise<void>((resolve) => { releaseOld = resolve; });
+    persistMock.mockImplementationOnce(async () => { await oldGate; });
+    persistMock.mockResolvedValueOnce(undefined);
+    const oldWrite = saveManifest(docsA, "a", [], "old-directory");
+    oldWrite.catch(() => {});
+    await flushAll();
+
+    libraryStore.clearDirectory("hydrate");
+    const barrier = flushPersistence("unbound-transition");
+    barrier.catch(() => {});
+    const docB = { ...makeDoc("b"), filePath: "D:/next/b.md" };
+    libraryStore.seedDirectory("D:/next", {
+      docs: [docB],
+      groups: [],
+      trashedNotes: [],
+      activeNoteId: "b",
+    });
+    releaseOld();
+    await oldWrite;
+    await barrier;
+
+    expect(persistMock).toHaveBeenCalledTimes(2);
+    expect((persistMock.mock.calls[1][3] as NoteDoc[]).map((doc) => doc.id)).toEqual(["b"]);
+  });
+
+  it("persists trash from the canonical snapshot rather than the module cache", async () => {
+    const trashed: TrashedNote = {
+      id: "trash",
+      fileName: "Trash",
+      originalFilePath: "/test-appdata/notes/trash.md",
+      trashFilePath: "/test-appdata/notes/.trash/trash.md",
+      trashedAt: 5000,
+      groupId: null,
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    libraryStore.seedDirectory("/test-appdata/notes", {
+      docs: [],
+      groups: [],
+      trashedNotes: [trashed],
+      activeNoteId: null,
+    });
+    persistMock.mockResolvedValueOnce(undefined);
+
+    await flushPersistence("trash-source-test");
+
+    const options = persistMock.mock.calls[0][6] as { trashedNotes: TrashedNote[] };
+    expect(options.trashedNotes.map((note) => note.id)).toEqual(["trash"]);
+  });
+
+  it("does not dedupe a new group tombstone intent at the same library revision", async () => {
+    persistMock.mockResolvedValue(undefined);
+    await flushPersistence("group-baseline");
+    const callsAfterBaseline = persistMock.mock.calls.length;
+
+    markGroupAsDeleted("removed-group");
+    await flushPersistence("group-tombstone");
+
+    expect(persistMock).toHaveBeenCalledTimes(callsAfterBaseline + 1);
+    const options = persistMock.mock.calls[persistMock.mock.calls.length - 1][6] as {
+      groupsSnapshotSeq: number;
+    };
+    expect(options.groupsSnapshotSeq).toBeGreaterThan(0);
+  });
 });
 
 describe("useNotesLoader — targeted autosave metadata", () => {
@@ -558,6 +693,12 @@ describe("useNotesLoader — targeted autosave metadata", () => {
   beforeEach(async () => {
     await flushAll();
     persistMock.mockReset();
+    libraryStore.seedDirectory("/test-appdata/notes", {
+      docs: [makeDoc("a")],
+      groups: [],
+      trashedNotes: [],
+      activeNoteId: "a",
+    });
   });
 
   const meta = (id: string, overrides: Partial<NoteMeta> = {}): NoteMeta => ({
@@ -673,9 +814,48 @@ describe("useNotesLoader — targeted autosave metadata", () => {
     });
   });
 
+  it("publishes effective note metadata before a queued full-library job executes", async () => {
+    refs.fs!.seedTextFile("/test-appdata/notes/a.md", "body a");
+    await writeMeta(refs.fs!, "/test-appdata/notes", meta("a"), "test-machine");
+    persistMock.mockResolvedValueOnce(undefined);
+    const saved = {
+      ...makeDoc("a"),
+      fileName: "Autosaved title",
+      updatedAt: 7000,
+    };
+
+    const metadata = saveNoteMetadata(saved, null, "test-autosave", (effective) => {
+      libraryStore.commit((current) => ({
+        docs: current.docs.map((entry) => entry.id === effective.id
+          ? {
+              ...entry,
+              fileName: effective.fileName,
+              updatedAt: effective.updatedAt,
+            }
+          : entry),
+      }), "local");
+    });
+    const full = saveManifest([makeDoc("a")], "a", [], "queued-behind-autosave");
+    await metadata;
+    await full;
+
+    const persistedDocs = persistMock.mock.calls[0][3] as NoteDoc[];
+    expect(persistedDocs[0]).toMatchObject({
+      id: "a",
+      fileName: "Autosaved title",
+      updatedAt: 7000,
+    });
+  });
+
   it("re-checks lifecycle when the queue drains and cannot revive a trashed note", async () => {
     refs.fs!.seedTextFile("/test-appdata/notes/a.md", "stale root body");
     await writeMeta(refs.fs!, "/test-appdata/notes", meta("a"), "test-machine");
+    libraryStore.seedDirectory("/test-appdata/notes", {
+      docs: [makeDoc("a")],
+      groups: [],
+      trashedNotes: [],
+      activeNoteId: "a",
+    });
 
     let releaseOlderJob: () => void = () => {};
     const olderGate = new Promise<void>((resolve) => { releaseOlderJob = resolve; });
@@ -716,6 +896,73 @@ describe("useNotesLoader — targeted autosave metadata", () => {
 
     expect(await readMeta(refs.fs!, "/test-appdata/notes", "gone")).toBeNull();
     expect(refs.writtenLocalCache).toBeNull();
+  });
+
+  it("drops queued note metadata when the directory generation changes", async () => {
+    refs.fs!.seedTextFile("/test-appdata/notes/a.md", "body a");
+    await writeMeta(refs.fs!, "/test-appdata/notes", meta("a"), "test-machine");
+    libraryStore.seedDirectory("/test-appdata/notes", {
+      docs: [makeDoc("a")],
+      groups: [],
+      trashedNotes: [],
+      activeNoteId: "a",
+    });
+    let releaseOlder!: () => void;
+    const olderGate = new Promise<void>((resolve) => { releaseOlder = resolve; });
+    persistMock.mockImplementationOnce(async () => { await olderGate; });
+    const older = saveManifest([makeDoc("a")], "a", [], "older-dir-job");
+    older.catch(() => {});
+    await flushAll();
+    const metadata = saveNoteMetadata({
+      ...makeDoc("a"),
+      fileName: "Must not cross directories",
+      updatedAt: 9000,
+    }, null);
+    metadata.catch(() => {});
+
+    libraryStore.seedDirectory("D:/other-notes", {
+      docs: [],
+      groups: [],
+      trashedNotes: [],
+      activeNoteId: null,
+    });
+    releaseOlder();
+    await older;
+
+    await expect(metadata).resolves.toBeNull();
+    expect(await readMeta(refs.fs!, "D:/other-notes", "a")).toBeNull();
+  });
+
+  it("does not publish a metadata result when the directory changes during its write", async () => {
+    refs.fs!.seedTextFile("/test-appdata/notes/a.md", "body a");
+    await writeMeta(refs.fs!, "/test-appdata/notes", meta("a"), "test-machine");
+    let releaseWrite!: () => void;
+    refs.writeGate = new Promise<void>((resolve) => { releaseWrite = resolve; });
+    let markWriteStarted!: () => void;
+    const writeStarted = new Promise<void>((resolve) => { markWriteStarted = resolve; });
+    refs.onWriteStart = (path) => {
+      if (path.includes("/.meta/") || path.includes("\\.meta\\")) markWriteStarted();
+    };
+    const publish = vi.fn();
+
+    const metadata = saveNoteMetadata({
+      ...makeDoc("a"),
+      fileName: "Old directory result",
+      updatedAt: 9000,
+    }, null, "generation-mid-write", publish);
+    metadata.catch(() => {});
+    await writeStarted;
+    libraryStore.seedDirectory("D:/other-notes", {
+      docs: [],
+      groups: [],
+      trashedNotes: [],
+      activeNoteId: null,
+    });
+    releaseWrite();
+
+    await expect(metadata).resolves.toBeNull();
+    expect(publish).not.toHaveBeenCalled();
+    expect(await readMeta(refs.fs!, "D:/other-notes", "a")).toBeNull();
   });
 });
 

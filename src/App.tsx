@@ -21,7 +21,7 @@ import {
 import { getCurrentWindow, Effect, LogicalSize } from "@tauri-apps/api/window";
 import { useMarkdownState } from "./hooks/useMarkdownState";
 import { getCurrentMarkdown, useFileSystem } from "./hooks/useFileSystem";
-import { saveManifest, sortNotes, useNotesLoader, getNotesDir, getDefaultNotesDir, setNotesDir, restoreNotesDir, resetNotesDir, setMigrationInProgress } from "./hooks/useNotesLoader";
+import { saveManifest, flushPersistence, sortNotes, useNotesLoader, getNotesDir, getDefaultNotesDir, setNotesDir, restoreNotesDir, resetNotesDir, setMigrationInProgress } from "./hooks/useNotesLoader";
 import { useAutoSave } from "./hooks/useAutoSave";
 import { useNoteGroups } from "./hooks/useNoteGroups";
 import { useSettings, type ParagraphSpacing } from "./hooks/useSettings";
@@ -477,11 +477,7 @@ function App() {
   flushAutoSaveRef.current = flushAutoSave;
   hasUnsavedChangesRef.current = hasUnsavedChanges;
   hasUnsaveableChangesRef.current = hasUnsaveableChanges;
-  flushManifestRef.current = () => saveManifest(
-    docsRef.current,
-    docsRef.current[activeIndexRef.current]?.id ?? null,
-    groupsRef.current,
-  ).then(() => true).catch(() => false);
+  flushManifestRef.current = () => flushPersistence().then(() => true).catch(() => false);
   captureAndQueueSaveRef.current = captureAndQueueSave;
   awaitInFlightSavesRef.current = awaitInFlightSaves;
   flushDocSaveRef.current = flushDocSave;
@@ -810,21 +806,6 @@ function App() {
     await flushAutoSaveRef.current?.().catch(() => {});
     await awaitInFlightSavesRef.current?.().catch(() => {});
     await flushPendingSnapshotsRef.current?.().catch(() => {});
-    const manifestSaved = await saveManifest(
-      docsRef.current,
-      docsRef.current[activeIndexRef.current]?.id ?? null,
-      groupsRef.current,
-    ).then(() => true).catch(() => false);
-
-    // Abort before any destructive step if anything could not be persisted —
-    // the copy/clear below would otherwise drop it. hasUnsavedChanges covers
-    // the autosave body queue; manifestSaved covers group/pin/color/order
-    // metadata, which lives only in the manifest and is not reflected by the
-    // body-queue flag.
-    if (hasUnsavedChangesRef.current?.() || !manifestSaved) {
-      await message(t("settings.notesDirectory.drainFailed", locale), { kind: "error" });
-      return;
-    }
     // A dirty pathless doc (loader-failure stub) can never drain — the flush
     // above is a no-op for it — and its content lives only in this editor, so
     // the reload after the directory change would drop it. Get explicit
@@ -835,7 +816,24 @@ function App() {
       if (!proceed) return;
     }
 
+    // Enqueue the barrier before raising the guard, then await it with later
+    // old-directory persistence disabled. This closes the gap between a
+    // successful drain and the first migration copy.
+    const manifestDrain = flushPersistence("notes-dir-change")
+      .then(() => true)
+      .catch(() => false);
     setMigrationInProgress(true);
+    const manifestSaved = await manifestDrain;
+    // Abort before any destructive step if anything could not be persisted —
+    // the copy/clear below would otherwise drop it. hasUnsavedChanges covers
+    // the autosave body queue; manifestSaved covers group/pin/color/order
+    // metadata, which lives only in the manifest and is not reflected by the
+    // body-queue flag.
+    if (hasUnsavedChangesRef.current?.() || !manifestSaved) {
+      setMigrationInProgress(false);
+      await message(t("settings.notesDirectory.drainFailed", locale), { kind: "error" });
+      return;
+    }
     // Other windows flush and block their saves before any destructive step.
     const { migrationId, outcome } = await broadcastMigrationStarted();
     // Clear the old dir now only when every window confirmed it drained.
@@ -929,21 +927,6 @@ function App() {
     await flushAutoSaveRef.current?.().catch(() => {});
     await awaitInFlightSavesRef.current?.().catch(() => {});
     await flushPendingSnapshotsRef.current?.().catch(() => {});
-    const manifestSaved = await saveManifest(
-      docsRef.current,
-      docsRef.current[activeIndexRef.current]?.id ?? null,
-      groupsRef.current,
-    ).then(() => true).catch(() => false);
-
-    // Abort before any destructive step if anything could not be persisted —
-    // the copy/clear below would otherwise drop it. hasUnsavedChanges covers
-    // the autosave body queue; manifestSaved covers group/pin/color/order
-    // metadata, which lives only in the manifest and is not reflected by the
-    // body-queue flag.
-    if (hasUnsavedChangesRef.current?.() || !manifestSaved) {
-      await message(t("settings.notesDirectory.drainFailed", locale), { kind: "error" });
-      return;
-    }
     // A dirty pathless doc (loader-failure stub) can never drain — the flush
     // above is a no-op for it — and its content lives only in this editor, so
     // the reload after the directory change would drop it. Get explicit
@@ -954,7 +937,21 @@ function App() {
       if (!proceed) return;
     }
 
+    const manifestDrain = flushPersistence("notes-dir-reset")
+      .then(() => true)
+      .catch(() => false);
     setMigrationInProgress(true);
+    const manifestSaved = await manifestDrain;
+    // Abort before any destructive step if anything could not be persisted —
+    // the copy/clear below would otherwise drop it. hasUnsavedChanges covers
+    // the autosave body queue; manifestSaved covers group/pin/color/order
+    // metadata, which lives only in the manifest and is not reflected by the
+    // body-queue flag.
+    if (hasUnsavedChangesRef.current?.() || !manifestSaved) {
+      setMigrationInProgress(false);
+      await message(t("settings.notesDirectory.drainFailed", locale), { kind: "error" });
+      return;
+    }
     // Other windows flush and block their saves before any destructive step.
     const { migrationId, outcome } = await broadcastMigrationStarted();
     const sourceRetained = outcome !== "all-drained";

@@ -37,20 +37,29 @@ vi.mock("@tauri-apps/plugin-fs", () => ({
 }));
 
 vi.mock("./useNotesLoader", () => ({
-  saveNoteMetadata: vi.fn(async (doc: NoteDoc, fallbackGroupId: string | null) => ({
-    version: 2 as const,
-    id: doc.id,
-    fileName: doc.fileName,
-    customName: doc.customName,
-    createdAt: doc.createdAt,
-    updatedAt: doc.updatedAt,
-    pinned: doc.pinned,
-    color: doc.color,
-    groupId: fallbackGroupId,
-    groupUpdatedAt: doc.updatedAt,
-    trashedAt: null,
-    trashedFromPath: null,
-  })),
+  saveNoteMetadata: vi.fn(async (
+    doc: NoteDoc,
+    fallbackGroupId: string | null,
+    _source?: string,
+    publish?: (meta: unknown, executionBase: NoteDoc) => void,
+  ) => {
+    const meta = {
+      version: 2 as const,
+      id: doc.id,
+      fileName: doc.fileName,
+      customName: doc.customName,
+      createdAt: doc.createdAt,
+      updatedAt: doc.updatedAt,
+      pinned: doc.pinned,
+      color: doc.color,
+      groupId: fallbackGroupId,
+      groupUpdatedAt: doc.updatedAt,
+      trashedAt: null,
+      trashedFromPath: null,
+    };
+    void publish;
+    return meta;
+  }),
   deriveTitle: (s: string) => s.split("\n")[0]?.replace(/^#+\s*/, "") || "",
   sortNotes: <T,>(docs: T[]) => docs,
   getNotesDir: vi.fn(async () => "/notes"),
@@ -464,6 +473,8 @@ describe("useAutoSave — doSave golden path", () => {
     expect(saveNoteMetadataMock).toHaveBeenCalledWith(
       expect.objectContaining({ id: "a", content: "# Title\nbody" }),
       null,
+      "autosave",
+      expect.any(Function),
     );
     expect(setIsDirty).toHaveBeenCalledWith(false);
   });
@@ -558,6 +569,69 @@ describe("useAutoSave — doSave golden path", () => {
       updatedAt: 8000,
     });
     expect(emitDocUpdatedMock).toHaveBeenCalledWith("a", "hello world", 7000);
+  });
+
+  it("lets a later autosave advance metadata published before React renders it", async () => {
+    const initial = makeDoc("a", { fileName: "Initial title", isDirty: true });
+    let canonicalDocs = [initial];
+    const persistAgainstCanonical = async (
+      doc: NoteDoc,
+      fallbackGroupId: string | null,
+      _source: string,
+      publish: (meta: unknown, executionBase: NoteDoc) => void,
+    ) => {
+      const executionBase = canonicalDocs.find((entry) => entry.id === doc.id)!;
+      const meta = {
+        version: 2 as const,
+        id: doc.id,
+        fileName: executionBase.customName ? executionBase.fileName : doc.fileName,
+        customName: executionBase.customName,
+        createdAt: executionBase.createdAt,
+        updatedAt: doc.updatedAt,
+        pinned: executionBase.pinned,
+        color: executionBase.color,
+        groupId: fallbackGroupId,
+        groupUpdatedAt: doc.updatedAt,
+        trashedAt: null,
+        trashedFromPath: null,
+      };
+      publish(meta, executionBase);
+      return meta;
+    };
+    saveNoteMetadataMock
+      .mockImplementationOnce(persistAgainstCanonical)
+      .mockImplementationOnce(persistAgainstCanonical);
+    const setDocs = vi.fn((action: React.SetStateAction<NoteDoc[]>) => {
+      canonicalDocs = typeof action === "function" ? action(canonicalDocs) : action;
+    });
+    const state = makeState({ isDirty: true });
+    const { result } = renderHook(() => useAutoSave(
+      state,
+      makeTiptapRef(),
+      [initial],
+      setDocs,
+      0,
+      vi.fn(),
+      "en",
+      "updated-desc",
+      [],
+    ));
+
+    refs.editorContent = "# First title\nbody";
+    await act(async () => {
+      expect(await result.current.flushAutoSave()).toBe(true);
+    });
+    expect(canonicalDocs[0].fileName).toBe("First title");
+
+    // Keep the hook's docs prop at the old baseline to model React not having
+    // rendered the first queue callback before the next snapshot is captured.
+    refs.editorContent = "# Second title\nbody";
+    await act(async () => {
+      expect(await result.current.flushAutoSave()).toBe(true);
+    });
+
+    expect(canonicalDocs[0].fileName).toBe("Second title");
+    expect(canonicalDocs[0].content).toBe("# Second title\nbody");
   });
 
   it("leaves state dirty and emits nothing when the metadata patch is superseded", async () => {

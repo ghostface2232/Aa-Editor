@@ -306,11 +306,10 @@ export interface PersistOptions {
   /** Optional; tests pass a no-op. Production wires `setActiveNoteIdPersisted`. */
   setActiveNoteId?: (id: string | null) => Promise<void> | void;
   /**
-   * Logical sequence of the `groups` snapshot being persisted, captured when
-   * this save was ENQUEUED (see `saveManifest`). Compared against each pending
-   * tombstone's deletion sequence so a stale in-flight save cannot cancel a
-   * tombstone recorded after the snapshot was taken. Omitted by callers that
-   * never race tombstones (load/reload paths, tests) — treated as +Infinity,
+   * Logical sequence captured beside the `groups` snapshot being persisted.
+   * Compared against each pending tombstone's deletion sequence so a stale
+   * snapshot cannot cancel a newer tombstone. Omitted by callers that never
+   * race tombstones (load/reload paths, tests) — treated as +Infinity,
    * preserving the legacy "cancel whenever the group is present" behaviour.
    */
   groupsSnapshotSeq?: number;

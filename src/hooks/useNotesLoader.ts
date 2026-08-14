@@ -511,19 +511,20 @@ async function persistDecomposedState(
   groups?: NoteGroup[],
   source?: string,
   snapshotSeq?: number,
+  targetDir?: string,
+  trashedNotes: TrashedNote[] = trashedNotesCache,
 ): Promise<void> {
-  const dir = await getNotesDir();
+  const dir = targetDir ?? await getNotesDir();
   const cachePath = await getLocalCachePath();
   try {
     await persistDecomposedStateImpl(tauriFileSystem, dir, persistState, docs, activeId, groups, {
-      trashedNotes: trashedNotesCache,
+      trashedNotes,
       machineId: getMachineIdCached(),
       cachePath,
       imageAssetMigrationCompletedAt: imageAssetMigrationV1CompletedAtCache,
       setActiveNoteId: setActiveNoteIdPersisted,
-      // Fall back to the live counter for direct loader calls (which run while
-      // pendingTombstones is empty, so the value is moot). Chained saves pass
-      // the value captured at enqueue time.
+      // Direct loader calls run while pendingTombstones is empty. Chained
+      // saves pass a clock captured beside their execution-time groups array.
       groupsSnapshotSeq: snapshotSeq ?? groupMutationSeq,
     });
   } catch (err) {
@@ -555,9 +556,9 @@ function metaSnapshotFromFile(meta: NoteMeta): MetaSnapshot {
 async function persistSavedNoteMetadata(
   doc: NoteDoc,
   fallbackGroupId: string | null,
+  dir: string,
   source?: string,
 ): Promise<NoteMeta | null> {
-  const dir = await getNotesDir();
   try {
     // Read lifecycle at execution time, after older jobs on this window's
     // metadata chain have drained. This rejects a trash transition already on
@@ -645,23 +646,110 @@ async function persistSavedNoteMetadata(
 // from breaking subsequent writes. Multi-window races are a separate problem
 // — this chain lives per-process, so each window has its own queue.
 let persistChain: Promise<unknown> = Promise.resolve();
+let persistedLibraryGeneration = -1;
+let persistedLibraryRevision = -1;
+let persistedGroupMutationSeq = -1;
+
+interface LibraryPersistenceRequest {
+  revision: number;
+  directoryGeneration: number;
+  source?: string;
+}
+
+function enqueueLatestLibraryPersistence(request: LibraryPersistenceRequest): Promise<void> {
+  const job = persistChain
+    .catch(() => undefined)
+    .then(async () => {
+      const latest = libraryStore.getSnapshot();
+      if (
+        latest.notesDirectory == null
+        || latest.directoryGeneration !== request.directoryGeneration
+      ) return;
+      if (
+        persistedLibraryGeneration === latest.directoryGeneration
+        && persistedLibraryRevision >= latest.revision
+        && persistedGroupMutationSeq >= groupMutationSeq
+      ) return;
+
+      // Queue entries carry only a revision/generation request. The full state
+      // is read here, after older jobs drain, so a call made with a stale React
+      // array can never replay that array onto disk.
+      const docs = latest.docs.map((doc) => ({ ...doc }));
+      const groups = latest.groups.map((group) => ({
+        ...group,
+        noteIds: [...group.noteIds],
+      }));
+      // Group tombstones are module-level durable intents rather than library
+      // entities. Capture their clock beside the execution-time group snapshot
+      // so an older request cannot pair a stale clock with newer groups.
+      const latestGroupMutationSeq = groupMutationSeq;
+      await persistDecomposedState(
+        docs,
+        latest.activeNoteId,
+        groups,
+        request.source,
+        latestGroupMutationSeq,
+        latest.notesDirectory,
+        latest.trashedNotes.map((note) => ({ ...note })),
+      );
+      persistedLibraryGeneration = latest.directoryGeneration;
+      persistedLibraryRevision = latest.revision;
+      persistedGroupMutationSeq = latestGroupMutationSeq;
+    });
+  persistChain = job;
+  return job;
+}
 
 export async function saveManifest(
-  docs: NoteDoc[],
-  activeId: string | null,
-  groups?: NoteGroup[],
+  _docs: NoteDoc[],
+  _activeId: string | null,
+  _groups?: NoteGroup[],
   source?: string,
 ): Promise<void> {
   if (migrationInProgress) return;
-  // Capture the deletion clock at ENQUEUE time. A tombstone recorded after this
-  // point carries a higher sequence, so when this (now-stale) save finally
-  // drains it can no longer cancel that tombstone. See P0-4.
-  const snapshotSeq = groupMutationSeq;
-  const job = persistChain
-    .catch(() => undefined)
-    .then(() => persistDecomposedState(docs, activeId, groups, source, snapshotSeq));
-  persistChain = job;
-  return job;
+  const requested = libraryStore.getSnapshot();
+  return enqueueLatestLibraryPersistence({
+    revision: requested.revision,
+    directoryGeneration: requested.directoryGeneration,
+    source,
+  });
+}
+
+/** Drain all metadata work through a stable canonical library revision. */
+export async function flushPersistence(source = "flushPersistence"): Promise<void> {
+  while (true) {
+    const requested = libraryStore.getSnapshot();
+    if (requested.notesDirectory == null) {
+      // An empty, unbound store has nothing durable to flush. Never turn a
+      // rejected metadata tail into a successful close/migration acknowledgement.
+      await persistChain;
+      const after = libraryStore.getSnapshot();
+      if (
+        after.directoryGeneration !== requested.directoryGeneration
+        || after.revision !== requested.revision
+      ) continue;
+      if (
+        after.docs.length > 0
+        || after.groups.length > 0
+        || after.trashedNotes.length > 0
+        || after.activeNoteId != null
+      ) {
+        throw new Error("Cannot flush library state without an active notes directory");
+      }
+      return;
+    }
+    await enqueueLatestLibraryPersistence({
+      revision: requested.revision,
+      directoryGeneration: requested.directoryGeneration,
+      source,
+    });
+    const after = libraryStore.getSnapshot();
+    if (
+      after.directoryGeneration === persistedLibraryGeneration
+      && after.revision <= persistedLibraryRevision
+      && groupMutationSeq <= persistedGroupMutationSeq
+    ) return;
+  }
 }
 
 /**
@@ -674,11 +762,48 @@ export async function saveNoteMetadata(
   doc: NoteDoc,
   fallbackGroupId: string | null,
   source = "autosave",
+  publish?: (persisted: NoteMeta, executionBase: NoteDoc) => void,
 ): Promise<NoteMeta | null> {
   if (migrationInProgress) return null;
+  const requested = libraryStore.getSnapshot();
+  if (requested.notesDirectory == null) return null;
   const job = persistChain
     .catch(() => undefined)
-    .then(() => persistSavedNoteMetadata(doc, fallbackGroupId, source));
+    .then(async () => {
+      const latest = libraryStore.getSnapshot();
+      const executionBase = latest.docs.find((entry) => entry.id === doc.id);
+      if (
+        latest.directoryGeneration !== requested.directoryGeneration
+        || latest.notesDirectory == null
+        || !executionBase
+      ) return null;
+      const executionCandidate: NoteDoc = {
+        ...executionBase,
+        content: doc.content,
+        fileName: executionBase.customName ? executionBase.fileName : doc.fileName,
+        updatedAt: doc.updatedAt,
+      };
+      const executionGroupId = latest.groups.find(
+        (group) => group.noteIds.includes(doc.id),
+      )?.id ?? fallbackGroupId;
+      const persisted = await persistSavedNoteMetadata(
+        executionCandidate,
+        executionGroupId,
+        latest.notesDirectory,
+        source,
+      );
+      if (!persisted) return null;
+      const afterWrite = libraryStore.getSnapshot();
+      if (
+        afterWrite.directoryGeneration !== requested.directoryGeneration
+        || afterWrite.notesDirectory !== latest.notesDirectory
+      ) return null;
+      // This callback must commit through useNotesLoader's adapter before the
+      // queue advances. That keeps canonical and React projections aligned and
+      // ensures a full-library job queued behind this patch sees its result.
+      publish?.(persisted, executionBase);
+      return persisted;
+    });
   persistChain = job;
   return job;
 }

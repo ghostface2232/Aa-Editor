@@ -356,12 +356,64 @@ export function useAutoSave(
       const fallbackGroupId = live.groups.find(
         (group) => group.noteIds.includes(snapshot.docId),
       )?.id ?? null;
+      let persistedBase: NoteDoc | null = null;
+      const publishPersistedMetadata = (
+        effective: NonNullable<Awaited<ReturnType<typeof saveNoteMetadata>>>,
+        executionBase: NoteDoc,
+      ) => {
+        persistedBase = executionBase;
+        latestSetDocs((prev) => {
+          let found = false;
+          let changed = false;
+          const next = prev.map((docEntry) => {
+            if (docEntry.id !== snapshot.docId) return docEntry;
+            found = true;
+            const titleUnchanged = (
+              docEntry.fileName === executionBase.fileName
+              && !!docEntry.customName === !!executionBase.customName
+            );
+            const createdAtUnchanged = docEntry.createdAt === executionBase.createdAt;
+            const pinUnchanged = (docEntry.pinned === true) === (executionBase.pinned === true);
+            const colorUnchanged = docEntry.color === executionBase.color;
+            const contentUnchanged = docEntry.content === executionBase.content;
+            const merged = {
+              ...docEntry,
+              content: contentUnchanged ? snapshot.content : docEntry.content,
+              fileName: titleUnchanged ? effective.fileName : docEntry.fileName,
+              customName: titleUnchanged
+                ? effective.customName || undefined
+                : docEntry.customName,
+              createdAt: createdAtUnchanged ? effective.createdAt : docEntry.createdAt,
+              updatedAt: Math.max(docEntry.updatedAt, effective.updatedAt),
+              pinned: pinUnchanged
+                ? effective.pinned === true ? true : undefined
+                : docEntry.pinned,
+              color: colorUnchanged ? effective.color : docEntry.color,
+            };
+            changed = changed
+              || merged.content !== docEntry.content
+              || merged.fileName !== docEntry.fileName
+              || merged.customName !== docEntry.customName
+              || merged.createdAt !== docEntry.createdAt
+              || merged.updatedAt !== docEntry.updatedAt
+              || merged.pinned !== docEntry.pinned
+              || merged.color !== docEntry.color;
+            return merged;
+          });
+          return found && changed ? next : prev;
+        });
+      };
       let persisted: Awaited<ReturnType<typeof saveNoteMetadata>>;
       try {
         // A body autosave changes only this note's title/timestamps. Persisting
         // the entire pre-commit docs array here let an unrelated concurrent
         // delete be replayed as live metadata.
-        persisted = await saveNoteMetadata(candidate, fallbackGroupId);
+        persisted = await saveNoteMetadata(
+          candidate,
+          fallbackGroupId,
+          "autosave",
+          publishPersistedMetadata,
+        );
       } catch {
         return false;
       }
@@ -379,19 +431,20 @@ export function useAutoSave(
       // Builds the post-save docs array from any base. Returns null when the
       // saved doc is absent from that base (concurrently deleted).
       const buildCommit = (base: NoteDoc[]): NoteDoc[] | null => {
+        const mergeBase = persistedBase ?? liveDoc;
         let found = false;
         const mapped = base.map((docEntry) => {
           if (docEntry.id !== snapshot.docId) return docEntry;
           found = true;
           // Metadata actions can commit while the writer above is awaiting
           // disk. Adopt its merged disk value only when that field is still at
-          // the value captured in liveDoc; otherwise `prev` is the newer local
-          // intent and must win.
-          const titleUnchanged = docEntry.fileName === liveDoc.fileName
-            && !!docEntry.customName === !!liveDoc.customName;
-          const pinUnchanged = (docEntry.pinned === true) === (liveDoc.pinned === true);
-          const colorUnchanged = docEntry.color === liveDoc.color;
-          const contentUnchanged = docEntry.content === liveDoc.content;
+          // the execution-time canonical base; otherwise `prev` is the newer
+          // local intent and must win.
+          const titleUnchanged = docEntry.fileName === mergeBase.fileName
+            && !!docEntry.customName === !!mergeBase.customName;
+          const pinUnchanged = (docEntry.pinned === true) === (mergeBase.pinned === true);
+          const colorUnchanged = docEntry.color === mergeBase.color;
+          const contentUnchanged = docEntry.content === mergeBase.content;
           return {
             ...docEntry,
             content: contentUnchanged ? snapshot.content : docEntry.content,
@@ -400,7 +453,7 @@ export function useAutoSave(
             customName: titleUnchanged
               ? persisted.customName || undefined
               : docEntry.customName,
-            createdAt: docEntry.createdAt === liveDoc.createdAt
+            createdAt: docEntry.createdAt === mergeBase.createdAt
               ? persisted.createdAt
               : docEntry.createdAt,
             updatedAt: Math.max(docEntry.updatedAt, persisted.updatedAt),
