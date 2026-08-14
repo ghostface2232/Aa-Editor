@@ -90,6 +90,10 @@ const useStyles = makeStyles({
   btnActive: {
     backgroundColor: tokens.colorNeutralBackground1Pressed,
   },
+  caseBtn: {
+    fontSize: "12px",
+    fontFamily: "inherit",
+  },
   textBtn: {
     display: "inline-flex",
     alignItems: "center",
@@ -128,21 +132,22 @@ export function SearchBar({ editor, onClose, replaceOpen, onToggleReplace, local
   const [replaceText, setReplaceText] = useState("");
   const [matchCount, setMatchCount] = useState(0);
   const [activeIndex, setActiveIndex] = useState(0);
+  const [caseSensitive, setCaseSensitive] = useState(false);
   const i = (key: Parameters<typeof t>[0]) => t(key, locale);
 
   useEffect(() => { inputRef.current?.focus(); }, []);
   useEffect(() => { if (replaceOpen) replaceInputRef.current?.focus(); }, [replaceOpen]);
 
   const dispatchTiptap = useCallback(
-    (q: string, activeIdx: number) => {
+    (q: string, activeIdx: number, matchCase: boolean) => {
       if (!editor) return { count: 0, clamped: 0 };
-      const matches = findSearchMatches(editor.state.doc, q);
+      const matches = findSearchMatches(editor.state.doc, q, matchCase);
       const clamped = matches.length > 0
         ? ((activeIdx % matches.length) + matches.length) % matches.length
         : 0;
 
       const { tr } = editor.state;
-      tr.setMeta(searchPluginKey, { query: q, activeIndex: clamped, matches } satisfies SearchPluginState);
+      tr.setMeta(searchPluginKey, { query: q, activeIndex: clamped, matches, caseSensitive: matchCase } satisfies SearchPluginState);
       editor.view.dispatch(tr);
 
       if (matches.length > 0) {
@@ -155,12 +160,12 @@ export function SearchBar({ editor, onClose, replaceOpen, onToggleReplace, local
   );
 
   const dispatchSearch = useCallback(
-    (q: string, idx: number) => {
-      const result = dispatchTiptap(q, idx);
+    (q: string, idx: number, matchCase: boolean = caseSensitive) => {
+      const result = dispatchTiptap(q, idx, matchCase);
       setMatchCount(result.count);
       setActiveIndex(result.clamped);
     },
-    [dispatchTiptap],
+    [dispatchTiptap, caseSensitive],
   );
 
   const handleQueryChange = useCallback(
@@ -168,19 +173,25 @@ export function SearchBar({ editor, onClose, replaceOpen, onToggleReplace, local
     [dispatchSearch],
   );
 
+  const toggleCaseSensitive = useCallback(() => {
+    const next = !caseSensitive;
+    setCaseSensitive(next);
+    dispatchSearch(query, 0, next);
+  }, [caseSensitive, dispatchSearch, query]);
+
   const goNext = useCallback(() => dispatchSearch(query, activeIndex + 1), [dispatchSearch, query, activeIndex]);
   const goPrev = useCallback(() => dispatchSearch(query, activeIndex - 1), [dispatchSearch, query, activeIndex]);
 
   const handleClose = useCallback(() => {
     if (editor) {
       const { tr } = editor.state;
-      tr.setMeta(searchPluginKey, { query: "", activeIndex: 0, matches: [] } satisfies SearchPluginState);
+      tr.setMeta(searchPluginKey, { query: "", activeIndex: 0, matches: [], caseSensitive } satisfies SearchPluginState);
       editor.view.dispatch(tr);
     }
     setReplaceText("");
     onToggleReplace(false);
     onClose();
-  }, [editor, onClose, onToggleReplace]);
+  }, [editor, onClose, onToggleReplace, caseSensitive]);
 
   const syncAfterReplace = useCallback(
     (desiredIndex: number) => {
@@ -194,7 +205,7 @@ export function SearchBar({ editor, onClose, replaceOpen, onToggleReplace, local
 
       if (idx !== ps.activeIndex) {
         const { tr } = editor.state;
-        tr.setMeta(searchPluginKey, { query, activeIndex: idx, matches: ps.matches } satisfies SearchPluginState);
+        tr.setMeta(searchPluginKey, { query, activeIndex: idx, matches: ps.matches, caseSensitive } satisfies SearchPluginState);
         editor.view.dispatch(tr);
       }
 
@@ -204,7 +215,7 @@ export function SearchBar({ editor, onClose, replaceOpen, onToggleReplace, local
         scrollToPos(editor.view.dom, () => editor.view.coordsAtPos(ps.matches[idx].from));
       }
     },
-    [editor, query],
+    [editor, query, caseSensitive],
   );
 
   const handleReplace = useCallback(() => {
@@ -262,6 +273,15 @@ export function SearchBar({ editor, onClose, replaceOpen, onToggleReplace, local
           placeholder={i("search.placeholder")}
           spellCheck={false}
         />
+        <button
+          className={mergeClasses(styles.btn, styles.caseBtn, caseSensitive && styles.btnActive)}
+          onClick={toggleCaseSensitive}
+          title={i("search.caseSensitive")}
+          aria-label={i("search.caseSensitive")}
+          aria-pressed={caseSensitive}
+        >
+          Aa
+        </button>
         <span className={styles.count} style={{ visibility: query ? "visible" : "hidden" }}>
           {query ? (matchCount > 0 ? `${activeIndex + 1}/${matchCount}` : "0") : "0/0"}
         </span>

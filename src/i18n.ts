@@ -306,6 +306,7 @@ const dict = {
   "search.replacePlaceholder": { en: "Replace with", ko: "바꿀 내용" },
   "search.replace": { en: "Replace", ko: "바꾸기" },
   "search.replaceAll": { en: "Replace all", ko: "모두 바꾸기" },
+  "search.caseSensitive": { en: "Match case", ko: "대/소문자 구분" },
   "search.gotoLinePlaceholder": { en: "Go to line", ko: "줄 이동" },
   "search.sidebarPlaceholder": { en: "Search notes", ko: "노트 검색" },
   "search.noResults": { en: "No matching notes", ko: "일치하는 노트 없음" },

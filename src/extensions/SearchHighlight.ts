@@ -18,9 +18,13 @@ export interface SearchPluginState {
   query: string;
   activeIndex: number;
   matches: SearchMatch[];
+  // Omitted means case-insensitive; senders that only clear the search (empty
+  // query) don't need to know the current toggle state.
+  caseSensitive?: boolean;
 }
 
 interface InternalSearchState extends SearchPluginState {
+  caseSensitive: boolean;
   // Last known visible position range, fed by the scroll-driven plugin view.
   // Null until the first scroll/update or when it cannot be computed.
   viewport: { from: number; to: number } | null;
@@ -43,15 +47,16 @@ function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-export function findSearchMatches(doc: Node, query: string): SearchMatch[] {
+export function findSearchMatches(doc: Node, query: string, caseSensitive = false): SearchMatch[] {
   const results: SearchMatch[] = [];
   if (!query) return results;
-  // Case-insensitive regex over the ORIGINAL text. The previous
-  // implementation searched text.toLowerCase() and reused those indices as
-  // document positions; case folding can change string length (İ → i̇), so
-  // every index after such a character drifted and Replace deleted the wrong
-  // characters. Regex 'i' matching never changes offsets.
-  const re = new RegExp(escapeRegExp(query), "gi");
+  // Case-insensitive matching (the default) uses a regex 'i' flag over the
+  // ORIGINAL text. The previous implementation searched text.toLowerCase()
+  // and reused those indices as document positions; case folding can change
+  // string length (İ → i̇), so every index after such a character drifted and
+  // Replace deleted the wrong characters. Regex 'i' matching never changes
+  // offsets.
+  const re = new RegExp(escapeRegExp(query), caseSensitive ? "g" : "gi");
   let stop = false;
 
   doc.descendants((node, pos) => {
@@ -186,7 +191,7 @@ export const SearchHighlight = Extension.create({
         key: searchPluginKey,
         state: {
           init(): InternalSearchState {
-            return { query: "", activeIndex: 0, matches: [], viewport: null };
+            return { query: "", activeIndex: 0, matches: [], caseSensitive: false, viewport: null };
           },
           apply(tr, prev): InternalSearchState {
             const meta = tr.getMeta(searchPluginKey);
@@ -197,10 +202,10 @@ export const SearchHighlight = Extension.create({
               const next = meta as SearchPluginState;
               // A fresh match set invalidates the old viewport indices; let the
               // next scroll tick (or the active-centred fallback) repopulate it.
-              return { ...next, viewport: null };
+              return { ...next, caseSensitive: next.caseSensitive ?? false, viewport: null };
             }
             if (tr.docChanged && prev.query) {
-              const matches = findSearchMatches(tr.doc, prev.query);
+              const matches = findSearchMatches(tr.doc, prev.query, prev.caseSensitive);
               const activeIndex = Math.min(prev.activeIndex, Math.max(0, matches.length - 1));
               return { ...prev, matches, activeIndex, viewport: null };
             }

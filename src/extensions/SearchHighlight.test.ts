@@ -84,6 +84,31 @@ describe("findSearchMatches", () => {
     active = editor;
     expect(findSearchMatches(doc, "aa").length).toBe(2);
   });
+
+  it("matches only the exact case when caseSensitive is set", () => {
+    const { editor, doc } = docFromText("Hello HELLO hello");
+    active = editor;
+    const matches = findSearchMatches(doc, "hello", true);
+    expect(matches.length).toBe(1);
+    expect(doc.textBetween(matches[0].from, matches[0].to)).toBe("hello");
+  });
+
+  it("case-sensitive replace-all leaves other case variants untouched", () => {
+    // The Replace All data-modification bug: replacing "foo" used to rewrite
+    // "Foo" and "FOO" too, with no way to opt out.
+    const { editor, doc } = docFromText("foo Foo FOO foo");
+    active = editor;
+    const matches = selectNonOverlappingMatches(findSearchMatches(doc, "foo", true));
+    expect(matches).toHaveLength(2);
+
+    const { tr } = editor.state;
+    for (const match of matches) {
+      tr.insertText("bar", tr.mapping.map(match.from), tr.mapping.map(match.to));
+    }
+    editor.view.dispatch(tr);
+
+    expect(editor.state.doc.textContent).toBe("bar Foo FOO bar");
+  });
 });
 
 describe("selectNonOverlappingMatches", () => {
