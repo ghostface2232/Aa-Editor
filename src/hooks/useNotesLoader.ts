@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
+import type { Dispatch, SetStateAction } from "react";
 import { appDataDir } from "@tauri-apps/api/path";
 import {
   mkdir,
@@ -31,6 +32,13 @@ import type { Locale, NotesSortOrder } from "./useSettings";
 import { getDefaultDocumentTitle } from "../utils/documentTitle";
 import type { NoteColorId } from "../utils/noteColors";
 import type { NoteDoc, NoteGroup, TrashedNote } from "../utils/noteTypes";
+import {
+  libraryStore,
+  type LibraryCommitOrigin,
+  type LibraryCommitToken,
+  type LibraryData,
+  type LibrarySnapshot,
+} from "../utils/libraryStore";
 export type { NoteDoc, NoteGroup, TrashedNote } from "../utils/noteTypes";
 export { deriveTitle, getFileBaseName, stripInlineMarkdown, stripMarkdownContent } from "../utils/noteText";
 import { migrateDataUrlImagesToAssets } from "../utils/migrateImageAssets";
@@ -177,6 +185,29 @@ export async function getNotesDir(): Promise<string> {
  * caches. Callers that omit it accept that the observations will carry over.
  */
 export function setNotesDir(dir: string, reconcileState?: ReconcileState) {
+  const sameDirectory = notesDirCache != null
+    && normalizeSep(notesDirCache).replace(/\\/g, "/").toLocaleLowerCase()
+      === normalizeSep(dir).replace(/\\/g, "/").toLocaleLowerCase();
+  if (sameDirectory) {
+    notesDirCache = dir;
+    return;
+  }
+  libraryStore.clearDirectory("hydrate");
+  notesDirCache = dir;
+  imageAssetMigrationV1CompletedAtCache = null;
+  resetWriteSnapshots();
+  resetKnownDiskContent();
+  invalidateReadAllMetaCache(tauriFileSystem);
+  if (reconcileState) clearReconcileState(reconcileState);
+}
+
+/** Rebind a failed directory migration without discarding the still-live UI state. */
+export function restoreNotesDir(
+  dir: string,
+  preserved: LibraryData,
+  reconcileState?: ReconcileState,
+) {
+  libraryStore.seedDirectory(dir, preserved, "hydrate");
   notesDirCache = dir;
   imageAssetMigrationV1CompletedAtCache = null;
   resetWriteSnapshots();
@@ -186,6 +217,7 @@ export function setNotesDir(dir: string, reconcileState?: ReconcileState) {
 }
 
 export function resetNotesDir(reconcileState?: ReconcileState) {
+  libraryStore.clearDirectory("hydrate");
   notesDirCache = null;
   imageAssetMigrationV1CompletedAtCache = null;
   resetWriteSnapshots();
@@ -662,20 +694,176 @@ export function useNotesLoader(
   if (reconcileState && reconcileStateRef.current !== reconcileState) {
     reconcileStateRef.current = reconcileState;
   }
-  const [docs, setDocs] = useState<NoteDoc[]>([]);
-  const [activeIndex, setActiveIndex] = useState(0);
-  const [groups, setGroups] = useState<NoteGroup[]>([]);
+  const [docs, setDocsState] = useState<NoteDoc[]>([]);
+  const [activeIndex, setActiveIndexState] = useState(0);
+  const [groups, setGroupsState] = useState<NoteGroup[]>([]);
   const [trashedNotes, setTrashedNotesState] = useState<TrashedNote[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const initialized = useRef(false);
+  const nestedActiveUpdatesRef = useRef<SetStateAction<number>[] | null>(null);
 
-  const setTrashedNotes = (
-    updater: TrashedNote[] | ((prev: TrashedNote[]) => TrashedNote[]),
+  const activeIndexFromSnapshot = useCallback((snapshot: LibrarySnapshot) => (
+    snapshot.activeNoteId
+      ? Math.max(snapshot.docs.findIndex((doc) => doc.id === snapshot.activeNoteId), 0)
+      : 0
+  ), []);
+
+  const syncAllReactState = useCallback((snapshot: LibrarySnapshot) => {
+    setDocsState([...snapshot.docs]);
+    setGroupsState(snapshot.groups.map((group) => ({
+      ...group,
+      noteIds: [...group.noteIds],
+    })));
+    const nextTrashed = [...snapshot.trashedNotes];
+    setTrashedNotesCache(nextTrashed);
+    setTrashedNotesState(nextTrashed);
+    setActiveIndexState(activeIndexFromSnapshot(snapshot));
+  }, [activeIndexFromSnapshot]);
+
+  const commitWholeLibrary = useCallback((
+    data: LibraryData,
+    origin: LibraryCommitOrigin,
+    token?: LibraryCommitToken,
   ) => {
-    const next = typeof updater === "function" ? updater(trashedNotesCache) : updater;
-    setTrashedNotesCache(next);
-    setTrashedNotesState(next);
-  };
+    const committed = token == null
+      ? libraryStore.commit(data, origin)
+      : libraryStore.commitIfCurrent(token, data, origin);
+    if (!committed) return null;
+    syncAllReactState(committed);
+    return committed;
+  }, [syncAllReactState]);
+
+  const commitDocsUpdate = useCallback((
+    updater: SetStateAction<NoteDoc[]>,
+    origin: LibraryCommitOrigin,
+  ) => {
+    const current = libraryStore.getSnapshot();
+    const previous = [...current.docs];
+    if (nestedActiveUpdatesRef.current) {
+      throw new Error("useNotesLoader: nested setDocs is not supported");
+    }
+    const nestedActiveUpdates: SetStateAction<number>[] = [];
+    nestedActiveUpdatesRef.current = nestedActiveUpdates;
+    let next: NoteDoc[];
+    try {
+      next = typeof updater === "function" ? updater(previous) : updater;
+    } finally {
+      nestedActiveUpdatesRef.current = null;
+    }
+    if (next === previous && nestedActiveUpdates.length === 0) return;
+
+    let activeNoteId = current.activeNoteId;
+    if (nestedActiveUpdates.length > 0) {
+      let requestedIndex = activeIndexFromSnapshot(current);
+      for (const activeUpdate of nestedActiveUpdates) {
+        requestedIndex = typeof activeUpdate === "function"
+          ? activeUpdate(requestedIndex)
+          : activeUpdate;
+      }
+      const boundedIndex = next.length > 0
+        ? Math.min(Math.max(requestedIndex, 0), next.length - 1)
+        : 0;
+      activeNoteId = next[boundedIndex]?.id ?? null;
+    }
+    const committed = libraryStore.commit({ docs: next, activeNoteId }, origin);
+    setDocsState([...committed.docs]);
+    setActiveIndexState(activeIndexFromSnapshot(committed));
+  }, [activeIndexFromSnapshot]);
+  const setDocs = useCallback<Dispatch<SetStateAction<NoteDoc[]>>>(
+    (updater) => commitDocsUpdate(updater, "local"),
+    [commitDocsUpdate],
+  );
+  const setDocsFromRemote = useCallback<Dispatch<SetStateAction<NoteDoc[]>>>(
+    (updater) => commitDocsUpdate(updater, "remote"),
+    [commitDocsUpdate],
+  );
+  const setDocsFromReconcile = useCallback<Dispatch<SetStateAction<NoteDoc[]>>>(
+    (updater) => commitDocsUpdate(updater, "reconcile"),
+    [commitDocsUpdate],
+  );
+
+  const commitGroupsUpdate = useCallback((
+    updater: SetStateAction<NoteGroup[]>,
+    origin: LibraryCommitOrigin,
+  ) => {
+    const current = libraryStore.getSnapshot();
+    const previous = current.groups.map((group) => ({
+      ...group,
+      noteIds: [...group.noteIds],
+    }));
+    const next = typeof updater === "function" ? updater(previous) : updater;
+    if (next === previous) return;
+    const committed = libraryStore.commit({ groups: next }, origin);
+    setGroupsState(committed.groups.map((group) => ({
+      ...group,
+      noteIds: [...group.noteIds],
+    })));
+  }, []);
+  const setGroups = useCallback<Dispatch<SetStateAction<NoteGroup[]>>>(
+    (updater) => commitGroupsUpdate(updater, "local"),
+    [commitGroupsUpdate],
+  );
+  const setGroupsFromRemote = useCallback<Dispatch<SetStateAction<NoteGroup[]>>>(
+    (updater) => commitGroupsUpdate(updater, "remote"),
+    [commitGroupsUpdate],
+  );
+  const setGroupsFromReconcile = useCallback<Dispatch<SetStateAction<NoteGroup[]>>>(
+    (updater) => commitGroupsUpdate(updater, "reconcile"),
+    [commitGroupsUpdate],
+  );
+
+  const commitTrashedNotesUpdate = useCallback((
+    updater: TrashedNote[] | ((prev: TrashedNote[]) => TrashedNote[]),
+    origin: LibraryCommitOrigin,
+  ) => {
+    const current = libraryStore.getSnapshot();
+    const previous = [...current.trashedNotes];
+    const next = typeof updater === "function" ? updater(previous) : updater;
+    if (next === previous) return;
+    const committed = libraryStore.commit({ trashedNotes: next }, origin);
+    const nextTrashed = [...committed.trashedNotes];
+    setTrashedNotesCache(nextTrashed);
+    setTrashedNotesState(nextTrashed);
+  }, []);
+  const setTrashedNotes = useCallback((
+    updater: TrashedNote[] | ((prev: TrashedNote[]) => TrashedNote[]),
+  ) => commitTrashedNotesUpdate(updater, "local"), [commitTrashedNotesUpdate]);
+  const setTrashedNotesFromRemote = useCallback((
+    updater: TrashedNote[] | ((prev: TrashedNote[]) => TrashedNote[]),
+  ) => commitTrashedNotesUpdate(updater, "remote"), [commitTrashedNotesUpdate]);
+
+  const commitActiveIndexUpdate = useCallback((
+    updater: SetStateAction<number>,
+    origin: LibraryCommitOrigin,
+  ) => {
+    const nestedActiveUpdates = nestedActiveUpdatesRef.current;
+    if (nestedActiveUpdates) {
+      nestedActiveUpdates.push(updater);
+      return;
+    }
+    const current = libraryStore.getSnapshot();
+    const previousIndex = activeIndexFromSnapshot(current);
+    const requestedIndex = typeof updater === "function" ? updater(previousIndex) : updater;
+    const boundedIndex = current.docs.length > 0
+      ? Math.min(Math.max(requestedIndex, 0), current.docs.length - 1)
+      : 0;
+    const committed = libraryStore.commit({
+      activeNoteId: current.docs[boundedIndex]?.id ?? null,
+    }, origin);
+    setActiveIndexState(activeIndexFromSnapshot(committed));
+  }, [activeIndexFromSnapshot]);
+  const setActiveIndex = useCallback<Dispatch<SetStateAction<number>>>(
+    (updater) => commitActiveIndexUpdate(updater, "local"),
+    [commitActiveIndexUpdate],
+  );
+  const setActiveIndexFromRemote = useCallback<Dispatch<SetStateAction<number>>>(
+    (updater) => commitActiveIndexUpdate(updater, "remote"),
+    [commitActiveIndexUpdate],
+  );
+  const setActiveIndexFromReconcile = useCallback<Dispatch<SetStateAction<number>>>(
+    (updater) => commitActiveIndexUpdate(updater, "reconcile"),
+    [commitActiveIndexUpdate],
+  );
 
   useEffect(() => {
     if (reloadKey > 0) {
@@ -693,6 +881,7 @@ export function useNotesLoader(
   useEffect(() => {
     if (!enabled || initialized.current) return;
     initialized.current = true;
+    let effectActive = true;
 
     (async () => {
       // Keep autosave out while load/reload paths touch multiple disk files.
@@ -705,12 +894,26 @@ export function useNotesLoader(
       let safeDocs: NoteDoc[] | null = docs.length > 0 ? docs : null;
       let safeGroups: NoteGroup[] | null = docs.length > 0 ? groups : null;
       let safeActiveId: string | null = docs[activeIndex]?.id ?? null;
+      let hydrationToken: LibraryCommitToken | null = null;
       try {
         await getMachineId();
         await loadUiState();
 
         const dir = await ensureNotesDir();
         await ensureSharedDirs(tauriFileSystem, dir);
+        // Start a new hydration epoch before any cache projection is exposed.
+        // Async work captured for an older load can no longer commit through a
+        // token after this point, even when the directory path is unchanged.
+        const seeded = libraryStore.seedDirectory(dir, {
+          docs: safeDocs ?? [],
+          groups: safeGroups ?? [],
+          trashedNotes: trashedNotesCache,
+          activeNoteId: safeActiveId,
+        }, "hydrate");
+        hydrationToken = {
+          revision: seeded.revision,
+          directoryGeneration: seeded.directoryGeneration,
+        };
 
         const cache = await readLocalCache(dir);
         if (cache && cache.notes.length > 0) {
@@ -719,8 +922,16 @@ export function useNotesLoader(
             isDirty: false,
             content: "",
           } as NoteDoc));
-          setDocs(sortNotes(cachedDocs, notesSortOrder, locale));
-          if (cache.groups) setGroups(cache.groups);
+          const cached = libraryStore.commitIfCurrent(hydrationToken, {
+            docs: sortNotes(cachedDocs, notesSortOrder, locale),
+            ...(cache.groups ? { groups: cache.groups } : {}),
+          }, "hydrate");
+          if (!cached || !effectActive) return;
+          hydrationToken = {
+            revision: cached.revision,
+            directoryGeneration: cached.directoryGeneration,
+          };
+          syncAllReactState(cached);
           safeDocs = cachedDocs;
           safeGroups = cache.groups ?? [];
           safeActiveId = getUiStateCached().activeNoteId ?? null;
@@ -765,7 +976,15 @@ export function useNotesLoader(
 
         const purgedTrashed = await purgeExpiredTrash(state.trashedNotes);
         const trashChanged = purgedTrashed.length !== state.trashedNotes.length;
-        setTrashedNotes(purgedTrashed);
+        const withTrash = libraryStore.commitIfCurrent(hydrationToken, {
+          trashedNotes: purgedTrashed,
+        }, "hydrate");
+        if (!withTrash || !effectActive) return;
+        hydrationToken = {
+          revision: withTrash.revision,
+          directoryGeneration: withTrash.directoryGeneration,
+        };
+        syncAllReactState(withTrash);
 
         let reconciled: NoteDoc[];
         let reconciledGroups: NoteGroup[];
@@ -817,16 +1036,16 @@ export function useNotesLoader(
         }
 
         const sorted = sortNotes(finalDocs, notesSortOrder, locale);
-        setDocs(sorted);
-        setGroups(finalGroups);
-
         const activeId = state.activeNoteId && sorted.some((d) => d.id === state.activeNoteId)
           ? state.activeNoteId
           : sorted[0]?.id ?? null;
-        const nextActiveIndex = activeId
-          ? Math.max(sorted.findIndex((d) => d.id === activeId), 0)
-          : 0;
-        setActiveIndex(nextActiveIndex);
+        const committed = commitWholeLibrary({
+          docs: sorted,
+          groups: finalGroups,
+          trashedNotes: purgedTrashed,
+          activeNoteId: activeId,
+        }, "hydrate", hydrationToken);
+        if (!committed || !effectActive) return;
 
         safeDocs = sorted;
         safeGroups = finalGroups;
@@ -852,6 +1071,14 @@ export function useNotesLoader(
           });
         }
       } catch (err) {
+        if (!effectActive) return;
+        if (
+          hydrationToken != null
+          && (
+            libraryStore.getSnapshot().revision !== hydrationToken.revision
+            || libraryStore.getSnapshot().directoryGeneration !== hydrationToken.directoryGeneration
+          )
+        ) return;
         if (import.meta.env.DEV) {
           console.warn("Notes loader failed:", err);
         }
@@ -861,15 +1088,18 @@ export function useNotesLoader(
         // they are still on disk.
         if (safeDocs && safeDocs.length > 0) {
           const sorted = sortNotes(safeDocs, notesSortOrder, locale);
-          setDocs(sorted);
-          setGroups(safeGroups ?? []);
           const idx = safeActiveId
             ? Math.max(sorted.findIndex((d) => d.id === safeActiveId), 0)
             : 0;
-          setActiveIndex(idx);
+          commitWholeLibrary({
+            docs: sorted,
+            groups: safeGroups ?? [],
+            trashedNotes: trashedNotesCache,
+            activeNoteId: sorted[idx]?.id ?? null,
+          }, "hydrate", hydrationToken ?? undefined);
         } else {
           const timestamp = Date.now();
-          setDocs([{
+          const fallback: NoteDoc = {
             // A fresh id per stub: a fixed sentinel could collide with a note
             // another window/session persisted after provisioning ITS stub,
             // reopening the remote-deletion race for that id.
@@ -880,17 +1110,45 @@ export function useNotesLoader(
             content: "",
             createdAt: timestamp,
             updatedAt: timestamp,
-          }]);
-          setActiveIndex(0);
+          };
+          commitWholeLibrary({
+            docs: [fallback],
+            groups: [],
+            trashedNotes: trashedNotesCache,
+            activeNoteId: fallback.id,
+          }, "hydrate", hydrationToken ?? undefined);
         }
       } finally {
-        setMigrationInProgress(false);
-        setIsLoading(false);
+        if (effectActive) {
+          setMigrationInProgress(false);
+          setIsLoading(false);
+        }
       }
     })();
-  }, [enabled, locale, notesSortOrder, reloadKey]);
+    return () => {
+      effectActive = false;
+      setMigrationInProgress(false);
+    };
+  }, [enabled, locale, notesSortOrder, reloadKey, commitWholeLibrary, syncAllReactState]);
 
-  return { docs, setDocs, activeIndex, setActiveIndex, groups, setGroups, trashedNotes, setTrashedNotes, isLoading };
+  return {
+    docs,
+    setDocs,
+    setDocsFromRemote,
+    setDocsFromReconcile,
+    activeIndex,
+    setActiveIndex,
+    setActiveIndexFromRemote,
+    setActiveIndexFromReconcile,
+    groups,
+    setGroups,
+    setGroupsFromRemote,
+    setGroupsFromReconcile,
+    trashedNotes,
+    setTrashedNotes,
+    setTrashedNotesFromRemote,
+    isLoading,
+  };
 }
 
 export { metaPathFor, metaDirFor, groupsPathFor };

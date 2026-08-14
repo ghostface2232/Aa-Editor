@@ -18,6 +18,7 @@ const refs = vi.hoisted(() => ({
   decomposedTrashed: [] as TrashedNote[],
   localCache: null as LocalCache | null,
   writtenLocalCache: null as LocalCache | null,
+  reconcileGate: null as Promise<void> | null,
 }));
 
 vi.mock("@tauri-apps/api/path", () => ({
@@ -106,6 +107,13 @@ vi.mock("../utils/reconcileFolder", async (importOriginal) => {
   return {
     ...actual,
     reconcileFolder: vi.fn(async (...args: Parameters<typeof actual.reconcileFolder>) => {
+      const gate = refs.reconcileGate;
+      if (gate) {
+        const capturedDocs = args[3];
+        const capturedGroups = args[4];
+        await gate;
+        return { docs: capturedDocs, groups: capturedGroups, changed: false };
+      }
       if (refs.reconcileThrow) throw refs.reconcileThrow;
       return actual.reconcileFolder(...args);
     }),
@@ -114,11 +122,12 @@ vi.mock("../utils/reconcileFolder", async (importOriginal) => {
 });
 
 // Loader is imported AFTER all mocks. Tests then drive it with renderHook.
-import { useNotesLoader, resetNotesDir, saveManifest, saveNoteMetadata, purgeExpiredTrash } from "./useNotesLoader";
+import { useNotesLoader, resetNotesDir, restoreNotesDir, setNotesDir, saveManifest, saveNoteMetadata, purgeExpiredTrash } from "./useNotesLoader";
 import * as reconcileFolderModule from "../utils/reconcileFolder";
 import * as decomposedStateModule from "../utils/decomposedState";
 import * as crashLogModule from "../utils/crashLog";
 import { readMeta, writeMeta, type NoteMeta } from "../utils/metadataIO";
+import { libraryStore } from "../utils/libraryStore";
 
 const clearReconcileSpy = reconcileFolderModule.clearReconcileState as unknown as ReturnType<typeof vi.fn>;
 const persistMock = decomposedStateModule.persistDecomposedState as ReturnType<typeof vi.fn>;
@@ -147,6 +156,7 @@ beforeEach(() => {
   refs.decomposedTrashed = [];
   refs.localCache = null;
   refs.writtenLocalCache = null;
+  refs.reconcileGate = null;
   // Reset the hook's module-level dir cache so each test starts clean.
   resetNotesDir();
 });
@@ -243,6 +253,199 @@ describe("useNotesLoader — reload clears reconcile state (bug 4 regression)", 
     // resetWriteSnapshots fires and this spy is never called.
     expect(clearReconcileSpy).toHaveBeenCalledTimes(1);
     expect(clearReconcileSpy).toHaveBeenCalledWith(externalState);
+  });
+});
+
+describe("useNotesLoader — canonical library store adapter", () => {
+  it("seeds the loaded library and routes every public state setter through revisions", async () => {
+    const a = makeDoc("a");
+    refs.fs!.seedTextFile(a.filePath, "body-a");
+    refs.decomposedDocs = [a];
+    const { result } = renderHook(() => useNotesLoader("en", "updated-desc"));
+    await waitFor(() => expect(result.current.isLoading).toBe(false), { timeout: 2000 });
+
+    const loaded = libraryStore.getSnapshot();
+    expect(loaded.notesDirectory).toBe("/test-appdata/notes");
+    expect(loaded.docs.map((doc) => doc.id)).toEqual(["a"]);
+    expect(loaded.activeNoteId).toBe("a");
+    const loadedRevision = loaded.revision;
+    const b = makeDoc("b");
+    const trashed: TrashedNote = {
+      id: "trash",
+      fileName: "Trash",
+      originalFilePath: "/test-appdata/notes/trash.md",
+      trashFilePath: "/test-appdata/notes/.trash/trash.md",
+      trashedAt: 5000,
+      groupId: null,
+      createdAt: 1,
+      updatedAt: 1,
+    };
+
+    act(() => {
+      result.current.setDocs((prev) => [...prev, b]);
+      result.current.setGroups([{
+        id: "g",
+        name: "Group",
+        noteIds: ["b"],
+        collapsed: false,
+        createdAt: 1,
+      }]);
+      result.current.setTrashedNotes([trashed]);
+      result.current.setActiveIndex(1);
+    });
+
+    expect(libraryStore.getSnapshot()).toMatchObject({
+      revision: loadedRevision + 4,
+      activeNoteId: "b",
+    });
+    expect(libraryStore.getSnapshot().docs.map((doc) => doc.id)).toEqual(["a", "b"]);
+    expect(libraryStore.getSnapshot().groups[0].noteIds).toEqual(["b"]);
+    expect(libraryStore.getSnapshot().trashedNotes.map((note) => note.id)).toEqual(["trash"]);
+    expect(result.current.activeIndex).toBe(1);
+  });
+
+  it("does not create a revision when a functional setter returns its previous value", async () => {
+    const a = makeDoc("a");
+    refs.fs!.seedTextFile(a.filePath, "body-a");
+    refs.decomposedDocs = [a];
+    const { result } = renderHook(() => useNotesLoader("en", "updated-desc"));
+    await waitFor(() => expect(result.current.isLoading).toBe(false), { timeout: 2000 });
+    const before = libraryStore.getSnapshot();
+
+    act(() => result.current.setDocs((prev) => prev));
+
+    expect(libraryStore.getSnapshot()).toBe(before);
+  });
+
+  it("resolves a nested active-index update against the docs returned by its updater", async () => {
+    const a = makeDoc("a");
+    refs.fs!.seedTextFile(a.filePath, "body-a");
+    refs.decomposedDocs = [a];
+    const { result } = renderHook(() => useNotesLoader("en", "updated-desc"));
+    await waitFor(() => expect(result.current.isLoading).toBe(false), { timeout: 2000 });
+    const b = makeDoc("b");
+    const c = makeDoc("c");
+    act(() => {
+      result.current.setDocs([a, b, c]);
+      result.current.setActiveIndex(1);
+    });
+
+    act(() => result.current.setDocs((prev) => {
+      const withoutActive = prev.filter((doc) => doc.id !== "b");
+      result.current.setActiveIndex(1);
+      return withoutActive;
+    }));
+
+    expect(result.current.docs.map((doc) => doc.id)).toEqual(["a", "c"]);
+    expect(result.current.activeIndex).toBe(1);
+    expect(libraryStore.getSnapshot().activeNoteId).toBe("c");
+  });
+
+  it("records window-sync and watcher mutations with their real origins", async () => {
+    const a = makeDoc("a");
+    refs.fs!.seedTextFile(a.filePath, "body-a");
+    refs.decomposedDocs = [a];
+    const { result } = renderHook(() => useNotesLoader("en", "updated-desc"));
+    await waitFor(() => expect(result.current.isLoading).toBe(false), { timeout: 2000 });
+
+    act(() => result.current.setDocsFromRemote((prev) => [
+      ...prev,
+      makeDoc("remote"),
+    ]));
+    expect(libraryStore.getSnapshot().origin).toBe("remote");
+
+    act(() => result.current.setGroupsFromReconcile([{
+      id: "g",
+      name: "Reconciled",
+      noteIds: ["remote"],
+      collapsed: false,
+      createdAt: 1,
+    }]));
+    expect(libraryStore.getSnapshot().origin).toBe("reconcile");
+  });
+
+  it("rejects a late loader result from the previous hydration generation", async () => {
+    let releaseOld!: () => void;
+    refs.reconcileGate = new Promise<void>((resolve) => { releaseOld = resolve; });
+    const a = makeDoc("a");
+    refs.fs!.seedTextFile(a.filePath, "body-a");
+    refs.decomposedDocs = [a];
+    const { result, rerender } = renderHook(
+      ({ reloadKey }) => useNotesLoader("en", "updated-desc", true, reloadKey),
+      { initialProps: { reloadKey: 0 } },
+    );
+    await waitFor(() => expect(reconcileFolderModule.reconcileFolder).toHaveBeenCalledTimes(1));
+
+    const b = makeDoc("b");
+    refs.fs!.seedTextFile(b.filePath, "body-b");
+    await refs.fs!.remove(a.filePath);
+    refs.decomposedDocs = [b];
+    refs.reconcileGate = null;
+    act(() => rerender({ reloadKey: 1 }));
+    await waitFor(() => expect(result.current.isLoading).toBe(false), { timeout: 2000 });
+    expect(libraryStore.getSnapshot().docs.map((doc) => doc.id)).toEqual(["b"]);
+    const currentGeneration = libraryStore.getSnapshot().directoryGeneration;
+
+    await act(async () => {
+      releaseOld();
+      await Promise.resolve();
+    });
+
+    expect(libraryStore.getSnapshot().directoryGeneration).toBe(currentGeneration);
+    expect(libraryStore.getSnapshot().docs.map((doc) => doc.id)).toEqual(["b"]);
+  });
+
+  it("aborts final hydration when remote state commits in the same generation", async () => {
+    let releaseReconcile!: () => void;
+    refs.reconcileGate = new Promise<void>((resolve) => { releaseReconcile = resolve; });
+    const a = makeDoc("a");
+    refs.fs!.seedTextFile(a.filePath, "body-a");
+    refs.decomposedDocs = [a];
+    const { result } = renderHook(() => useNotesLoader("en", "updated-desc"));
+    await waitFor(() => expect(reconcileFolderModule.reconcileFolder).toHaveBeenCalledTimes(1));
+    const generation = libraryStore.getSnapshot().directoryGeneration;
+    const remote = makeDoc("remote");
+
+    act(() => result.current.setDocsFromRemote((prev) => [...prev, remote]));
+    expect(libraryStore.getSnapshot()).toMatchObject({ origin: "remote", directoryGeneration: generation });
+
+    await act(async () => {
+      releaseReconcile();
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(result.current.isLoading).toBe(false), { timeout: 2000 });
+
+    expect(libraryStore.getSnapshot().origin).toBe("remote");
+    expect(libraryStore.getSnapshot().docs.some((doc) => doc.id === "remote")).toBe(true);
+  });
+
+  it("preserves canonical state when a directory migration rolls back without reload", async () => {
+    const a = makeDoc("a");
+    refs.fs!.seedTextFile(a.filePath, "body-a");
+    refs.decomposedDocs = [a];
+    const reconcileState = createReconcileState();
+    const { result } = renderHook(() => useNotesLoader(
+      "en",
+      "updated-desc",
+      true,
+      0,
+      reconcileState,
+    ));
+    await waitFor(() => expect(result.current.isLoading).toBe(false), { timeout: 2000 });
+    const generation = libraryStore.getSnapshot().directoryGeneration;
+    const preserved = libraryStore.getSnapshot();
+
+    libraryStore.clearDirectory("hydrate");
+    act(() => restoreNotesDir("/test-appdata/notes", preserved, reconcileState));
+    // Persisting the old setting triggers the settings effect afterwards.
+    // Its equivalent-directory call must not clear the restored snapshot.
+    act(() => setNotesDir("/test-appdata/notes/", reconcileState));
+
+    expect(libraryStore.getSnapshot().directoryGeneration).toBe(generation + 2);
+    expect(libraryStore.getSnapshot().docs.map((doc) => doc.id)).toEqual(["a"]);
+    act(() => result.current.setDocs((prev) => [...prev, makeDoc("b")]));
+    expect(result.current.docs.map((doc) => doc.id)).toEqual(["a", "b"]);
+    expect(libraryStore.getSnapshot().docs.map((doc) => doc.id)).toEqual(["a", "b"]);
   });
 });
 

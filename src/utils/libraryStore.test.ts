@@ -245,4 +245,22 @@ describe("libraryStore", () => {
     expect(result).toBeNull();
     expect(store.getSnapshot().docs.map((entry) => entry.id)).toEqual(["b"]);
   });
+
+  it("lets generation-scoped work compose with newer commits in the same hydration epoch", () => {
+    const store = createLibraryStore();
+    const seeded = store.seedDirectory("C:/notes", data([doc("a")], "a"));
+    store.commit({ groups: [] }, "local");
+
+    const committed = store.commitForGeneration(seeded.directoryGeneration, (current) => ({
+      docs: [...current.docs, doc("b")],
+    }), "reconcile");
+
+    expect(committed?.docs.map((entry) => entry.id)).toEqual(["a", "b"]);
+    store.clearDirectory();
+    expect(store.commitForGeneration(
+      seeded.directoryGeneration,
+      { docs: [doc("stale")] },
+      "reconcile",
+    )).toBeNull();
+  });
 });

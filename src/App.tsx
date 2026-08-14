@@ -21,7 +21,7 @@ import {
 import { getCurrentWindow, Effect, LogicalSize } from "@tauri-apps/api/window";
 import { useMarkdownState } from "./hooks/useMarkdownState";
 import { getCurrentMarkdown, useFileSystem } from "./hooks/useFileSystem";
-import { saveManifest, sortNotes, useNotesLoader, getNotesDir, getDefaultNotesDir, setNotesDir, resetNotesDir, setMigrationInProgress } from "./hooks/useNotesLoader";
+import { saveManifest, sortNotes, useNotesLoader, getNotesDir, getDefaultNotesDir, setNotesDir, restoreNotesDir, resetNotesDir, setMigrationInProgress } from "./hooks/useNotesLoader";
 import { useAutoSave } from "./hooks/useAutoSave";
 import { useNoteGroups } from "./hooks/useNoteGroups";
 import { useSettings, type ParagraphSpacing } from "./hooks/useSettings";
@@ -60,6 +60,7 @@ import { colorHex } from "./utils/noteColors";
 import { clampMenuToViewport } from "./utils/clampMenuPosition";
 import { clearRenderableImageSourceCache } from "./utils/imageAssetUtils";
 import { sortSignature } from "./utils/docsSignature";
+import type { LibraryData } from "./utils/libraryStore";
 import { useFileWatcher } from "./hooks/useFileWatcher";
 import { createReconcileState } from "./utils/reconcileFolder";
 import { useWindowSync } from "./hooks/useWindowSync";
@@ -352,7 +353,24 @@ function App() {
 
   const reconcileStateRef = useRef(createReconcileState());
 
-  const { docs, setDocs, activeIndex, setActiveIndex, groups, setGroups, trashedNotes, setTrashedNotes, isLoading } = useNotesLoader(
+  const {
+    docs,
+    setDocs,
+    setDocsFromRemote,
+    setDocsFromReconcile,
+    activeIndex,
+    setActiveIndex,
+    setActiveIndexFromRemote,
+    setActiveIndexFromReconcile,
+    groups,
+    setGroups,
+    setGroupsFromRemote,
+    setGroupsFromReconcile,
+    trashedNotes,
+    setTrashedNotes,
+    setTrashedNotesFromRemote,
+    isLoading,
+  } = useNotesLoader(
     locale,
     settings.notesSortOrder,
     notesDirReady,
@@ -366,6 +384,8 @@ function App() {
   docsRef.current = docs;
   const groupsRef = useRef(groups);
   groupsRef.current = groups;
+  const trashedNotesRef = useRef(trashedNotes);
+  trashedNotesRef.current = trashedNotes;
   // Fresh-locale ref for effects/handlers registered once (empty deps) that
   // still need to localize a late message — e.g. the close-blocked dialog.
   const localeRef = useRef(locale);
@@ -513,13 +533,13 @@ function App() {
     state.setIsDirty(false);
   }, [state]);
   useWindowSync(
-    setDocs,
+    setDocsFromRemote,
     activeIndex,
     docs[activeIndex]?.id ?? null,
     tiptapRef,
-    setActiveIndex,
-    setGroups,
-    setTrashedNotes,
+    setActiveIndexFromRemote,
+    setGroupsFromRemote,
+    setTrashedNotesFromRemote,
     handleActiveDocChanged,
     settings.notesSortOrder,
     locale,
@@ -527,8 +547,8 @@ function App() {
   );
 
   useFileWatcher(
-    docs, setDocs, groups, setGroups,
-    activeIndex, docs[activeIndex]?.id ?? null, setActiveIndex, tiptapRef,
+    docs, setDocsFromReconcile, groups, setGroupsFromReconcile,
+    activeIndex, docs[activeIndex]?.id ?? null, setActiveIndexFromReconcile, tiptapRef,
     locale,
     notesDirReady && !isLoading,
     reconcileStateRef.current,
@@ -741,9 +761,13 @@ function App() {
   // the setting was already persisted: restore the loader's in-memory dir,
   // roll the persisted setting back, and release the autosave guard. The
   // copy-based paths no longer need this — they persist only after success.
-  const revertNotesDirChange = useCallback(async (oldDir: string, previousNotesDirectory: string) => {
+  const revertNotesDirChange = useCallback(async (
+    oldDir: string,
+    previousNotesDirectory: string,
+    preservedLibrary: LibraryData,
+  ) => {
     clearRenderableImageSourceCache();
-    setNotesDir(oldDir, reconcileStateRef.current);
+    restoreNotesDir(oldDir, preservedLibrary, reconcileStateRef.current);
     await persistNotesDirectorySetting(previousNotesDirectory);
     setMigrationInProgress(false);
   }, [persistNotesDirectorySetting]);
@@ -857,6 +881,12 @@ function App() {
       // commit comes first and the only destructive step (clearing the old
       // dir) follows it.
       const previousNotesDirectory = settings.notesDirectory;
+      const preservedLibrary: LibraryData = {
+        docs: docsRef.current,
+        groups: groupsRef.current,
+        trashedNotes: trashedNotesRef.current,
+        activeNoteId: docsRef.current[activeIndexRef.current]?.id ?? null,
+      };
       if (!(await persistNotesDirectorySetting(newDir))) {
         await abortMigration("settings.notesDirectory.settingsFailed");
         return;
@@ -868,7 +898,7 @@ function App() {
       } else {
         const result = await clearManagedNotesData(oldDir, newDir);
         if (!result.success) {
-          await revertNotesDirChange(oldDir, previousNotesDirectory);
+          await revertNotesDirChange(oldDir, previousNotesDirectory, preservedLibrary);
           broadcastMigrationFinished(migrationId, false, "");
           await message(t("settings.notesDirectory.migrationFailed", locale), { kind: "error" });
           return;

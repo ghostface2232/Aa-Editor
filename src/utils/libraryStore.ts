@@ -46,6 +46,11 @@ export interface LibraryStore {
     update: LibraryPatch | LibraryUpdater,
     origin: LibraryCommitOrigin,
   ): LibrarySnapshot | null;
+  commitForGeneration(
+    directoryGeneration: number,
+    update: LibraryPatch | LibraryUpdater,
+    origin: LibraryCommitOrigin,
+  ): LibrarySnapshot | null;
   seedDirectory(
     notesDirectory: string,
     data: LibraryData,
@@ -212,6 +217,12 @@ export function createLibraryStore(initial: Partial<LibrarySnapshot> = {}): Libr
       ) {
         return null;
       }
+      return commit(update, origin);
+    },
+
+    commitForGeneration(directoryGeneration, update, origin) {
+      assertMutationAllowed();
+      if (directoryGeneration !== snapshot.directoryGeneration) return null;
       return commit(update, origin);
     },
 
