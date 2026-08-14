@@ -6,10 +6,10 @@ import { atomicWriteText } from "../utils/atomicWrite";
 import {
   getNotesDir,
   saveManifest,
+  runPersistenceTransaction,
   deriveTitle,
   sortNotes,
   getFileBaseName,
-  ensureTrashDir,
   getTrashedNotesCache,
   markGroupAsDeleted,
   markNoteTitleChanged,
@@ -34,6 +34,8 @@ import { getMachineIdCached } from "../utils/machineId";
 import { logNotenError } from "../utils/crashLog";
 import { NotenError } from "../utils/notenError";
 import { t } from "../i18n";
+import { libraryStore, type LibrarySnapshot, type LibraryUpdater } from "../utils/libraryStore";
+import { blockNoteLifecycle } from "./noteLifecycleGate";
 
 export type { NoteDoc } from "./useNotesLoader";
 
@@ -95,10 +97,11 @@ export async function provisionNoteFile(
   content: string,
   stage: string,
   extraContext: Record<string, unknown> = {},
+  targetDir?: string,
 ): Promise<{ filePath: string; ok: boolean }> {
   let filePath = "";
   try {
-    const notesDir = await getNotesDir();
+    const notesDir = targetDir ?? await getNotesDir();
     await mkdir(notesDir, { recursive: true }).catch(() => {});
     filePath = `${notesDir}/${id}.md`;
     markOwnWrite(filePath, content);
@@ -207,7 +210,7 @@ export function useFileSystem(
   notesSortOrder: NotesSortOrder,
   groups?: NoteGroup[],
   setGroups?: React.Dispatch<React.SetStateAction<NoteGroup[]>>,
-  getGroupForNote?: (noteId: string) => NoteGroup | null,
+  _getGroupForNote?: (noteId: string) => NoteGroup | null,
   trashedNotes?: TrashedNote[],
   setTrashedNotes?: (updater: TrashedNote[] | ((prev: TrashedNote[]) => TrashedNote[])) => void,
   flushAutoSaveRef?: React.RefObject<(() => Promise<boolean>) | null>,
@@ -215,6 +218,10 @@ export function useFileSystem(
   cancelDocSaveRef?: React.RefObject<((docId: string) => void) | null>,
   captureAndQueueSaveRef?: React.RefObject<(() => void) | null>,
   flushDocSaveRef?: React.RefObject<((docId: string) => Promise<boolean>) | null>,
+  commitLibraryForGeneration?: (
+    directoryGeneration: number,
+    update: LibraryUpdater,
+  ) => LibrarySnapshot | null,
 ): FileSystemActions {
   const groupsRef = useRef(groups);
   groupsRef.current = groups;
@@ -779,180 +786,291 @@ export function useFileSystem(
     }
     if (flushed.length === 0) return [];
 
-    const { docs: liveDocs, activeDocId, activeIndex: currentActiveIndex } = getLiveDocsSnapshot();
-    const targets = flushed
-      .map((d) => liveDocs.find((entry) => entry.id === d.id))
-      .filter((d): d is NoteDoc => d !== undefined);
-    if (targets.length === 0) return [];
+    const { docs: liveDocs } = getLiveDocsSnapshot();
+    let targetIds = flushed
+      .map((d) => d.id)
+      .filter((id) => liveDocs.some((entry) => entry.id === id));
+    if (targetIds.length === 0 || !commitLibraryForGeneration) return [];
 
-    // Cancel pending autosave timers to prevent orphan writes after deletion.
-    for (const doc of targets) cancelDocSaveRef?.current?.(doc.id);
+    // The active note can change while a cloud-backed flush is awaiting I/O.
+    // Re-check until the same active identity survives an awaited capture.
+    while (true) {
+      const beforeActiveId = docsRef.current[activeIndexRef.current]?.id ?? null;
+      if (beforeActiveId && targetIds.includes(beforeActiveId)) {
+        if (!(await leaveCurrentDoc())) {
+          targetIds = targetIds.filter((id) => id !== beforeActiveId);
+        }
+      }
+      const afterActiveId = docsRef.current[activeIndexRef.current]?.id ?? null;
+      if (afterActiveId === beforeActiveId) break;
+    }
+    if (targetIds.length === 0) return [];
 
-    // Flush pending auto-save so the on-disk file is up-to-date before trash copy
-    const deletingActive = activeDocId !== null && targets.some((d) => d.id === activeDocId);
-    const didPersistCurrentDoc = deletingActive ? await leaveCurrentDoc() : false;
-    const baseDocs = deletingActive && didPersistCurrentDoc
-      ? markDocClean(liveDocs, activeDocId)
-      : liveDocs;
+    const blockedTargetIds = [...targetIds];
+    const releaseLifecycleBlock = blockNoteLifecycle(blockedTargetIds);
+    const committedDeletedIds = new Set<string>();
+    try {
+      // Await any body write that passed the gate before quarantine. A target
+      // with newer blocked work is kept live and retried after the gate lifts.
+      const safelyDrained: string[] = [];
+      for (const id of targetIds) {
+        const didDrain = await flushDocSaveRef?.current?.(id);
+        if (didDrain !== false) safelyDrained.push(id);
+      }
+      targetIds = safelyDrained;
+      if (targetIds.length === 0) return [];
+      for (const id of targetIds) cancelDocSaveRef?.current?.(id);
 
-    const trashedNotes: TrashedNote[] = [];
-    const deletedIds = new Set<string>();
-    for (const doc of targets) {
-      if (doc.filePath) {
-        try {
-          const trashDir = await ensureTrashDir();
-          const notesDir = await getNotesDir();
-          const fileName = getFileBaseName(doc.filePath);
-          const trashPath = `${trashDir}/${fileName}`;
-          const trashedAt = Date.now();
+      const published: {
+        snapshot: LibrarySnapshot | null;
+        activeBeforePublish: string | null;
+      } = { snapshot: null, activeBeforePublish: null };
+      const transaction = await runPersistenceTransaction(
+        "deleteNotes",
+        targetIds,
+        async ({
+          notesDirectory,
+          snapshot,
+          assertCurrent,
+          readNoteMeta,
+          mergeNoteMeta,
+          writeNoteMeta,
+          removeNoteMeta,
+          finalizeNoteMeta,
+          discardNoteIntents,
+        }) => {
+        const requestedIds = new Set(targetIds);
+        const targets = snapshot.docs.filter((doc) => requestedIds.has(doc.id));
+        const moved: TrashedNote[] = [];
+        const deletedIds = new Set<string>();
+        const trashDir = `${notesDirectory}/.trash`;
+        assertCurrent();
+        await mkdir(trashDir, { recursive: true });
+        assertCurrent();
 
-          // Persist the deletion intent to the sidecar BEFORE the body move
-          // (mirroring restoreNote's meta-first ordering). trashedAt otherwise
-          // only lands via the fire-and-forget manifest write at the end of
-          // this batch: a crash in between leaves a live meta whose body is in
-          // .trash — a note visible in neither the list nor the trash UI.
-          // With meta-first, a crash before the body move instead leaves
-          // "trashed meta + root body", which reconcile's root-vs-trash
-          // arbitration finishes moving into trash.
-          let previousMeta: NoteMeta | null = null;
-          let metaKnownAbsent = false;
-          try {
-            previousMeta = await readMeta(tauriFileSystem, notesDir, doc.id);
-            metaKnownAbsent = previousMeta === null;
-          } catch { /* unreadable sidecar — rebuild from the doc below */ }
-          const trashedMeta: NoteMeta = {
-            version: 2,
-            id: doc.id,
-            fileName: doc.fileName,
-            createdAt: doc.createdAt,
-            updatedAt: doc.updatedAt,
-            groupId: getGroupForNote?.(doc.id)?.id ?? null,
-            pinned: doc.pinned === true,
-            color: doc.color,
-            ...(previousMeta ?? {}),
-            trashedAt,
-            trashedFromPath: doc.filePath,
-          };
-          await writeMeta(tauriFileSystem, notesDir, trashedMeta, getMachineIdCached());
-
-          markOwnWrite(doc.filePath);
-          try {
-            await copyFile(doc.filePath, trashPath);
-          } catch (copyErr) {
-            // The deletion did not happen; roll the sidecar back so disk state
-            // matches the note that stays in the list.
+        for (const doc of targets) {
+          if (!doc.filePath) {
             try {
-              if (previousMeta) await writeMeta(tauriFileSystem, notesDir, previousMeta, getMachineIdCached());
-              else if (metaKnownAbsent) await removeMetaFile(tauriFileSystem, notesDir, doc.id);
-              else await writeMeta(tauriFileSystem, notesDir, { ...trashedMeta, trashedAt: null, trashedFromPath: null }, getMachineIdCached());
-            } catch { /* best-effort */ }
-            throw copyErr;
+              await removeNoteMeta(doc.id);
+              discardNoteIntents(doc.id);
+              deletedIds.add(doc.id);
+            } catch { /* keep the pathless note when metadata removal fails */ }
+            continue;
           }
-          try { await remove(doc.filePath); } catch { /* original stays; reconcile picks it up */ }
 
-          trashedNotes.push({
-            id: doc.id,
-            fileName: doc.fileName,
-            originalFilePath: doc.filePath,
-            trashFilePath: trashPath,
-            trashedAt,
-            groupId: getGroupForNote?.(doc.id)?.id ?? null,
-            createdAt: doc.createdAt,
-            updatedAt: doc.updatedAt,
-            pinned: doc.pinned === true,
-            color: doc.color,
+          const groupId = snapshot.groups.find((group) => group.noteIds.includes(doc.id))?.id ?? null;
+          const trashPath = `${trashDir}/${getFileBaseName(doc.filePath)}`;
+          const trashedAt = Date.now();
+          try {
+            const previousMeta = await readNoteMeta(doc.id);
+            const mergedMeta = mergeNoteMeta(doc.id, {
+              version: 2,
+              id: doc.id,
+              fileName: doc.fileName,
+              customName: doc.customName,
+              createdAt: doc.createdAt,
+              updatedAt: doc.updatedAt,
+              groupId,
+              groupUpdatedAt: doc.updatedAt,
+              pinned: doc.pinned === true,
+              color: doc.color,
+              trashedAt: null,
+            }, previousMeta);
+            const trashedMeta: NoteMeta = {
+              ...mergedMeta,
+              trashedAt,
+              trashedFromPath: doc.filePath,
+            };
+            await writeNoteMeta(trashedMeta);
+
+            markOwnWrite(doc.filePath);
+            assertCurrent();
+            let bodyCopied = false;
+            try {
+              await copyFile(doc.filePath, trashPath);
+              assertCurrent();
+              bodyCopied = true;
+            } catch (copyError) {
+              let rolledBack = false;
+              try {
+                if (previousMeta) await writeNoteMeta(previousMeta);
+                else await removeNoteMeta(doc.id);
+                rolledBack = true;
+              } catch (rollbackError) {
+                void logNotenError(new NotenError(
+                  "PERSIST_FAILED",
+                  "fatal",
+                  rollbackError instanceof Error ? rollbackError.message : String(rollbackError),
+                  { context: { stage: "deleteNotes.rollback", noteId: doc.id }, cause: rollbackError },
+                ));
+              }
+              if (rolledBack) continue;
+              // The tombstone is durable but rollback failed. Deletion wins;
+              // reconcile will finish moving the still-rooted body to trash.
+              if (import.meta.env.DEV) console.warn("Delete rollback failed; keeping tombstone:", copyError);
+            }
+
+            if (bodyCopied) {
+              try {
+                assertCurrent();
+                await remove(doc.filePath);
+                assertCurrent();
+              } catch { /* tombstone arbitration removes any surviving root copy */ }
+            }
+
+            finalizeNoteMeta(doc.id, {
+              acknowledgeFields: { title: true, pinned: true, color: true },
+              acknowledgeGroupMembership: true,
+            });
+            moved.push({
+              id: doc.id,
+              fileName: trashedMeta.fileName,
+              originalFilePath: doc.filePath,
+              trashFilePath: trashPath,
+              trashedAt,
+              groupId: trashedMeta.groupId ?? null,
+              createdAt: trashedMeta.createdAt,
+              updatedAt: trashedMeta.updatedAt,
+              customName: trashedMeta.customName,
+              pinned: trashedMeta.pinned === true,
+              color: trashedMeta.color,
+            });
+            deletedIds.add(doc.id);
+          } catch (error) {
+            if (import.meta.env.DEV) console.warn("Failed to move note to trash:", error);
+          }
+        }
+
+        let replacement: { doc: NoteDoc; writeOk: boolean } | null = null;
+        if (deletedIds.size > 0) {
+          const id = crypto.randomUUID();
+          const timestamp = Date.now();
+          const expectsEmptyLibrary = snapshot.docs.every((doc) => deletedIds.has(doc.id));
+          const provisioned = expectsEmptyLibrary
+            ? await provisionNoteFile(id, "", "deleteNote.replacement", {}, notesDirectory)
+            : { filePath: "", ok: false };
+          if (expectsEmptyLibrary) assertCurrent();
+          replacement = {
+            writeOk: provisioned.ok,
+            doc: {
+              id,
+              filePath: provisioned.filePath,
+              fileName: getDefaultDocumentTitle(locale),
+              isDirty: !provisioned.ok,
+              content: "",
+              createdAt: timestamp,
+              updatedAt: timestamp,
+            },
+          };
+        }
+        return {
+          baseSnapshot: snapshot,
+          deletedIds: Array.from(deletedIds),
+          moved,
+          previousActiveId: snapshot.activeNoteId,
+          replacement,
+        };
+        },
+        (result, directoryGeneration) => {
+        if (result.deletedIds.length === 0) return result.baseSnapshot;
+        const deletedIds = new Set(result.deletedIds);
+        published.snapshot = commitLibraryForGeneration(directoryGeneration, (current) => {
+          published.activeBeforePublish = current.activeNoteId;
+          const previousActiveIndex = current.activeNoteId
+            ? current.docs.findIndex((doc) => doc.id === current.activeNoteId)
+            : 0;
+          let nextDocs = current.docs.filter((doc) => !deletedIds.has(doc.id));
+          if (result.replacement && (result.replacement.writeOk || nextDocs.length === 0)) {
+            nextDocs = [...nextDocs, result.replacement.doc];
+          }
+          const nextGroups = current.groups.map((group) => (
+            group.noteIds.some((id) => deletedIds.has(id))
+              ? { ...group, noteIds: group.noteIds.filter((id) => !deletedIds.has(id)) }
+              : group
+          ));
+          const movedAtPublish = result.moved.map((entry) => {
+            const currentTrash = current.trashedNotes.find((note) => note.id === entry.id);
+            if (currentTrash && currentTrash.trashedAt >= entry.trashedAt) return currentTrash;
+            const currentDoc = current.docs.find((doc) => doc.id === entry.id);
+            const baseDoc = result.baseSnapshot.docs.find((doc) => doc.id === entry.id);
+            if (!currentDoc || currentDoc === baseDoc) return entry;
+            return {
+              ...entry,
+              fileName: currentDoc.fileName,
+              createdAt: currentDoc.createdAt,
+              updatedAt: currentDoc.updatedAt,
+              customName: currentDoc.customName,
+              pinned: currentDoc.pinned === true,
+              color: currentDoc.color,
+              groupId: current.groups.find((group) => group.noteIds.includes(entry.id))?.id ?? null,
+            };
           });
-        } catch {
-          // Skip this note if the trash copy failed; the rest of the batch
-          // proceeds. The skipped note stays in the list untouched.
-          if (import.meta.env.DEV) {
-            console.warn("Failed to move note to trash, deletion aborted:", doc.filePath);
+          const movedIds = new Set(movedAtPublish.map((entry) => entry.id));
+          const nextTrash = [
+            ...current.trashedNotes.filter((entry) => !movedIds.has(entry.id)),
+            ...movedAtPublish,
+          ];
+          let nextActiveId = current.activeNoteId;
+          if (!nextActiveId || deletedIds.has(nextActiveId)) {
+            const bounded = Math.min(Math.max(previousActiveIndex, 0), Math.max(nextDocs.length - 1, 0));
+            nextActiveId = nextDocs[bounded]?.id ?? null;
           }
-          continue;
-        }
+          return {
+            docs: sortNotes([...nextDocs], notesSortOrder, locale),
+            groups: nextGroups,
+            trashedNotes: nextTrash,
+            activeNoteId: nextActiveId,
+          };
+        });
+        return published.snapshot;
+        },
+        (result, committed) => {
+          if (!published.activeBeforePublish || !result.deletedIds.includes(published.activeBeforePublish)) {
+            return undefined;
+          }
+          const nextActive = committed.activeNoteId
+            ? committed.docs.find((doc) => doc.id === committed.activeNoteId)
+            : undefined;
+          if (!nextActive) return undefined;
+          resetDocState(state, tiptapRef, nextActive.id, nextActive.filePath, nextActive.content);
+          notifyActiveDocRef?.current?.(nextActive.id, nextActive.filePath);
+          if (result.replacement?.doc.id === nextActive.id) state.setIsDirty(!result.replacement.writeOk);
+          return undefined;
+        },
+      );
+
+      const committedSnapshot = published.snapshot;
+      if (transaction.status !== "committed" || committedSnapshot == null) return [];
+      const { deletedIds } = transaction.value;
+      const replacement = transaction.value.replacement;
+      if (deletedIds.length === 0) return [];
+      const latest = libraryStore.getSnapshot();
+      const deletedSet = new Set(deletedIds.filter((id) => !latest.docs.some((doc) => doc.id === id)));
+      for (const id of deletedSet) committedDeletedIds.add(id);
+      for (const doc of liveDocs) {
+        if (!deletedSet.has(doc.id)) continue;
+        tiptapRef.current?.invalidateDocumentSession?.(doc.id, doc.filePath);
+        emitDocDeleted(doc.id);
       }
-      deletedIds.add(doc.id);
-    }
-    if (deletedIds.size === 0) return [];
-
-    if (setTrashedNotes && trashedNotes.length > 0) {
-      setTrashedNotes((prev) => [...prev, ...trashedNotes]);
-      emitTrashUpdated(getTrashedNotesCache());
-    }
-
-    const nextDocs = baseDocs.filter((entry) => !deletedIds.has(entry.id));
-    for (const doc of targets) {
-      if (!deletedIds.has(doc.id)) continue;
-      tiptapRef.current?.invalidateDocumentSession?.(doc.id, doc.filePath);
-      emitDocDeleted(doc.id);
-    }
-
-    const cleanedGroups = (groupsRef.current ?? []).map((g) =>
-      g.noteIds.some((id) => deletedIds.has(id))
-        ? { ...g, noteIds: g.noteIds.filter((id) => !deletedIds.has(id)) }
-        : g,
-    );
-    setGroups?.(cleanedGroups);
-    emitGroupsUpdated(cleanedGroups);
-
-    const deletedList = Array.from(deletedIds);
-
-    if (nextDocs.length === 0) {
-      const id = crypto.randomUUID();
-      const timestamp = Date.now();
-      // The user just emptied the note list; we can't unwind the deletes above.
-      // On write failure, surface SAVE_FAILED and flag the replacement as
-      // dirty so the manifest doesn't claim a clean entry with no body on disk.
-      const { filePath, ok: writeOk } = await provisionNoteFile(id, "", "deleteNote.replacement");
-
-      const newDoc: NoteDoc = {
-        id,
-        filePath,
-        fileName: getDefaultDocumentTitle(locale),
-        isDirty: !writeOk,
-        content: "",
-        createdAt: timestamp,
-        updatedAt: timestamp,
-      };
-
-      setDocs([newDoc]);
-      setActiveIndex(0);
-      resetDocState(state, tiptapRef, id, filePath, "");
-      state.setIsDirty(!writeOk);
-      notifyActiveDocRef?.current?.(id, filePath);
-      void saveManifest([newDoc], newDoc.id, cleanedGroups).catch(() => {});
-      // A failed provision has no body for peer windows to load. Keep it local
-      // and dirty so the normal save drain can retry before advertising it.
-      if (writeOk) emitDocCreated(newDoc);
-      return deletedList;
-    }
-
-    const activeDeleted = activeDocId !== null && deletedIds.has(activeDocId);
-    let nextActiveId: string;
-
-    if (activeDeleted) {
-      // Hand off to the nearest survivor at or after the old active position,
-      // falling back to the nearest one before it.
-      let replacement: NoteDoc | undefined;
-      for (let i = currentActiveIndex; i < baseDocs.length; i++) {
-        if (!deletedIds.has(baseDocs[i].id)) { replacement = baseDocs[i]; break; }
+      emitGroupsUpdated(latest.groups.map((group) => ({
+        ...group,
+        noteIds: [...group.noteIds],
+      })));
+      emitTrashUpdated([...latest.trashedNotes]);
+      if (replacement && replacement.writeOk && latest.docs.some((doc) => doc.id === replacement.doc.id)) {
+        emitDocCreated(replacement.doc);
       }
-      if (!replacement) {
-        for (let i = Math.min(currentActiveIndex, baseDocs.length - 1); i >= 0; i--) {
-          if (!deletedIds.has(baseDocs[i].id)) { replacement = baseDocs[i]; break; }
-        }
+      return Array.from(deletedSet);
+    } catch {
+      return [];
+    } finally {
+      for (const id of committedDeletedIds) cancelDocSaveRef?.current?.(id);
+      releaseLifecycleBlock();
+      for (const id of blockedTargetIds) {
+        if (!committedDeletedIds.has(id)) await flushDocSaveRef?.current?.(id);
       }
-      const target = replacement ?? nextDocs[nextDocs.length - 1];
-      nextActiveId = target.id;
-      resetDocState(state, tiptapRef, target.id, target.filePath, target.content);
-      notifyActiveDocRef?.current?.(target.id, target.filePath);
-    } else {
-      nextActiveId = activeDocId ?? nextDocs[0].id;
     }
-
-    sortAndPersistDocs(nextDocs, nextActiveId, notesSortOrder, locale, setDocs, setActiveIndex, cleanedGroups);
-    return deletedList;
-  }, [cancelDocSaveRef, flushDocSaveRef, getLiveDocsSnapshot, getGroupForNote, leaveCurrentDoc, locale, markDocClean, notesSortOrder, setActiveIndex, setDocs, setGroups, setTrashedNotes, state, tiptapRef]);
+  }, [cancelDocSaveRef, commitLibraryForGeneration, flushDocSaveRef, getLiveDocsSnapshot, leaveCurrentDoc, locale, notesSortOrder, state, tiptapRef]);
 
   const deleteNote = useCallback(async (index: number): Promise<string[]> => {
     const doc = docsRef.current[index];
@@ -1241,6 +1359,7 @@ export function useFileSystem(
       version: 2,
       id: trashed.id,
       fileName: trashed.fileName,
+      customName: trashed.customName,
       createdAt: trashed.createdAt,
       updatedAt: trashed.updatedAt,
       groupId: trashed.groupId ?? null,
@@ -1296,6 +1415,7 @@ export function useFileSystem(
       id: trashed.id,
       filePath: restoredPath,
       fileName: trashed.fileName,
+      customName: restoredMeta.customName,
       isDirty: false,
       content,
       createdAt: trashed.createdAt,

@@ -265,6 +265,7 @@ export async function loadDecomposedState(
         groupId: meta.groupId ?? null,
         createdAt: meta.createdAt,
         updatedAt: meta.updatedAt,
+        customName: meta.customName,
         pinned: meta.pinned === true,
         color: meta.color,
       });
@@ -402,7 +403,7 @@ export async function persistDecomposedState(
     const groupSnap = resolveGroupSnapshot(t.id, t.groupId ?? null);
     const snap: MetaSnapshot = {
       fileName: t.fileName,
-      customName: false,
+      customName: !!t.customName,
       createdAt: t.createdAt,
       updatedAt: t.updatedAt,
       pinned: t.pinned === true,
@@ -424,7 +425,7 @@ export async function persistDecomposedState(
         version: 2,
         id: t.id,
         fileName: snap.fileName,
-        customName: undefined,
+        customName: snap.customName || undefined,
         createdAt: snap.createdAt,
         updatedAt: snap.updatedAt,
         pinned: snap.pinned,

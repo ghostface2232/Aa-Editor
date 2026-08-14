@@ -5,6 +5,7 @@ import type { MarkdownState } from "./useMarkdownState";
 import type { TiptapEditorHandle } from "../components/TiptapEditor";
 import type { Locale, NotesSortOrder } from "./useSettings";
 import { NotenError } from "../utils/notenError";
+import { blockNoteLifecycle } from "./noteLifecycleGate";
 
 // Shared module-state hoisted so tests can mutate without re-registering mocks.
 const refs = vi.hoisted(() => ({
@@ -1173,6 +1174,52 @@ describe("useAutoSave — cancelDocSave", () => {
 
     await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
     expect(writeMock).not.toHaveBeenCalled();
+  });
+
+  it("does not write a body while a lifecycle transaction quarantines the note", async () => {
+    const release = blockNoteLifecycle(["a"]);
+    try {
+      const { result } = renderAutoSave({ state: makeState({ isDirty: true }) });
+      let ok: boolean | undefined;
+      await act(async () => {
+        ok = await result.current.flushAutoSave();
+      });
+
+      expect(ok).toBe(false);
+      expect(writeMock).not.toHaveBeenCalled();
+      expect(saveNoteMetadataMock).not.toHaveBeenCalled();
+    } finally {
+      release();
+    }
+  });
+
+  it("does not provision a pathless body while lifecycle is quarantined", async () => {
+    const provisionMock = useFileSystemModule.provisionNoteFile as ReturnType<typeof vi.fn>;
+    const release = blockNoteLifecycle(["a"]);
+    try {
+      refs.editorContent = "edit captured during delete";
+      const initial = makeDoc("a", { filePath: "", content: "older", isDirty: true });
+      const { result, setDocs } = renderAutoSave({
+        docs: [initial],
+        state: makeState({ isDirty: true }),
+      });
+
+      let ok: boolean | undefined;
+      await act(async () => {
+        ok = await result.current.flushAutoSave();
+      });
+
+      expect(ok).toBe(false);
+      expect(provisionMock).not.toHaveBeenCalled();
+      const update = setDocs.mock.calls[0]?.[0] as (docs: NoteDoc[]) => NoteDoc[];
+      expect(update([initial])[0]).toMatchObject({
+        content: "edit captured during delete",
+        isDirty: true,
+        filePath: "",
+      });
+    } finally {
+      release();
+    }
   });
 });
 

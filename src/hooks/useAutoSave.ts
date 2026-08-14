@@ -16,6 +16,7 @@ import { logNotenError } from "../utils/crashLog";
 import { markdownEqual } from "../utils/markdownEqual";
 import { normalizeSep } from "../utils/pathUtils";
 import { libraryStore } from "../utils/libraryStore";
+import { isNoteLifecycleBlocked } from "./noteLifecycleGate";
 
 const DEBOUNCE_MS = 1000;
 // Failed provisioning of a pathless doc retries on later edits, but at most
@@ -230,6 +231,7 @@ export function useAutoSave(
     // Snapshots captured before a notes-dir migration point at stale paths.
     if (migrationInProgress) return false;
     if (remoteDeletedDocsRef.current.has(snapshot.docId)) return false;
+    if (isNoteLifecycleBlocked(snapshot.docId)) return false;
 
     const {
       locale: latestLocale,
@@ -288,6 +290,7 @@ export function useAutoSave(
       // waited bails without writing, leaving only the newest content on disk.
       const performBodyWrite = async (): Promise<boolean> => {
         if (remoteDeletedDocsRef.current.has(snapshot.docId)) return false;
+        if (isNoteLifecycleBlocked(snapshot.docId)) return false;
         if (!snapshotIsCurrent(snapshot)) return false;
         markOwnWrite(snapshot.filePath, snapshot.content);
         // The body .md is the single source of truth: a crash or cloud-sync/AV
@@ -591,6 +594,20 @@ export function useAutoSave(
     const target = activeDocRef.current;
     if (!target || target.filePath) return Promise.resolve(false);
     if (remoteDeletedDocsRef.current.has(target.id)) return Promise.resolve(false);
+    if (isNoteLifecycleBlocked(target.id)) {
+      // The editor can switch away while a delete transaction is awaiting I/O.
+      // Preserve a pathless target's live text in canonical memory so a failed
+      // lifecycle leaves a dirty, close-gated note instead of losing the edit.
+      const { state: latestState, tiptapRef: latestEditorRef, setDocs: latestSetDocs } = stateRef.current;
+      const content = getCurrentMarkdown(latestEditorRef);
+      latestState.primeMarkdown(content);
+      latestSetDocs((prev) => prev.map((doc) => (
+        doc.id === target.id && !doc.filePath
+          ? { ...doc, content, isDirty: true }
+          : doc
+      )));
+      return Promise.resolve(false);
+    }
 
     const inFlight = provisioningDocsRef.current.get(target.id);
     if (inFlight) return inFlight;
@@ -623,7 +640,7 @@ export function useAutoSave(
         // arrived while the provision was in flight must win — leaving this
         // write on disk would let the watcher reconcile resurrect the deleted
         // note. Mirrors the re-check doSave does inside its write section.
-        if (remoteDeletedDocsRef.current.has(target.id)) {
+        if (remoteDeletedDocsRef.current.has(target.id) || isNoteLifecycleBlocked(target.id)) {
           markOwnWrite(filePath);
           await tauriFileSystem.remove(filePath).catch(() => {});
           return false;

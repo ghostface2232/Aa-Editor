@@ -851,6 +851,7 @@ export interface PersistenceTransactionContext {
   snapshot: LibrarySnapshot;
   assertCurrent: () => void;
   readNoteMeta: (noteId: string) => Promise<NoteMeta | null>;
+  mergeNoteMeta: (noteId: string, canonical: NoteMeta, disk: NoteMeta | null) => NoteMeta;
   writeNoteMeta: (meta: NoteMeta) => Promise<void>;
   removeNoteMeta: (noteId: string) => Promise<void>;
   finalizeNoteMeta: (
@@ -880,12 +881,16 @@ export type PersistenceTransactionResult<T> =
  * They must not await saveManifest, flushPersistence, saveNoteMetadata, or a
  * nested transaction: those APIs enqueue behind this transaction and waiting
  * for them here would create a self-deadlock.
+ * `afterCommit` is synchronous and runs after generation validation but before
+ * the forced projection write. Its failure is logged without undoing the
+ * already-committed lifecycle transition.
  */
 export function runPersistenceTransaction<T>(
   source: string,
   targetNoteIds: readonly string[],
   operation: (context: PersistenceTransactionContext) => Promise<T>,
   publish: (result: T, directoryGeneration: number) => LibrarySnapshot | null | Promise<LibrarySnapshot | null>,
+  afterCommit?: (result: T, committed: LibrarySnapshot) => undefined,
 ): Promise<PersistenceTransactionResult<T>> {
   if (migrationInProgress) return Promise.resolve({ status: "invalidated" });
   const requested = libraryStore.getSnapshot();
@@ -909,6 +914,7 @@ export function runPersistenceTransaction<T>(
       const intentBaselines = new Map(Array.from(targetIds, (noteId) => [noteId, {
         mutationClock: noteMetadataMutationClocks.get(noteId),
         clock: { ...noteMetadataClock(noteId) },
+        acknowledgedClock: { ...ackedNoteMetadataClock(noteId) },
         pendingGroup: persistState.pendingGroupMembership.get(noteId),
       }]));
       const isCurrent = () => {
@@ -934,6 +940,33 @@ export function runPersistenceTransaction<T>(
           const meta = await readMeta(tauriFileSystem, notesDirectory, noteId);
           assertCurrent();
           return meta;
+        },
+        mergeNoteMeta: (noteId, canonical, disk) => {
+          validateNoteId(noteId);
+          const baseline = intentBaselines.get(noteId)!;
+          const preferCanonical = {
+            title: baseline.clock.title > baseline.acknowledgedClock.title,
+            pinned: baseline.clock.pinned > baseline.acknowledgedClock.pinned,
+            color: baseline.clock.color > baseline.acknowledgedClock.color,
+          };
+          return {
+            ...canonical,
+            ...(disk ?? {}),
+            fileName: preferCanonical.title ? canonical.fileName : (disk?.fileName ?? canonical.fileName),
+            customName: preferCanonical.title
+              ? canonical.customName
+              : (disk ? disk.customName : canonical.customName),
+            createdAt: disk?.createdAt ?? canonical.createdAt,
+            updatedAt: Math.max(canonical.updatedAt, disk?.updatedAt ?? 0),
+            pinned: preferCanonical.pinned ? canonical.pinned : (disk ? disk.pinned : canonical.pinned),
+            color: preferCanonical.color ? canonical.color : (disk ? disk.color : canonical.color),
+            groupId: baseline.pendingGroup
+              ? canonical.groupId
+              : (disk ? (disk.groupId ?? null) : canonical.groupId),
+            groupUpdatedAt: baseline.pendingGroup?.updatedAt
+              ?? disk?.groupUpdatedAt
+              ?? canonical.groupUpdatedAt,
+          };
         },
         writeNoteMeta: async (meta) => {
           validateNoteId(meta.id);
@@ -993,6 +1026,32 @@ export function runPersistenceTransaction<T>(
         || !isCurrent()
       ) {
         return { status: "invalidated" } as const;
+      }
+      try {
+        const callbackResult: unknown = afterCommit?.(result, committed);
+        if (callbackResult !== undefined) {
+          const contractError = new Error("Persistence transaction afterCommit callbacks must be synchronous");
+          void logNotenError(new NotenError(
+            "PERSIST_FAILED",
+            "recoverable",
+            contractError.message,
+            { context: { stage: "persistenceTransaction.afterCommit", source }, cause: contractError },
+          ));
+          if (
+            typeof callbackResult === "object"
+            && callbackResult !== null
+            && "then" in callbackResult
+          ) {
+            void Promise.resolve(callbackResult).catch(() => {});
+          }
+        }
+      } catch (error) {
+        void logNotenError(new NotenError(
+          "PERSIST_FAILED",
+          "recoverable",
+          error instanceof Error ? error.message : String(error),
+          { context: { stage: "persistenceTransaction.afterCommit", source }, cause: error },
+        ));
       }
       for (const finalize of stagedFinalizers) finalize();
       let followupPersisted = false;

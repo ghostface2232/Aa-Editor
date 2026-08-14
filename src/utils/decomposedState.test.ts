@@ -89,6 +89,7 @@ describe("persist/loadDecomposedState round-trip", () => {
       groupId: null,
       createdAt: 500,
       updatedAt: 1500,
+      customName: true,
       pinned: false,
     };
     const group = makeGroup("g-1", { name: "Work", noteIds: [doc.id] });
@@ -118,6 +119,7 @@ describe("persist/loadDecomposedState round-trip", () => {
     expect(loaded.trashedNotes[0].id).toBe(trashed.id);
     expect(loaded.trashedNotes[0].trashedAt).toBe(2000);
     expect(loaded.trashedNotes[0].originalFilePath).toBe(trashed.originalFilePath);
+    expect(loaded.trashedNotes[0].customName).toBe(true);
 
     expect(loaded.groups).toHaveLength(1);
     expect(loaded.groups[0].id).toBe("g-1");

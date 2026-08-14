@@ -8,8 +8,8 @@ export interface NoteDoc {
   content: string;
   createdAt: number;
   updatedAt: number;
-  pinned?: boolean;
   customName?: boolean;
+  pinned?: boolean;
   color?: NoteColorId;
 }
 
@@ -33,6 +33,7 @@ export interface TrashedNote {
   groupId: string | null;
   createdAt: number;
   updatedAt: number;
+  customName?: boolean;
   pinned?: boolean;
   color?: NoteColorId;
 }

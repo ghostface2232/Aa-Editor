@@ -869,6 +869,61 @@ describe("useNotesLoader — saveManifest persistChain", () => {
     expect(persistMock.mock.calls[0][3]).toEqual([]);
   });
 
+  it("runs synchronous post-commit handoff before the forced follow-up write", async () => {
+    const doc = makeDoc("a");
+    libraryStore.seedDirectory("/test-appdata/notes", {
+      docs: [doc],
+      groups: [],
+      trashedNotes: [],
+      activeNoteId: "a",
+    });
+    const order: string[] = [];
+    persistMock.mockImplementationOnce(async () => { order.push("followup"); });
+
+    const transaction = runPersistenceTransaction(
+      "post-commit-order",
+      ["a"],
+      async () => true,
+      () => {
+        order.push("publish");
+        return libraryStore.commit({ docs: [], activeNoteId: null }, "local");
+      },
+      () => {
+        order.push("afterCommit");
+        return undefined;
+      },
+    );
+
+    await expect(transaction).resolves.toMatchObject({ status: "committed" });
+    expect(order).toEqual(["publish", "afterCommit", "followup"]);
+  });
+
+  it("keeps a lifecycle committed when the post-commit handoff throws", async () => {
+    const doc = makeDoc("a");
+    libraryStore.seedDirectory("/test-appdata/notes", {
+      docs: [doc],
+      groups: [],
+      trashedNotes: [],
+      activeNoteId: "a",
+    });
+
+    const transaction = runPersistenceTransaction(
+      "post-commit-error",
+      ["a"],
+      async () => true,
+      () => libraryStore.commit({ docs: [], activeNoteId: null }, "local"),
+      () => { throw new Error("editor handoff failed"); },
+    );
+
+    await expect(transaction).resolves.toEqual({
+      status: "committed",
+      value: true,
+      followupPersisted: true,
+    });
+    expect(persistMock).toHaveBeenCalledTimes(1);
+    expect(libraryStore.getSnapshot().docs).toEqual([]);
+  });
+
   it("invalidates when the directory changes while async publish is pending", async () => {
     const doc = makeDoc("a");
     libraryStore.seedDirectory("/test-appdata/notes", {
@@ -960,6 +1015,99 @@ describe("useNotesLoader — saveManifest persistChain", () => {
     await saveManifest([], null, [], "intent-baseline-followup");
 
     expect((await readMeta(refs.fs!, "/test-appdata/notes", "a"))?.groupId).toBe("g-new");
+  });
+
+  it("merges an unacknowledged canonical field into lifecycle metadata", async () => {
+    const doc = makeDoc("a");
+    libraryStore.seedDirectory("/test-appdata/notes", {
+      docs: [{ ...doc, pinned: true }],
+      groups: [],
+      trashedNotes: [],
+      activeNoteId: "a",
+    });
+    await writeMeta(refs.fs!, "/test-appdata/notes", {
+      version: 2,
+      id: "a",
+      fileName: "Note a",
+      createdAt: 1000,
+      updatedAt: 1000,
+      groupId: null,
+      groupUpdatedAt: 1000,
+      pinned: false,
+      trashedAt: null,
+    }, "test-machine");
+    markNotesPinnedChanged(["a"]);
+
+    const transaction = runPersistenceTransaction(
+      "lifecycle-field-merge",
+      ["a"],
+      async ({ snapshot, readNoteMeta, mergeNoteMeta, writeNoteMeta, finalizeNoteMeta }) => {
+        const current = snapshot.docs[0];
+        const merged = mergeNoteMeta("a", {
+          version: 2,
+          id: "a",
+          fileName: current.fileName,
+          createdAt: current.createdAt,
+          updatedAt: current.updatedAt,
+          groupId: null,
+          groupUpdatedAt: current.updatedAt,
+          pinned: current.pinned === true,
+          trashedAt: 9000,
+        }, await readNoteMeta("a"));
+        await writeNoteMeta(merged);
+        finalizeNoteMeta("a", { acknowledgeFields: { pinned: true } });
+        return merged;
+      },
+      () => libraryStore.getSnapshot(),
+    );
+
+    await expect(transaction).resolves.toMatchObject({
+      status: "committed",
+      value: { pinned: true },
+    });
+    expect((await readMeta(refs.fs!, "/test-appdata/notes", "a"))?.pinned).toBe(true);
+  });
+
+  it("preserves a disk-owned optional field clear during lifecycle merge", async () => {
+    const doc = makeDoc("a");
+    libraryStore.seedDirectory("/test-appdata/notes", {
+      docs: [{ ...doc, color: "red" }],
+      groups: [],
+      trashedNotes: [],
+      activeNoteId: "a",
+    });
+    await writeMeta(refs.fs!, "/test-appdata/notes", {
+      version: 2,
+      id: "a",
+      fileName: "Note a",
+      createdAt: 1000,
+      updatedAt: 1000,
+      groupId: null,
+      groupUpdatedAt: 1000,
+      trashedAt: null,
+    }, "remote-machine");
+
+    const transaction = runPersistenceTransaction(
+      "lifecycle-color-clear",
+      ["a"],
+      async ({ snapshot, readNoteMeta, mergeNoteMeta }) => mergeNoteMeta("a", {
+        version: 2,
+        id: "a",
+        fileName: "Note a",
+        createdAt: 1000,
+        updatedAt: 1000,
+        groupId: null,
+        groupUpdatedAt: 1000,
+        color: snapshot.docs[0].color,
+        trashedAt: 9000,
+      }, await readNoteMeta("a")),
+      () => libraryStore.getSnapshot(),
+    );
+
+    await expect(transaction).resolves.toMatchObject({
+      status: "committed",
+      value: { color: undefined },
+    });
   });
 
   it("reports follow-up persistence debt without undoing a committed lifecycle", async () => {

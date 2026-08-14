@@ -369,6 +369,7 @@ function App() {
     trashedNotes,
     setTrashedNotes,
     setTrashedNotesFromRemote,
+    commitLibraryForGeneration,
     isLoading,
   } = useNotesLoader(
     locale,
@@ -461,6 +462,7 @@ function App() {
     cancelDocSaveRef,
     captureAndQueueSaveRef,
     flushDocSaveRef,
+    commitLibraryForGeneration,
   );
 
   const { scheduleAutoSave, flushAutoSave, hasUnsavedChanges, hasUnsaveableChanges, captureAndQueueSave, awaitInFlightSaves, flushDocSave, flushPendingSnapshots, notifyActiveDoc, cancelDocSave, settleRemoteDeletedDoc } = useAutoSave(

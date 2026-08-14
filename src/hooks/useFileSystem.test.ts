@@ -4,6 +4,7 @@ import type { NoteDoc, NoteGroup, TrashedNote } from "../utils/noteTypes";
 import type { MarkdownState } from "./useMarkdownState";
 import type { TiptapEditorHandle } from "../components/TiptapEditor";
 import { NotenError } from "../utils/notenError";
+import { libraryStore, type LibrarySnapshot, type LibraryUpdater } from "../utils/libraryStore";
 
 // Shared mock state hoisted so any test can flip a fault without re-registering mocks.
 const refs = vi.hoisted(() => ({
@@ -16,6 +17,9 @@ const refs = vi.hoisted(() => ({
   copyFileShouldThrow: null as Error | null,
   editorContent: "",
   uuidCounter: 0,
+  librarySnapshot: null as LibrarySnapshot | null,
+  beforeTransactionPublish: null as (() => void | Promise<void>) | null,
+  afterTransactionPublish: null as (() => void | Promise<void>) | null,
 }));
 
 vi.mock("@tauri-apps/plugin-fs", () => ({
@@ -55,6 +59,59 @@ vi.mock("./useNotesLoader", () => ({
   markNoteTitleChanged: vi.fn(),
   markNotesPinnedChanged: vi.fn(),
   markNotesColorChanged: vi.fn(),
+  runPersistenceTransaction: vi.fn(async (
+    _source: string,
+    _targetIds: readonly string[],
+    operation: (context: unknown) => Promise<unknown>,
+    publish: (result: unknown, generation: number) => Promise<LibrarySnapshot | null> | LibrarySnapshot | null,
+    afterCommit?: (result: unknown, committed: LibrarySnapshot) => undefined,
+  ) => {
+    const snapshot = refs.librarySnapshot;
+    if (!snapshot) return { status: "invalidated" };
+    const metadata = await import("../utils/metadataIO");
+    const result = await operation({
+      notesDirectory: "/notes",
+      directoryGeneration: snapshot.directoryGeneration,
+      snapshot,
+      assertCurrent: () => {},
+      readNoteMeta: (noteId: string) => metadata.readMeta({} as never, "/notes", noteId),
+      mergeNoteMeta: (_noteId: string, canonical: object, disk: object | null) => ({
+        ...(disk ?? {}),
+        ...canonical,
+      }),
+      writeNoteMeta: (meta: unknown) => metadata.writeMeta({} as never, "/notes", meta as never, "test-machine"),
+      removeNoteMeta: (noteId: string) => metadata.removeMeta({} as never, "/notes", noteId, { strict: true }),
+      finalizeNoteMeta: () => {},
+      discardNoteIntents: () => {},
+    });
+    await refs.beforeTransactionPublish?.();
+    if (refs.librarySnapshot) {
+      const { libraryStore } = await import("../utils/libraryStore");
+      const latest = refs.librarySnapshot;
+      libraryStore.commit(() => ({
+        docs: latest.docs,
+        groups: latest.groups,
+        trashedNotes: latest.trashedNotes,
+        activeNoteId: latest.activeNoteId,
+      }), "local");
+    }
+    const committed = await publish(result, snapshot.directoryGeneration);
+    if (committed) afterCommit?.(result, committed);
+    await refs.afterTransactionPublish?.();
+    if (refs.librarySnapshot) {
+      const { libraryStore } = await import("../utils/libraryStore");
+      const latest = refs.librarySnapshot;
+      libraryStore.commit(() => ({
+        docs: latest.docs,
+        groups: latest.groups,
+        trashedNotes: latest.trashedNotes,
+        activeNoteId: latest.activeNoteId,
+      }), "local");
+    }
+    return committed
+      ? { status: "committed", value: result, followupPersisted: true }
+      : { status: "invalidated" };
+  }),
 }));
 
 vi.mock("../utils/fs", () => ({
@@ -189,6 +246,38 @@ function renderFs(opts: RenderOpts = {}) {
   const setActiveIndex = vi.fn();
   const setGroups = vi.fn();
   const setTrashedNotes = vi.fn();
+  const initialSnapshot = libraryStore.seedDirectory("/notes", {
+    docs,
+    groups: opts.groups ?? [],
+    trashedNotes: opts.trashedNotes ?? [],
+    activeNoteId: docs[opts.activeIndex ?? 0]?.id ?? null,
+  }, "hydrate");
+  refs.librarySnapshot = initialSnapshot;
+  const commitLibraryForGeneration = vi.fn((
+    directoryGeneration: number,
+    update: LibraryUpdater,
+  ): LibrarySnapshot | null => {
+    const current = refs.librarySnapshot!;
+    if (current.directoryGeneration !== directoryGeneration) return null;
+    const patch = update(current);
+    if (!patch) return current;
+    const nextDocs = patch.docs ?? current.docs;
+    const nextGroups = patch.groups ?? current.groups;
+    const nextTrash = patch.trashedNotes ?? current.trashedNotes;
+    const activeNoteId = patch.activeNoteId === undefined ? current.activeNoteId : patch.activeNoteId;
+    const committed = libraryStore.commit(() => ({
+      docs: nextDocs,
+      groups: nextGroups,
+      trashedNotes: nextTrash,
+      activeNoteId,
+    }), "local");
+    refs.librarySnapshot = committed;
+    setDocs([...committed.docs]);
+    setGroups(committed.groups.map((group) => ({ ...group, noteIds: [...group.noteIds] })));
+    setTrashedNotes([...committed.trashedNotes]);
+    setActiveIndex(committed.activeNoteId ? Math.max(committed.docs.findIndex((doc) => doc.id === committed.activeNoteId), 0) : 0);
+    return committed;
+  });
   const flushAutoSave = vi.fn(async () => !state.isDirty);
   const flushAutoSaveRef = { current: flushAutoSave };
   const notifyActiveDoc = vi.fn();
@@ -230,6 +319,7 @@ function renderFs(opts: RenderOpts = {}) {
       cancelDocSaveRef,
       undefined,
       flushDocSaveRef,
+      commitLibraryForGeneration,
     ),
   );
 
@@ -243,6 +333,7 @@ function renderFs(opts: RenderOpts = {}) {
     notifyActiveDoc,
     cancelDocSave,
     flushDocSave,
+    commitLibraryForGeneration,
     openDocument,
     invalidateDocumentSession,
     focusEditor,
@@ -258,6 +349,8 @@ beforeEach(() => {
   refs.copyFileShouldThrow = null;
   refs.editorContent = "";
   refs.uuidCounter = 0;
+  refs.beforeTransactionPublish = null;
+  refs.afterTransactionPublish = null;
 });
 
 afterEach(() => {
@@ -566,7 +659,32 @@ describe("useFileSystem — deleteNotes meta-first ordering", () => {
       await result.current.deleteNote(0);
     });
 
-    expect(removeMetaMock).toHaveBeenCalledWith(expect.anything(), expect.any(String), "a");
+    expect(removeMetaMock).toHaveBeenCalledWith(expect.anything(), expect.any(String), "a", { strict: true });
+    warnSpy.mockRestore();
+  });
+
+  it("keeps the root body and commits deletion-wins when meta rollback fails", async () => {
+    refs.copyFileShouldThrow = new Error("EACCES");
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    readMetaMock.mockResolvedValueOnce({
+      version: 2, id: "a", fileName: "previous", createdAt: 1, updatedAt: 1,
+      groupId: null, trashedAt: null,
+    });
+    writeMetaMock
+      .mockResolvedValueOnce("")
+      .mockRejectedValueOnce(new Error("rollback EPERM"));
+    const removeBodyMock = fsPlugin.remove as ReturnType<typeof vi.fn>;
+    const { result, setDocs } = renderFs({ docs: [makeDoc("a"), makeDoc("b")], activeIndex: 1 });
+
+    let deleted: string[] = [];
+    await act(async () => {
+      deleted = await result.current.deleteNote(0);
+    });
+
+    expect(deleted).toEqual(["a"]);
+    expect(removeBodyMock).not.toHaveBeenCalledWith("/notes/a.md");
+    expect(setDocs).toHaveBeenCalledWith([expect.objectContaining({ id: "b" })]);
+    expect(logMock).toHaveBeenCalledWith(expect.objectContaining({ code: "PERSIST_FAILED" }));
     warnSpy.mockRestore();
   });
 });
@@ -587,13 +705,32 @@ describe("useFileSystem — deleteNote cancels pending autosave", () => {
 });
 
 describe("useFileSystem — deleteNote flushes in-flight save", () => {
+  it("skips an active target when its final editor flush fails", async () => {
+    const state = makeState({ isDirty: true });
+    const { result } = renderFs({
+      docs: [makeDoc("a"), makeDoc("b")],
+      activeIndex: 0,
+      state,
+      flushDocSave: vi.fn(async () => true),
+    });
+
+    let deleted: string[] = [];
+    await act(async () => {
+      deleted = await result.current.deleteNote(0);
+    });
+
+    expect(deleted).toEqual([]);
+    expect(copyFileMock).not.toHaveBeenCalled();
+  });
+
   it("flushes the deleted doc's background save before copying it to trash", async () => {
     let releaseSave: (saved: boolean) => void = () => {};
-    const flushDocSave = vi.fn(
-      () => new Promise<boolean>((resolve) => {
+    const flushDocSave = vi.fn(() => {
+      if (flushDocSave.mock.calls.length > 1) return Promise.resolve(true);
+      return new Promise<boolean>((resolve) => {
         releaseSave = resolve;
-      }),
-    );
+      });
+    });
     const docA = makeDoc("a", { content: "new body" });
     const docB = makeDoc("b");
     const { result } = renderFs({
@@ -637,6 +774,163 @@ describe("useFileSystem — deleteNote flushes in-flight save", () => {
     expect(flushDocSave).toHaveBeenCalledWith("a");
     expect(cancelDocSave).not.toHaveBeenCalled();
     expect(copyFileMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("useFileSystem — deleteNotes publish-time state", () => {
+  it("hands off the editor when the active note changes to a target during I/O", async () => {
+    const a = makeDoc("a");
+    const b = makeDoc("b");
+    const { result, openDocument, notifyActiveDoc } = renderFs({
+      docs: [a, b],
+      activeIndex: 1,
+    });
+    refs.beforeTransactionPublish = () => {
+      refs.librarySnapshot = { ...refs.librarySnapshot!, activeNoteId: "a", revision: 2 };
+    };
+
+    await act(async () => {
+      await result.current.deleteNote(0);
+    });
+
+    expect(openDocument).toHaveBeenCalledWith(expect.objectContaining({ noteId: "b" }));
+    expect(notifyActiveDoc).toHaveBeenCalledWith("b", "/notes/b.md");
+  });
+
+  it("keeps a prepared replacement managed if another note appears before publish", async () => {
+    const a = makeDoc("a");
+    const remote = makeDoc("remote");
+    const { result, setDocs } = renderFs({ docs: [a] });
+    refs.beforeTransactionPublish = () => {
+      refs.librarySnapshot = {
+        ...refs.librarySnapshot!,
+        docs: [a, remote],
+        activeNoteId: "remote",
+        revision: 2,
+      };
+    };
+
+    await act(async () => {
+      await result.current.deleteNote(0);
+    });
+
+    const committed = setDocs.mock.calls[setDocs.mock.calls.length - 1]?.[0] as NoteDoc[];
+    expect(committed.map((doc) => doc.id).sort()).toEqual(["remote", "uuid-1"]);
+  });
+
+  it("drops a failed replacement if another managed note appears before publish", async () => {
+    const a = makeDoc("a");
+    const remote = makeDoc("remote");
+    refs.writeFaultByPath.set("/notes/uuid-1.md", new Error("EACCES"));
+    const { result, setDocs } = renderFs({ docs: [a] });
+    refs.beforeTransactionPublish = () => {
+      refs.librarySnapshot = {
+        ...refs.librarySnapshot!,
+        docs: [a, remote],
+        activeNoteId: "remote",
+        revision: 2,
+      };
+    };
+
+    await act(async () => {
+      await result.current.deleteNote(0);
+    });
+
+    const committed = setDocs.mock.calls[setDocs.mock.calls.length - 1]?.[0] as NoteDoc[];
+    expect(committed.map((doc) => doc.id)).toEqual(["remote"]);
+  });
+
+  it("atomically reserves a pathless replacement if the last survivor disappears before publish", async () => {
+    const a = makeDoc("a");
+    const b = makeDoc("b");
+    const { result, setDocs, commitLibraryForGeneration } = renderFs({ docs: [a, b], activeIndex: 0 });
+    refs.beforeTransactionPublish = () => {
+      refs.librarySnapshot = {
+        ...refs.librarySnapshot!,
+        docs: [a],
+        activeNoteId: "a",
+        revision: refs.librarySnapshot!.revision + 1,
+      };
+    };
+
+    await act(async () => {
+      await result.current.deleteNote(0);
+    });
+
+    expect(commitLibraryForGeneration).toHaveBeenCalledTimes(1);
+    const committed = setDocs.mock.calls[setDocs.mock.calls.length - 1]?.[0] as NoteDoc[];
+    expect(committed).toHaveLength(1);
+    expect(committed[0]).toMatchObject({ id: "uuid-1", filePath: "", isDirty: true });
+  });
+
+  it("hands off before follow-up persistence and does not rewind after a later active change", async () => {
+    const a = makeDoc("a");
+    const b = makeDoc("b");
+    const c = makeDoc("c");
+    const { result, openDocument, notifyActiveDoc } = renderFs({ docs: [a, b, c], activeIndex: 0 });
+    refs.afterTransactionPublish = () => {
+      expect(openDocument).toHaveBeenCalledWith(expect.objectContaining({ noteId: "b" }));
+      expect(notifyActiveDoc).toHaveBeenCalledWith("b", "/notes/b.md");
+      refs.librarySnapshot = { ...refs.librarySnapshot!, activeNoteId: "c", revision: 3 };
+    };
+
+    await act(async () => {
+      await result.current.deleteNote(0);
+    });
+
+    expect(openDocument).toHaveBeenCalledTimes(1);
+    expect(notifyActiveDoc).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not broadcast a replacement removed during follow-up persistence", async () => {
+    const a = makeDoc("a");
+    const { result } = renderFs({ docs: [a] });
+    refs.afterTransactionPublish = () => {
+      refs.librarySnapshot = {
+        ...refs.librarySnapshot!,
+        docs: [],
+        activeNoteId: null,
+        revision: refs.librarySnapshot!.revision + 1,
+      };
+    };
+
+    await act(async () => {
+      await result.current.deleteNote(0);
+    });
+
+    expect(emitDocCreatedMock).not.toHaveBeenCalled();
+  });
+
+  it("rechecks each target after quarantine and preserves one with crossed save work", async () => {
+    const calls = new Map<string, number>();
+    const flushDocSave = vi.fn(async (id: string) => {
+      const count = (calls.get(id) ?? 0) + 1;
+      calls.set(id, count);
+      return !(id === "a" && count === 2);
+    });
+    const { result } = renderFs({
+      docs: [makeDoc("a"), makeDoc("b"), makeDoc("c")],
+      activeIndex: 2,
+      flushDocSave,
+    });
+
+    let deleted: string[] = [];
+    await act(async () => {
+      deleted = await result.current.deleteNotes(["a", "b"]);
+    });
+
+    expect(deleted).toEqual(["b"]);
+    expect(copyFileMock).toHaveBeenCalledWith("/notes/b.md", "/notes/.trash/b.md");
+    expect(copyFileMock).not.toHaveBeenCalledWith("/notes/a.md", expect.any(String));
+    expect(flushDocSave).toHaveBeenCalledTimes(5);
+  });
+
+  it("normalizes a trash-directory failure to an empty delete result", async () => {
+    const mkdirMock = fsPlugin.mkdir as ReturnType<typeof vi.fn>;
+    mkdirMock.mockRejectedValueOnce(new Error("EPERM"));
+    const { result } = renderFs({ docs: [makeDoc("a"), makeDoc("b")], activeIndex: 1 });
+
+    await expect(result.current.deleteNote(0)).resolves.toEqual([]);
   });
 });
 
@@ -909,6 +1203,7 @@ describe("useFileSystem — restoreNote meta-first ordering", () => {
       groupId: null,
       createdAt: 1000,
       updatedAt: 1500,
+      customName: true,
       pinned: false,
       color: undefined,
     };
@@ -920,7 +1215,7 @@ describe("useFileSystem — restoreNote meta-first ordering", () => {
     });
     copyFileMock.mockImplementationOnce(async () => { callOrder.push("copyFile"); });
 
-    const { result } = renderFs({ docs: [makeDoc("a")], trashedNotes: [trashed] });
+    const { result, setDocs } = renderFs({ docs: [makeDoc("a")], trashedNotes: [trashed] });
     await act(async () => {
       await result.current.restoreNote("t1");
     });
@@ -930,6 +1225,8 @@ describe("useFileSystem — restoreNote meta-first ordering", () => {
     expect(metaIdx).toBeGreaterThanOrEqual(0);
     expect(copyIdx).toBeGreaterThanOrEqual(0);
     expect(metaIdx).toBeLessThan(copyIdx);
+    const restoredDocs = setDocs.mock.calls[setDocs.mock.calls.length - 1]?.[0] as NoteDoc[];
+    expect(restoredDocs.find((doc) => doc.id === "t1")?.customName).toBe(true);
   });
 });
 
