@@ -37,6 +37,7 @@ import {
   type LibraryCommitOrigin,
   type LibraryCommitToken,
   type LibraryData,
+  type LibraryPatch,
   type LibrarySnapshot,
   type LibraryUpdater,
 } from "../utils/libraryStore";
@@ -87,6 +88,14 @@ export function setTrashedNotesCache(notes: TrashedNote[]) { trashedNotesCache =
 /** Blocks public persistence while the notes directory is moving or reloading. */
 export let migrationInProgress = false;
 export function setMigrationInProgress(v: boolean) { migrationInProgress = v; }
+
+// Held by the loader while a hydration epoch is in flight. Until it drops the
+// store holds a manifest-cache projection and the write snapshots are unseeded,
+// so a full-library persist would rewrite every sidecar from stale cache values
+// (trashedAt: null included). Distinct from migrationInProgress because a
+// migration deliberately enqueues its persistence barrier BEFORE raising that
+// guard and still expects the barrier to write.
+let hydrationInProgress = false;
 
 // Single bundle of diff caches and pending writes. External helpers below
 // (markGroupAsDeleted etc.) mutate this bundle so callers in useFileSystem,
@@ -225,6 +234,54 @@ export function sortNotes(docs: NoteDoc[], order: NotesSortOrder, locale: Locale
   });
 
   return sorted;
+}
+
+/**
+ * Rebase a hydration result onto whatever the store holds now. Hydration is
+ * generation-bound, not revision-bound: a peer window's doc-updated /
+ * doc-created / groups event, or App's own projection effects, may commit
+ * while the disk load is in flight, and aborting on that would leave the
+ * manifest-cache projection (empty bodies) as the canonical library. Disk
+ * wins for metadata, groups, trash, and active identity; a peer body that is
+ * newer than the disk read survives, and a doc the loader never seeded (a
+ * peer-created note) is kept rather than dropped.
+ */
+export function mergeHydratedLibrary(
+  current: LibrarySnapshot,
+  hydrated: LibraryData,
+  loaderSeededIds: ReadonlySet<string>,
+  order: NotesSortOrder,
+  locale: Locale,
+): LibraryPatch {
+  const liveById = new Map(current.docs.map((doc) => [doc.id, doc]));
+  const docs: NoteDoc[] = hydrated.docs.map((doc) => {
+    const live = liveById.get(doc.id);
+    if (
+      !live
+      || live.content === ""
+      || live.content === doc.content
+      || live.updatedAt <= doc.updatedAt
+    ) return doc;
+    return { ...doc, content: live.content, updatedAt: live.updatedAt };
+  });
+  const hydratedIds = new Set(hydrated.docs.map((doc) => doc.id));
+  for (const live of current.docs) {
+    if (hydratedIds.has(live.id) || loaderSeededIds.has(live.id)) continue;
+    docs.push(live);
+  }
+  const sorted = sortNotes(docs, order, locale);
+  const has = (id: string | null) => id != null && sorted.some((doc) => doc.id === id);
+  const activeNoteId = has(hydrated.activeNoteId)
+    ? hydrated.activeNoteId
+    : has(current.activeNoteId)
+      ? current.activeNoteId
+      : (sorted[0]?.id ?? null);
+  return {
+    docs: sorted,
+    groups: hydrated.groups,
+    trashedNotes: hydrated.trashedNotes,
+    activeNoteId,
+  };
 }
 
 /** The app-data fallback directory, without touching the active-dir cache. */
@@ -736,6 +793,7 @@ async function persistLatestLibrarySnapshot(
   request: LibraryPersistenceRequest,
   options?: { force?: boolean },
 ): Promise<boolean> {
+  if (hydrationInProgress) return false;
   const latest = libraryStore.getSnapshot();
   if (
     latest.notesDirectory == null
@@ -809,6 +867,10 @@ export async function saveManifest(
 /** Drain all metadata work through a stable canonical library revision. */
 export async function flushPersistence(source = "flushPersistence"): Promise<void> {
   while (true) {
+    // A projection mid-hydration is not user state; the loader persists the
+    // hydrated library itself once it lands. Waiting here would tie a window
+    // close to cloud-folder I/O, and writing would clobber peer sidecars.
+    if (hydrationInProgress) return;
     const requested = libraryStore.getSnapshot();
     if (requested.notesDirectory == null) {
       // An empty, unbound store has nothing durable to flush. Never turn a
@@ -834,6 +896,8 @@ export async function flushPersistence(source = "flushPersistence"): Promise<voi
       directoryGeneration: requested.directoryGeneration,
       source,
     });
+    // A reload that started while the barrier was queued skipped the write.
+    if (hydrationInProgress) return;
     const after = libraryStore.getSnapshot();
     if (
       after.directoryGeneration === persistedLibraryGeneration
@@ -1379,14 +1443,19 @@ export function useNotesLoader(
     }
   }, [reloadKey]);
 
+  // Deps are deliberately limited to enabled/reloadKey: locale and sort order
+  // are read once at load start, and re-running on their change would tear
+  // down an in-flight load (the cleanup below) without restarting it.
   useEffect(() => {
     if (!enabled || initialized.current) return;
     initialized.current = true;
     let effectActive = true;
+    let finished = false;
 
     (async () => {
       // Keep autosave out while load/reload paths touch multiple disk files.
       setMigrationInProgress(true);
+      hydrationInProgress = true;
       // Snapshot of the best valid state we've reached so far. If a later
       // step throws, the outer catch falls back to this instead of nuking
       // the user's visible notes down to a single blank stub. On reload,
@@ -1395,7 +1464,20 @@ export function useNotesLoader(
       let safeDocs: NoteDoc[] | null = docs.length > 0 ? docs : null;
       let safeGroups: NoteGroup[] | null = docs.length > 0 ? groups : null;
       let safeActiveId: string | null = docs[activeIndex]?.id ?? null;
-      let hydrationToken: LibraryCommitToken | null = null;
+      let hydrationGeneration: number | null = null;
+      // Every doc id the loader itself put in the store this epoch. A doc the
+      // store holds outside this set was created by a peer while we loaded and
+      // must survive the final commit; one inside it is a projection entry
+      // that the disk result replaces or drops.
+      const seededIds = new Set<string>();
+      const commitHydration = (data: LibraryData) => {
+        if (hydrationGeneration == null) return null;
+        return commitLibraryForGeneration(
+          hydrationGeneration,
+          (current) => mergeHydratedLibrary(current, data, seededIds, notesSortOrder, locale),
+          "hydrate",
+        );
+      };
       try {
         await getMachineId();
         await loadUiState();
@@ -1403,18 +1485,16 @@ export function useNotesLoader(
         const dir = await ensureNotesDir();
         await ensureSharedDirs(tauriFileSystem, dir);
         // Start a new hydration epoch before any cache projection is exposed.
-        // Async work captured for an older load can no longer commit through a
-        // token after this point, even when the directory path is unchanged.
+        // Async work captured for an older load can no longer commit into this
+        // generation, even when the directory path is unchanged.
         const seeded = libraryStore.seedDirectory(dir, {
           docs: safeDocs ?? [],
           groups: safeGroups ?? [],
           trashedNotes: trashedNotesCache,
           activeNoteId: safeActiveId,
         }, "hydrate");
-        hydrationToken = {
-          revision: seeded.revision,
-          directoryGeneration: seeded.directoryGeneration,
-        };
+        hydrationGeneration = seeded.directoryGeneration;
+        for (const doc of seeded.docs) seededIds.add(doc.id);
 
         const cache = await readLocalCache(dir);
         if (cache && cache.notes.length > 0) {
@@ -1423,16 +1503,15 @@ export function useNotesLoader(
             isDirty: false,
             content: "",
           } as NoteDoc));
-          const cached = libraryStore.commitIfCurrent(hydrationToken, {
-            docs: sortNotes(cachedDocs, notesSortOrder, locale),
-            ...(cache.groups ? { groups: cache.groups } : {}),
-          }, "hydrate");
+          for (const doc of cachedDocs) seededIds.add(doc.id);
+          const before = libraryStore.getSnapshot();
+          const cached = commitHydration({
+            docs: cachedDocs,
+            groups: cache.groups ?? before.groups,
+            trashedNotes: before.trashedNotes,
+            activeNoteId: getUiStateCached().activeNoteId ?? before.activeNoteId,
+          });
           if (!cached || !effectActive) return;
-          hydrationToken = {
-            revision: cached.revision,
-            directoryGeneration: cached.directoryGeneration,
-          };
-          syncAllReactState(cached);
           safeDocs = cachedDocs;
           safeGroups = cache.groups ?? [];
           safeActiveId = getUiStateCached().activeNoteId ?? null;
@@ -1477,15 +1556,12 @@ export function useNotesLoader(
 
         const purgedTrashed = await purgeExpiredTrash(state.trashedNotes);
         const trashChanged = purgedTrashed.length !== state.trashedNotes.length;
-        const withTrash = libraryStore.commitIfCurrent(hydrationToken, {
-          trashedNotes: purgedTrashed,
-        }, "hydrate");
+        const withTrash = commitLibraryForGeneration(
+          hydrationGeneration,
+          () => ({ trashedNotes: purgedTrashed }),
+          "hydrate",
+        );
         if (!withTrash || !effectActive) return;
-        hydrationToken = {
-          revision: withTrash.revision,
-          directoryGeneration: withTrash.directoryGeneration,
-        };
-        syncAllReactState(withTrash);
 
         let reconciled: NoteDoc[];
         let reconciledGroups: NoteGroup[];
@@ -1540,12 +1616,12 @@ export function useNotesLoader(
         const activeId = state.activeNoteId && sorted.some((d) => d.id === state.activeNoteId)
           ? state.activeNoteId
           : sorted[0]?.id ?? null;
-        const committed = commitWholeLibrary({
+        const committed = commitHydration({
           docs: sorted,
           groups: finalGroups,
           trashedNotes: purgedTrashed,
           activeNoteId: activeId,
-        }, "hydrate", hydrationToken);
+        });
         if (!committed || !effectActive) return;
 
         safeDocs = sorted;
@@ -1553,14 +1629,20 @@ export function useNotesLoader(
         safeActiveId = activeId;
 
         // The loader owns the migration guard, so use the ungated writer here.
+        // Persist the merged canonical result, not the pre-merge arrays.
         if (reconcileChanged || trashChanged) {
-          await persistDecomposedState(sorted, activeId, finalGroups).catch(() => {});
+          const activeNoteId = committed.activeNoteId;
+          await persistDecomposedState(
+            committed.docs.map((doc) => ({ ...doc })),
+            activeNoteId,
+            committed.groups.map((group) => ({ ...group, noteIds: [...group.noteIds] })),
+          ).catch(() => {});
         } else {
           const cachePath = await getLocalCachePath();
           await writeLocalCacheImpl(tauriFileSystem, cachePath, {
             version: 2,
             notesDirectory: dir,
-            notes: sorted.map(({ id, filePath, fileName, createdAt, updatedAt, customName, pinned, color }) => ({
+            notes: committed.docs.map(({ id, filePath, fileName, createdAt, updatedAt, customName, pinned, color }) => ({
               id, filePath, fileName, createdAt, updatedAt,
               ...(customName ? { customName } : {}),
               ...(pinned ? { pinned } : {}),
@@ -1574,11 +1656,8 @@ export function useNotesLoader(
       } catch (err) {
         if (!effectActive) return;
         if (
-          hydrationToken != null
-          && (
-            libraryStore.getSnapshot().revision !== hydrationToken.revision
-            || libraryStore.getSnapshot().directoryGeneration !== hydrationToken.directoryGeneration
-          )
+          hydrationGeneration != null
+          && libraryStore.getSnapshot().directoryGeneration !== hydrationGeneration
         ) return;
         if (import.meta.env.DEV) {
           console.warn("Notes loader failed:", err);
@@ -1587,20 +1666,21 @@ export function useNotesLoader(
         // fallback when we have nothing — wiping a populated list to a
         // single blank note loses the user's notes visually even though
         // they are still on disk.
+        let fallback: LibraryData;
         if (safeDocs && safeDocs.length > 0) {
           const sorted = sortNotes(safeDocs, notesSortOrder, locale);
           const idx = safeActiveId
             ? Math.max(sorted.findIndex((d) => d.id === safeActiveId), 0)
             : 0;
-          commitWholeLibrary({
+          fallback = {
             docs: sorted,
             groups: safeGroups ?? [],
             trashedNotes: trashedNotesCache,
             activeNoteId: sorted[idx]?.id ?? null,
-          }, "hydrate", hydrationToken ?? undefined);
+          };
         } else {
           const timestamp = Date.now();
-          const fallback: NoteDoc = {
+          const stub: NoteDoc = {
             // A fresh id per stub: a fixed sentinel could collide with a note
             // another window/session persisted after provisioning ITS stub,
             // reopening the remote-deletion race for that id.
@@ -1612,15 +1692,20 @@ export function useNotesLoader(
             createdAt: timestamp,
             updatedAt: timestamp,
           };
-          commitWholeLibrary({
-            docs: [fallback],
+          fallback = {
+            docs: [stub],
             groups: [],
             trashedNotes: trashedNotesCache,
-            activeNoteId: fallback.id,
-          }, "hydrate", hydrationToken ?? undefined);
+            activeNoteId: stub.id,
+          };
         }
+        if (hydrationGeneration == null) commitWholeLibrary(fallback, "hydrate");
+        else commitHydration(fallback);
       } finally {
+        finished = true;
+        // A torn-down load must not drop the flags a newer load has raised.
         if (effectActive) {
+          hydrationInProgress = false;
           setMigrationInProgress(false);
           setIsLoading(false);
         }
@@ -1628,9 +1713,13 @@ export function useNotesLoader(
     })();
     return () => {
       effectActive = false;
+      hydrationInProgress = false;
       setMigrationInProgress(false);
+      // A load torn down mid-flight (unmount, StrictMode replay) must be
+      // restartable by the next effect run; a finished one stays initialized.
+      if (!finished) initialized.current = false;
     };
-  }, [enabled, locale, notesSortOrder, reloadKey, commitWholeLibrary, syncAllReactState]);
+  }, [enabled, reloadKey, commitLibraryForGeneration, commitWholeLibrary]);
 
   return {
     docs,

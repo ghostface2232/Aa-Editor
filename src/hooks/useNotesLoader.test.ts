@@ -437,7 +437,7 @@ describe("useNotesLoader — canonical library store adapter", () => {
     expect(libraryStore.getSnapshot().docs.map((doc) => doc.id)).toEqual(["b"]);
   });
 
-  it("aborts final hydration when remote state commits in the same generation", async () => {
+  it("rebases final hydration onto remote state committed in the same generation", async () => {
     let releaseReconcile!: () => void;
     refs.reconcileGate = new Promise<void>((resolve) => { releaseReconcile = resolve; });
     const a = makeDoc("a");
@@ -446,9 +446,15 @@ describe("useNotesLoader — canonical library store adapter", () => {
     const { result } = renderHook(() => useNotesLoader("en", "updated-desc"));
     await waitFor(() => expect(reconcileFolderModule.reconcileFolder).toHaveBeenCalledTimes(1));
     const generation = libraryStore.getSnapshot().directoryGeneration;
-    const remote = makeDoc("remote");
+    const remote = { ...makeDoc("remote"), content: "peer body" };
 
-    act(() => result.current.setDocsFromRemote((prev) => [...prev, remote]));
+    // A peer created a note and pushed a body for "a" newer than our disk read
+    // while we loaded (no cache projection here, so "a" arrives via the peer).
+    act(() => result.current.setDocsFromRemote((prev) => [
+      ...prev,
+      { ...a, content: "peer-a", updatedAt: a.updatedAt + 5000 },
+      remote,
+    ]));
     expect(libraryStore.getSnapshot()).toMatchObject({ origin: "remote", directoryGeneration: generation });
 
     await act(async () => {
@@ -457,8 +463,67 @@ describe("useNotesLoader — canonical library store adapter", () => {
     });
     await waitFor(() => expect(result.current.isLoading).toBe(false), { timeout: 2000 });
 
-    expect(libraryStore.getSnapshot().origin).toBe("remote");
-    expect(libraryStore.getSnapshot().docs.some((doc) => doc.id === "remote")).toBe(true);
+    // Hydration still lands (the store must not be left at the projection),
+    // the peer-created note survives, and the peer's newer body wins.
+    const snapshot = libraryStore.getSnapshot();
+    expect(snapshot.origin).toBe("hydrate");
+    expect(snapshot.directoryGeneration).toBe(generation);
+    expect(snapshot.docs.map((doc) => doc.id).sort()).toEqual(["a", "remote"]);
+    expect(snapshot.docs.find((doc) => doc.id === "a")?.content).toBe("peer-a");
+    expect(snapshot.docs.find((doc) => doc.id === "remote")?.content).toBe("peer body");
+    expect(result.current.docs.map((doc) => doc.id).sort()).toEqual(["a", "remote"]);
+  });
+
+  it("does not persist or flush the cache projection while hydration is in flight", async () => {
+    let releaseReconcile!: () => void;
+    refs.reconcileGate = new Promise<void>((resolve) => { releaseReconcile = resolve; });
+    const a = makeDoc("a");
+    refs.fs!.seedTextFile(a.filePath, "body-a");
+    refs.decomposedDocs = [a];
+    const { result } = renderHook(() => useNotesLoader("en", "updated-desc"));
+    await waitFor(() => expect(reconcileFolderModule.reconcileFolder).toHaveBeenCalledTimes(1));
+    const persistCallsBefore = persistMock.mock.calls.length;
+
+    // A close-time flush (or a peer migration barrier) mid-hydration must not
+    // rewrite sidecars from the projection, and must not hang on the load.
+    await act(async () => {
+      await flushPersistence("close");
+    });
+    expect(persistMock.mock.calls.length).toBe(persistCallsBefore);
+
+    await act(async () => {
+      releaseReconcile();
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(result.current.isLoading).toBe(false), { timeout: 2000 });
+    act(() => result.current.setDocs((prev) => prev.map((doc) => ({ ...doc, pinned: true }))));
+    await act(async () => {
+      await flushPersistence("after-load");
+    });
+    expect(persistMock.mock.calls.length).toBeGreaterThan(persistCallsBefore);
+  });
+
+  it("restarts a load torn down mid-flight instead of leaving isLoading stuck", async () => {
+    let releaseReconcile!: () => void;
+    refs.reconcileGate = new Promise<void>((resolve) => { releaseReconcile = resolve; });
+    const a = makeDoc("a");
+    refs.fs!.seedTextFile(a.filePath, "body-a");
+    refs.decomposedDocs = [a];
+    const { result, rerender } = renderHook(
+      ({ locale }: { locale: "en" | "ko" }) => useNotesLoader(locale, "updated-desc"),
+      { initialProps: { locale: "en" as "en" | "ko" } },
+    );
+    await waitFor(() => expect(reconcileFolderModule.reconcileFolder).toHaveBeenCalledTimes(1));
+
+    // A locale change during the load must not tear the load down.
+    act(() => rerender({ locale: "ko" }));
+    await act(async () => {
+      releaseReconcile();
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(result.current.isLoading).toBe(false), { timeout: 2000 });
+    expect(reconcileFolderModule.reconcileFolder).toHaveBeenCalledTimes(1);
+    expect(libraryStore.getSnapshot().docs.map((doc) => doc.id)).toEqual(["a"]);
   });
 
   it("preserves canonical state when a directory migration rolls back without reload", async () => {

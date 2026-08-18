@@ -177,6 +177,34 @@ describe("contract: notes directory setting commits after copy, before source cl
   });
 });
 
+describe("contract: hydration is generation-bound and pauses full persistence", () => {
+  // Regression class: the loader effect used to gate its commits on strict
+  // revision equality and re-run on locale/sort changes. A peer window's
+  // commit mid-load then left the manifest-cache projection (empty bodies)
+  // canonical, and a mid-load dep change tore the load down without restart.
+  const LOADER = resolve(SRC_ROOT, "hooks/useNotesLoader.ts");
+
+  it("hydration commits rebase through mergeHydratedLibrary, never commitIfCurrent", () => {
+    const text = read(LOADER);
+    const effect = text.match(/if \(!enabled \|\| initialized\.current\) return;[\s\S]*?\n  \}, \[[^\]]*\]\);/)?.[0];
+    expect(effect, "load effect not found").toBeDefined();
+    expect(effect).not.toContain("commitIfCurrent(");
+    expect(effect).toContain("mergeHydratedLibrary(current, data, seededIds");
+    expect(effect).toMatch(/\}, \[enabled, reloadKey, commitLibraryForGeneration, commitWholeLibrary\]\);$/);
+    expect(effect).toContain("if (!finished) initialized.current = false;");
+  });
+
+  it("flushPersistence and the persist job stay no-ops while hydrationInProgress", () => {
+    const text = read(LOADER);
+    const flush = text.match(/export async function flushPersistence[\s\S]*?\n\}/)?.[0];
+    const persist = text.match(/async function persistLatestLibrarySnapshot[\s\S]*?\n\}/)?.[0];
+    expect(flush).toBeDefined();
+    expect(persist).toBeDefined();
+    expect(flush).toContain("if (hydrationInProgress) return;");
+    expect(persist).toContain("if (hydrationInProgress) return false;");
+  });
+});
+
 describe("contract: autosave failures remain flushable", () => {
   // Regression class: failed debounced saves must not clear all pending state
   // before the write result is known. Otherwise a later flush can observe a
