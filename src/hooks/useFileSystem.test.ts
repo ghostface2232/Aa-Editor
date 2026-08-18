@@ -5,6 +5,7 @@ import type { MarkdownState } from "./useMarkdownState";
 import type { TiptapEditorHandle } from "../components/TiptapEditor";
 import { NotenError } from "../utils/notenError";
 import { libraryStore, type LibrarySnapshot, type LibraryUpdater } from "../utils/libraryStore";
+import type { NoteMeta } from "../utils/metadataIO";
 
 // Shared mock state hoisted so any test can flip a fault without re-registering mocks.
 const refs = vi.hoisted(() => ({
@@ -69,6 +70,8 @@ vi.mock("./useNotesLoader", () => ({
     const snapshot = refs.librarySnapshot;
     if (!snapshot) return { status: "invalidated" };
     const metadata = await import("../utils/metadataIO");
+    // Like the real coordinator, an operation failure rejects the transaction;
+    // callers must fail closed themselves.
     const result = await operation({
       notesDirectory: "/notes",
       directoryGeneration: snapshot.directoryGeneration,
@@ -96,7 +99,9 @@ vi.mock("./useNotesLoader", () => ({
       }), "local");
     }
     const committed = await publish(result, snapshot.directoryGeneration);
-    if (committed) afterCommit?.(result, committed);
+    if (committed) {
+      try { afterCommit?.(result, committed); } catch { /* post-commit failures do not roll back */ }
+    }
     await refs.afterTransactionPublish?.();
     if (refs.librarySnapshot) {
       const { libraryStore } = await import("../utils/libraryStore");
@@ -1227,6 +1232,250 @@ describe("useFileSystem — restoreNote meta-first ordering", () => {
     expect(metaIdx).toBeLessThan(copyIdx);
     const restoredDocs = setDocs.mock.calls[setDocs.mock.calls.length - 1]?.[0] as NoteDoc[];
     expect(restoredDocs.find((doc) => doc.id === "t1")?.customName).toBe(true);
+  });
+
+  it("fails closed before copying the body when live metadata cannot be written", async () => {
+    const trashed: TrashedNote = {
+      id: "t1",
+      fileName: "Trashed",
+      originalFilePath: "/notes/t1.md",
+      trashFilePath: "/notes/.trash/t1.md",
+      trashedAt: 2000,
+      groupId: null,
+      createdAt: 1000,
+      updatedAt: 1500,
+      pinned: false,
+    };
+    const writeMetaMock = metadataIOModule.writeMeta as ReturnType<typeof vi.fn>;
+    writeMetaMock.mockRejectedValueOnce(new Error("EPERM"));
+    const { result, commitLibraryForGeneration } = renderFs({
+      docs: [makeDoc("a")],
+      trashedNotes: [trashed],
+    });
+
+    await act(async () => {
+      await result.current.restoreNote("t1");
+    });
+
+    expect(copyFileMock).not.toHaveBeenCalled();
+    expect(commitLibraryForGeneration).not.toHaveBeenCalled();
+    expect(refs.librarySnapshot?.trashedNotes.map((note) => note.id)).toEqual(["t1"]);
+  });
+
+  it("rolls metadata back and keeps trash canonical when the body copy fails", async () => {
+    const trashed: TrashedNote = {
+      id: "t1",
+      fileName: "Trashed",
+      originalFilePath: "/notes/t1.md",
+      trashFilePath: "/notes/.trash/t1.md",
+      trashedAt: 2000,
+      groupId: null,
+      createdAt: 1000,
+      updatedAt: 1500,
+      pinned: false,
+    };
+    const previousMeta: NoteMeta = {
+      version: 2,
+      id: "t1",
+      fileName: "Trashed",
+      createdAt: 1000,
+      updatedAt: 1500,
+      groupId: null,
+      trashedAt: 2000,
+    };
+    const readMetaMock = metadataIOModule.readMeta as ReturnType<typeof vi.fn>;
+    const writeMetaMock = metadataIOModule.writeMeta as ReturnType<typeof vi.fn>;
+    readMetaMock.mockResolvedValueOnce(previousMeta);
+    refs.copyFileShouldThrow = new Error("EACCES");
+    const { result } = renderFs({ docs: [makeDoc("a")], trashedNotes: [trashed] });
+
+    await act(async () => {
+      await result.current.restoreNote("t1");
+    });
+
+    expect(writeMetaMock).toHaveBeenCalledTimes(2);
+    expect(writeMetaMock.mock.calls[0]?.[2]).toMatchObject({ trashedAt: null });
+    expect(writeMetaMock.mock.calls[1]?.[2]).toEqual(previousMeta);
+    expect(refs.librarySnapshot?.docs.some((doc) => doc.id === "t1")).toBe(false);
+    expect(refs.librarySnapshot?.trashedNotes.some((note) => note.id === "t1")).toBe(true);
+  });
+
+  it("publishes restored docs, groups, trash, and active identity in one commit", async () => {
+    const trashed: TrashedNote = {
+      id: "t1",
+      fileName: "Trashed",
+      originalFilePath: "/notes/t1.md",
+      trashFilePath: "/notes/.trash/t1.md",
+      trashedAt: 2000,
+      groupId: "g1",
+      createdAt: 1000,
+      updatedAt: 1500,
+      customName: true,
+      pinned: true,
+    };
+    const groups: NoteGroup[] = [{
+      id: "g1",
+      name: "Group",
+      noteIds: [],
+      collapsed: false,
+      createdAt: 1000,
+    }];
+    const { result, commitLibraryForGeneration } = renderFs({
+      docs: [makeDoc("a")],
+      groups,
+      trashedNotes: [trashed],
+    });
+
+    await act(async () => {
+      await result.current.restoreNote("t1");
+    });
+
+    expect(commitLibraryForGeneration).toHaveBeenCalledTimes(1);
+    expect(refs.librarySnapshot).toMatchObject({ activeNoteId: "t1" });
+    expect(refs.librarySnapshot?.docs.find((doc) => doc.id === "t1")).toMatchObject({
+      customName: true,
+      pinned: true,
+    });
+    expect(refs.librarySnapshot?.groups[0]?.noteIds).toEqual(["t1"]);
+    expect(refs.librarySnapshot?.trashedNotes).toEqual([]);
+  });
+
+  it("removes the trash copy only after the restored body read back", async () => {
+    const removeMock = fsPlugin.remove as ReturnType<typeof vi.fn>;
+    const trashed: TrashedNote = {
+      id: "t1",
+      fileName: "Trashed",
+      originalFilePath: "/notes/t1.md",
+      trashFilePath: "/notes/.trash/t1.md",
+      trashedAt: 2000,
+      groupId: null,
+      createdAt: 1000,
+      updatedAt: 1500,
+      pinned: false,
+    };
+    const callOrder: string[] = [];
+    readMock.mockImplementation(async (path: string) => {
+      const fault = refs.readFaultByPath.get(path);
+      if (fault) throw fault;
+      callOrder.push(`read:${path}`);
+      return "body";
+    });
+    removeMock.mockImplementation(async (path: string) => { callOrder.push(`remove:${path}`); });
+    try {
+      const { result } = renderFs({ docs: [makeDoc("a")], trashedNotes: [trashed] });
+      await act(async () => {
+        await result.current.restoreNote("t1");
+      });
+      expect(callOrder.indexOf("read:/notes/t1.md")).toBeLessThan(callOrder.indexOf("remove:/notes/.trash/t1.md"));
+
+      // A failed read-back keeps the trash copy: it is still the only body.
+      callOrder.length = 0;
+      refs.readFaultByPath.set("/notes/t2.md", new Error("EBUSY"));
+      const second = renderFs({
+        docs: [makeDoc("a")],
+        trashedNotes: [{ ...trashed, id: "t2", originalFilePath: "/notes/t2.md", trashFilePath: "/notes/.trash/t2.md" }],
+      });
+      await act(async () => {
+        await second.result.current.restoreNote("t2");
+      });
+      expect(callOrder).toContain("remove:/notes/t2.md");
+      expect(callOrder).not.toContain("remove:/notes/.trash/t2.md");
+    } finally {
+      readMock.mockImplementation(async (path: string) => {
+        const perPath = refs.readFaultByPath.get(path);
+        if (perPath) throw perPath;
+        if (refs.readShouldThrow) throw refs.readShouldThrow;
+        return "";
+      });
+      removeMock.mockImplementation(async () => {});
+    }
+  });
+
+  it("prunes an empty auto-titled leaving doc in the same commit and tombstones its emptied group", async () => {
+    const removeMock = fsPlugin.remove as ReturnType<typeof vi.fn>;
+    const removeMetaMock = metadataIOModule.removeMeta as ReturnType<typeof vi.fn>;
+    const trashed: TrashedNote = {
+      id: "t1",
+      fileName: "Trashed",
+      originalFilePath: "/notes/t1.md",
+      trashFilePath: "/notes/.trash/t1.md",
+      trashedAt: 2000,
+      groupId: "g1",
+      createdAt: 1000,
+      updatedAt: 1500,
+      pinned: false,
+    };
+    const groups: NoteGroup[] = [
+      { id: "g1", name: "Target", noteIds: [], collapsed: false, createdAt: 1000 },
+      { id: "g2", name: "Emptied", noteIds: ["empty"], collapsed: false, createdAt: 1000 },
+    ];
+    const callOrder: string[] = [];
+    removeMock.mockImplementation(async (path: string) => { callOrder.push(`remove:${path}`); });
+    removeMetaMock.mockImplementation(async (_fs: unknown, _dir: string, id: string) => { callOrder.push(`removeMeta:${id}`); });
+    try {
+      const { result, commitLibraryForGeneration, cancelDocSave, invalidateDocumentSession } = renderFs({
+        docs: [makeDoc("empty", { content: "" }), makeDoc("b", { content: "real" })],
+        activeIndex: 0,
+        groups,
+        trashedNotes: [trashed],
+      });
+
+      await act(async () => {
+        await result.current.restoreNote("t1");
+      });
+
+      const bodyIdx = callOrder.indexOf("remove:/notes/empty.md");
+      const metaIdx = callOrder.indexOf("removeMeta:empty");
+      expect(bodyIdx).toBeGreaterThanOrEqual(0);
+      expect(metaIdx).toBeGreaterThan(bodyIdx);
+      expect(cancelDocSave).toHaveBeenCalledWith("empty");
+      expect(invalidateDocumentSession).toHaveBeenCalledWith("empty", "/notes/empty.md");
+
+      expect(commitLibraryForGeneration).toHaveBeenCalledTimes(1);
+      expect(refs.librarySnapshot?.docs.map((doc) => doc.id).sort()).toEqual(["b", "t1"]);
+      expect(refs.librarySnapshot?.activeNoteId).toBe("t1");
+      expect(refs.librarySnapshot?.groups.map((group) => group.id)).toEqual(["g1"]);
+      expect(refs.librarySnapshot?.groups[0]?.noteIds).toEqual(["t1"]);
+      expect(markGroupAsDeletedMock).toHaveBeenCalledWith("g2");
+      expect(markGroupAsDeletedMock).not.toHaveBeenCalledWith("g1");
+    } finally {
+      removeMock.mockImplementation(async () => {});
+      removeMetaMock.mockImplementation(async () => {});
+    }
+  });
+
+  it("keeps the leaving doc when the editor holds unsaved input, and when it is the only doc", async () => {
+    const trashed: TrashedNote = {
+      id: "t1",
+      fileName: "Trashed",
+      originalFilePath: "/notes/t1.md",
+      trashFilePath: "/notes/.trash/t1.md",
+      trashedAt: 2000,
+      groupId: null,
+      createdAt: 1000,
+      updatedAt: 1500,
+      pinned: false,
+    };
+    refs.editorContent = "typed after autosave";
+    const typed = renderFs({
+      docs: [makeDoc("empty", { content: "" }), makeDoc("b", { content: "real" })],
+      activeIndex: 0,
+      trashedNotes: [trashed],
+    });
+    await act(async () => {
+      await typed.result.current.restoreNote("t1");
+    });
+    expect(refs.librarySnapshot?.docs.map((doc) => doc.id).sort()).toEqual(["b", "empty", "t1"]);
+
+    refs.editorContent = "";
+    const only = renderFs({
+      docs: [makeDoc("empty", { content: "" })],
+      trashedNotes: [trashed],
+    });
+    await act(async () => {
+      await only.result.current.restoreNote("t1");
+    });
+    expect(refs.librarySnapshot?.docs.map((doc) => doc.id).sort()).toEqual(["empty", "t1"]);
   });
 });
 

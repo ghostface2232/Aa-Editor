@@ -29,8 +29,7 @@ import { emitDocCreated, emitDocDeleted, emitDocRenamed, emitGroupsUpdated, emit
 import type { NoteColorId } from "../utils/noteColors";
 import { markOwnWrite } from "./ownWriteTracker";
 import { setKnownDiskContent } from "../utils/conflictBackup";
-import { removeMeta as removeMetaFile, readMeta, writeMeta, type NoteMeta } from "../utils/metadataIO";
-import { getMachineIdCached } from "../utils/machineId";
+import { removeMeta as removeMetaFile, type NoteMeta } from "../utils/metadataIO";
 import { logNotenError } from "../utils/crashLog";
 import { NotenError } from "../utils/notenError";
 import { t } from "../i18n";
@@ -1333,130 +1332,267 @@ export function useFileSystem(
     for (const id of idSet) emitNoteColorUpdated(id, color);
   }, [locale, notesSortOrder, setActiveIndex, setDocs]);
 
+  // Restore runs on the shared persistence chain like deleteNotes: the sidecar
+  // flips live BEFORE the body copy (Windows copyFile preserves the source
+  // mtime, so a reconcile that still reads trashedAt != null would move the
+  // restored body straight back to .trash), a failed copy or read-back rolls
+  // the sidecar back to its tombstone, and docs/groups/trash/active publish as
+  // one generation-bound commit. An empty auto-titled doc the user is leaving
+  // is pruned inside the same transaction so its removal and the restore land
+  // in the same commit.
   const restoreNote = useCallback(async (trashedNoteId: string) => {
-    const trashed = trashedNotesRef.current?.find((n) => n.id === trashedNoteId);
-    if (!trashed) return;
-
-    const notesDir = await getNotesDir();
-    const fileName = getFileBaseName(trashed.trashFilePath);
-    const restoredPath = `${notesDir}/${fileName}`;
-
-    // Flip the sidecar to "not trashed" on disk BEFORE the body copy lands.
-    // Windows copyFile preserves the source mtime, so the restored body stays
-    // older than meta.trashedAt; if the watcher's reconcile (fires ~1.5s after
-    // the copy) still reads trashedAt != null, its root-vs-trash arbitration
-    // deterministically moves the body straight back to .trash and the restore
-    // silently undoes itself a moment later. The async saveManifest below also
-    // rewrites the meta, but it races that reconcile — only an awaited
-    // meta-first write closes the window.
-    let previousMeta: NoteMeta | null = null;
-    let metaKnownAbsent = false;
-    try {
-      previousMeta = await readMeta(tauriFileSystem, notesDir, trashed.id);
-      metaKnownAbsent = previousMeta === null;
-    } catch { /* unreadable sidecar — rebuild from the trash entry below */ }
-    const restoredMeta: NoteMeta = {
-      version: 2,
-      id: trashed.id,
-      fileName: trashed.fileName,
-      customName: trashed.customName,
-      createdAt: trashed.createdAt,
-      updatedAt: trashed.updatedAt,
-      groupId: trashed.groupId ?? null,
-      pinned: trashed.pinned === true,
-      color: trashed.color,
-      ...(previousMeta ?? {}),
-      trashedAt: null,
-      trashedFromPath: null,
-    };
-    try {
-      await writeMeta(tauriFileSystem, notesDir, restoredMeta, getMachineIdCached());
-    } catch { /* best-effort; saveManifest below rewrites it */ }
-
-    markOwnWrite(restoredPath);
-    try {
-      await copyFile(trashed.trashFilePath, restoredPath);
-    } catch (err) {
-      // Roll the sidecar back so disk state stays consistent with the trash
-      // entry that this function leaves untouched on failure.
-      try {
-        if (previousMeta) await writeMeta(tauriFileSystem, notesDir, previousMeta, getMachineIdCached());
-        else if (metaKnownAbsent) await removeMetaFile(tauriFileSystem, notesDir, trashed.id);
-      } catch { /* best-effort */ }
-      if (import.meta.env.DEV) {
-        console.warn("Failed to restore note from trash:", err);
-      }
-      return;
-    }
-    try { await remove(trashed.trashFilePath); } catch { /* ignore */ }
-
-    // copyFile above succeeded, so the file is on disk at restoredPath.
-    // If the read here fails, defer the UI commit — next reload's reconcile
-    // discovers the restored file and creates the doc with real content.
-    // Surfacing the failure prevents the user's click from looking like a
-    // silent no-op (trash entry still showing, no new doc).
-    let content: string;
-    try {
-      content = await readTextFile(restoredPath);
-    } catch (error) {
-      void logNotenError(new NotenError(
-        "BODY_READ_FAILED",
-        "recoverable",
-        error instanceof Error ? error.message : String(error),
-        {
-          context: { stage: "restoreNote", noteId: trashedNoteId, filePath: restoredPath },
-          cause: error,
-        },
-      ));
-      return;
-    }
-
-    const restoredDoc: NoteDoc = {
-      id: trashed.id,
-      filePath: restoredPath,
-      fileName: trashed.fileName,
-      customName: restoredMeta.customName,
-      isDirty: false,
-      content,
-      createdAt: trashed.createdAt,
-      updatedAt: trashed.updatedAt,
-      pinned: trashed.pinned === true,
-      color: trashed.color,
-    };
-
-    const { docs: liveDocs, activeDocId } = getLiveDocsSnapshot();
+    if (!trashedNotesRef.current?.some((note) => note.id === trashedNoteId)) return;
     const didPersistCurrentDoc = await leaveCurrentDoc();
-    const baseDocs = didPersistCurrentDoc ? markDocClean(liveDocs, activeDocId) : liveDocs;
+    if (!didPersistCurrentDoc) return;
+    if (!trashedNotesRef.current?.some((note) => note.id === trashedNoteId) || !commitLibraryForGeneration) return;
 
-    if (setTrashedNotes) {
-      setTrashedNotes((prev) => prev.filter((n) => n.id !== trashedNoteId));
-      emitTrashUpdated(getTrashedNotesCache());
-    }
+    // The prune candidate must be bound as a transaction target up front so
+    // the operation may remove its sidecar; emptiness is re-checked at
+    // execution time against the canonical snapshot and the live editor.
+    const liveBefore = libraryStore.getSnapshot();
+    const leavingBefore = liveBefore.activeNoteId
+      ? liveBefore.docs.find((doc) => doc.id === liveBefore.activeNoteId)
+      : undefined;
+    const pruneCandidateId = leavingBefore && leavingBefore.id !== trashedNoteId && !leavingBefore.customName
+      ? leavingBefore.id
+      : null;
 
-    // Prune first (preserving the restored note's target group so it survives an
-    // empty-active-doc prune), then re-add the restored note on top of the array
-    // the pruner returned. Building on that post-prune array — instead of a
-    // pre-prune groupsRef snapshot — keeps the restore membership and any prune
-    // tombstone consistent in a single persist, so the tombstone is not cancelled.
-    const { docs: prunedDocs, groups: prunedGroups } = await pruneEmptyCurrentDoc(baseDocs, activeDocId, trashed.groupId ?? null);
-    let restoredGroups = prunedGroups;
-    if (trashed.groupId && prunedGroups.some((g) => g.id === trashed.groupId)) {
-      restoredGroups = prunedGroups.map((g) =>
-        g.id === trashed.groupId && !g.noteIds.includes(trashed.id)
-          ? { ...g, noteIds: [...g.noteIds, trashed.id] }
-          : g,
+    const releaseLifecycleBlock = blockNoteLifecycle([trashedNoteId]);
+    const published: {
+      activeBeforePublish: string | null;
+      applied: boolean;
+      created: boolean;
+      emptiedGroupIds: string[];
+    } = { activeBeforePublish: null, applied: false, created: false, emptiedGroupIds: [] };
+    let committedGeneration: number | null = null;
+    try {
+      const didDrain = await flushDocSaveRef?.current?.(trashedNoteId);
+      if (didDrain === false) return;
+      const transaction = await runPersistenceTransaction(
+        "restoreNote",
+        pruneCandidateId ? [trashedNoteId, pruneCandidateId] : [trashedNoteId],
+        async ({
+          notesDirectory,
+          snapshot,
+          assertCurrent,
+          readNoteMeta,
+          mergeNoteMeta,
+          writeNoteMeta,
+          removeNoteMeta,
+          discardNoteIntents,
+        }) => {
+          const failed = { baseSnapshot: snapshot, restored: null, prunedId: null } as const;
+          const trashed = snapshot.trashedNotes.find((note) => note.id === trashedNoteId);
+          if (!trashed) return failed;
+
+          const pruneLeavingDoc = async (): Promise<string | null> => {
+            if (!pruneCandidateId || snapshot.activeNoteId !== pruneCandidateId) return null;
+            const leaving = snapshot.docs.find((doc) => doc.id === pruneCandidateId);
+            if (!leaving || leaving.customName || snapshot.docs.length <= 1) return null;
+            // The editor can hold input newer than the canonical content.
+            if (leaving.content.trim() !== "" || getCurrentMarkdown(tiptapRef).trim() !== "") return null;
+            cancelDocSaveRef?.current?.(leaving.id);
+            // Body before sidecar: a body without a sidecar would be re-ingested
+            // by reconcile as a fresh ungrouped doc.
+            if (leaving.filePath) {
+              markOwnWrite(leaving.filePath);
+              try { await remove(leaving.filePath); } catch { /* already gone or locked; reconcile recovers */ }
+            }
+            try { await removeNoteMeta(leaving.id); } catch { /* already gone or unreachable */ }
+            discardNoteIntents(leaving.id);
+            tiptapRef.current?.invalidateDocumentSession?.(leaving.id, leaving.filePath);
+            return leaving.id;
+          };
+
+          const alreadyLive = snapshot.docs.find((doc) => doc.id === trashedNoteId);
+          if (alreadyLive) {
+            return {
+              baseSnapshot: snapshot,
+              restored: {
+                doc: alreadyLive,
+                groupId: snapshot.groups.find((group) => group.noteIds.includes(trashedNoteId))?.id ?? null,
+              },
+              prunedId: await pruneLeavingDoc(),
+            };
+          }
+
+          const trashPath = `${notesDirectory}/.trash/${trashed.id}.md`;
+          const restoredPath = `${notesDirectory}/${trashed.id}.md`;
+          const previousMeta = await readNoteMeta(trashed.id);
+          const groupId = trashed.groupId && snapshot.groups.some((group) => group.id === trashed.groupId)
+            ? trashed.groupId
+            : null;
+          const mergedMeta = mergeNoteMeta(trashed.id, {
+            version: 2,
+            id: trashed.id,
+            fileName: trashed.fileName,
+            customName: trashed.customName,
+            createdAt: trashed.createdAt,
+            updatedAt: trashed.updatedAt,
+            groupId,
+            groupUpdatedAt: previousMeta?.groupUpdatedAt ?? trashed.updatedAt,
+            pinned: trashed.pinned === true,
+            color: trashed.color,
+            trashedAt: trashed.trashedAt,
+            trashedFromPath: trashed.originalFilePath,
+          }, previousMeta);
+          const restoredMeta: NoteMeta = {
+            ...mergedMeta,
+            groupId,
+            trashedAt: null,
+            trashedFromPath: null,
+          };
+          await writeNoteMeta(restoredMeta);
+
+          const rollbackMeta = async () => {
+            try {
+              if (previousMeta) await writeNoteMeta(previousMeta);
+              else await removeNoteMeta(trashed.id);
+            } catch (error) {
+              void logNotenError(new NotenError(
+                "PERSIST_FAILED",
+                "fatal",
+                error instanceof Error ? error.message : String(error),
+                { context: { stage: "restoreNote.rollback", noteId: trashed.id }, cause: error },
+              ));
+            }
+          };
+
+          markOwnWrite(restoredPath);
+          try {
+            assertCurrent();
+            const beforeCopy = libraryStore.getSnapshot();
+            if (
+              beforeCopy.docs.some((doc) => doc.id === trashedNoteId)
+              || beforeCopy.trashedNotes.find((note) => note.id === trashedNoteId) !== trashed
+            ) {
+              await rollbackMeta();
+              return failed;
+            }
+            await copyFile(trashPath, restoredPath);
+            assertCurrent();
+          } catch (error) {
+            await rollbackMeta();
+            if (import.meta.env.DEV) console.warn("Failed to restore note from trash:", error);
+            return failed;
+          }
+
+          let content: string;
+          try {
+            assertCurrent();
+            content = await readTextFile(restoredPath);
+            assertCurrent();
+          } catch (error) {
+            await rollbackMeta();
+            markOwnWrite(restoredPath);
+            await remove(restoredPath).catch(() => {});
+            void logNotenError(new NotenError(
+              "BODY_READ_FAILED",
+              "recoverable",
+              error instanceof Error ? error.message : String(error),
+              { context: { stage: "restoreNote", noteId: trashedNoteId, filePath: restoredPath }, cause: error },
+            ));
+            return failed;
+          }
+          // The restore is durable from here on. The trash copy is only cruft
+          // now, and reconcile never sweeps .trash, so it would linger forever.
+          markOwnWrite(trashPath);
+          await remove(trashPath).catch(() => {});
+
+          return {
+            baseSnapshot: snapshot,
+            restored: {
+              doc: {
+                id: trashed.id,
+                filePath: restoredPath,
+                fileName: restoredMeta.fileName,
+                customName: restoredMeta.customName,
+                isDirty: false,
+                content,
+                createdAt: restoredMeta.createdAt,
+                updatedAt: restoredMeta.updatedAt,
+                pinned: restoredMeta.pinned === true,
+                color: restoredMeta.color,
+              } satisfies NoteDoc,
+              groupId,
+            },
+            prunedId: await pruneLeavingDoc(),
+          };
+        },
+        (result, directoryGeneration) => {
+          if (!result.restored) return result.baseSnapshot;
+          const { restored, prunedId } = result;
+          // The disk transition is durable, so publish it against whatever the
+          // store holds now rather than refusing on a rebuilt trash entry.
+          const committed = commitLibraryForGeneration(directoryGeneration, (current) => {
+            published.applied = true;
+            published.activeBeforePublish = current.activeNoteId;
+            const existing = current.docs.find((doc) => doc.id === trashedNoteId);
+            published.created = existing == null;
+            const nextDocs = [
+              ...current.docs.filter((doc) => doc.id !== trashedNoteId && doc.id !== prunedId),
+              existing ?? restored.doc,
+            ];
+            const emptied: string[] = [];
+            const nextGroups = current.groups.flatMap((group) => {
+              const without = group.noteIds.filter((id) => id !== trashedNoteId && id !== prunedId);
+              if (group.id === restored.groupId) return [{ ...group, noteIds: [...without, trashedNoteId] }];
+              if (without.length === group.noteIds.length) return [group];
+              // A group the prune emptied is tombstoned, as pruneEmptyCurrentDoc does.
+              if (without.length === 0 && prunedId && group.noteIds.includes(prunedId)) {
+                emptied.push(group.id);
+                return [];
+              }
+              return [{ ...group, noteIds: without }];
+            });
+            published.emptiedGroupIds = emptied;
+            return {
+              docs: sortNotes(nextDocs, notesSortOrder, locale),
+              groups: nextGroups,
+              trashedNotes: current.trashedNotes.filter((note) => note.id !== trashedNoteId),
+              activeNoteId: trashedNoteId,
+            };
+          });
+          if (committed) {
+            for (const groupId of published.emptiedGroupIds) markGroupAsDeleted(groupId);
+          }
+          return committed;
+        },
+        (result, committed) => {
+          if (!result.restored || !published.applied || published.activeBeforePublish === trashedNoteId) return undefined;
+          const restoredDoc = committed.docs.find((doc) => doc.id === trashedNoteId);
+          if (!restoredDoc) return undefined;
+          // Capture input typed into the leaving doc after leaveCurrentDoc
+          // flushed it, unless that doc was just pruned.
+          if (published.activeBeforePublish !== result.prunedId) captureAndQueueSaveRef?.current?.();
+          resetDocState(state, tiptapRef, restoredDoc.id, restoredDoc.filePath, restoredDoc.content);
+          notifyActiveDocRef?.current?.(restoredDoc.id, restoredDoc.filePath);
+          return undefined;
+        },
       );
-      setGroups?.(restoredGroups);
-      emitGroupsUpdated(restoredGroups);
+      if (transaction.status !== "committed" || !transaction.value.restored || !published.applied) return;
+      committedGeneration = transaction.value.baseSnapshot.directoryGeneration;
+      const latest = libraryStore.getSnapshot();
+      if (latest.directoryGeneration !== committedGeneration) return;
+      const restoredDoc = latest.docs.find((doc) => doc.id === trashedNoteId);
+      if (!restoredDoc) return;
+      emitTrashUpdated([...latest.trashedNotes]);
+      emitGroupsUpdated(latest.groups.map((group) => ({ ...group, noteIds: [...group.noteIds] })));
+      if (published.created) emitDocCreated(restoredDoc);
+    } catch {
+      // The transaction already logged the failure; the trash entry stays.
+    } finally {
+      releaseLifecycleBlock();
+      const latest = libraryStore.getSnapshot();
+      if (
+        committedGeneration != null
+        && latest.directoryGeneration === committedGeneration
+        && latest.docs.some((doc) => doc.id === trashedNoteId)
+      ) {
+        await flushDocSaveRef?.current?.(trashedNoteId);
+      }
     }
-
-    const nextDocs = [...prunedDocs, restoredDoc];
-    sortAndPersistDocs(nextDocs, restoredDoc.id, notesSortOrder, locale, setDocs, setActiveIndex, restoredGroups);
-    emitDocCreated(restoredDoc);
-
-    resetDocState(state, tiptapRef, restoredDoc.id, restoredPath, content);
-    notifyActiveDocRef?.current?.(restoredDoc.id, restoredPath);
-  }, [getLiveDocsSnapshot, leaveCurrentDoc, markDocClean, notesSortOrder, setActiveIndex, setDocs, setGroups, setTrashedNotes, state, tiptapRef, pruneEmptyCurrentDoc]);
+  }, [cancelDocSaveRef, captureAndQueueSaveRef, commitLibraryForGeneration, flushDocSaveRef, leaveCurrentDoc, locale, notesSortOrder, state, tiptapRef]);
 
   const permanentlyDeleteNote = useCallback(async (trashedNoteId: string) => {
     const trashed = trashedNotesRef.current?.find((n) => n.id === trashedNoteId);
