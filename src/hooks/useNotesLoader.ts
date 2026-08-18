@@ -254,36 +254,62 @@ export function sortNotes(docs: NoteDoc[], order: NotesSortOrder, locale: Locale
 }
 
 /**
+ * Live bookkeeping for one hydration epoch, maintained by the loader while the
+ * disk read is in flight and read when the result is rebased. Provenance is
+ * recorded explicitly here rather than inferred from doc contents: an empty
+ * body is a legitimate document state, not a marker for a cache projection.
+ */
+export interface HydrationEpochState {
+  /** Every doc id the loader itself put in the store this epoch. */
+  readonly seededIds: ReadonlySet<string>;
+  /** Seeded ids still holding a body-less manifest-cache projection. */
+  readonly projectionIds: ReadonlySet<string>;
+  /** Ids a non-loader commit removed this epoch: peer or local deletions. */
+  readonly deletedIds: ReadonlySet<string>;
+}
+
+/**
  * Rebase a hydration result onto whatever the store holds now. Hydration is
  * generation-bound, not revision-bound: a peer window's doc-updated /
  * doc-created / groups event, or App's own projection effects, may commit
  * while the disk load is in flight, and aborting on that would leave the
  * manifest-cache projection (empty bodies) as the canonical library. Disk
  * wins for metadata, groups, trash, and active identity; a peer body that is
- * newer than the disk read survives, and a doc the loader never seeded (a
- * peer-created note) is kept rather than dropped.
+ * newer than the disk read survives, a doc the loader never seeded (a
+ * peer-created note) is kept rather than dropped, and a doc a peer deleted
+ * mid-epoch stays deleted rather than being resurrected by the stale read.
  */
 export function mergeHydratedLibrary(
   current: LibrarySnapshot,
   hydrated: LibraryData,
-  loaderSeededIds: ReadonlySet<string>,
+  epoch: HydrationEpochState,
   order: NotesSortOrder,
   locale: Locale,
 ): LibraryPatch {
   const liveById = new Map(current.docs.map((doc) => [doc.id, doc]));
-  const docs: NoteDoc[] = hydrated.docs.map((doc) => {
+  const docs: NoteDoc[] = [];
+  for (const doc of hydrated.docs) {
     const live = liveById.get(doc.id);
+    if (!live) {
+      // Absent from the store because it was deleted while we loaded, not
+      // because it had yet to be projected: the stale read must not revive it.
+      if (epoch.deletedIds.has(doc.id)) continue;
+      docs.push(doc);
+      continue;
+    }
     if (
-      !live
-      || live.content === ""
+      epoch.projectionIds.has(doc.id)
       || live.content === doc.content
       || live.updatedAt <= doc.updatedAt
-    ) return doc;
-    return { ...doc, content: live.content, updatedAt: live.updatedAt };
-  });
+    ) {
+      docs.push(doc);
+      continue;
+    }
+    docs.push({ ...doc, content: live.content, updatedAt: live.updatedAt });
+  }
   const hydratedIds = new Set(hydrated.docs.map((doc) => doc.id));
   for (const live of current.docs) {
-    if (hydratedIds.has(live.id) || loaderSeededIds.has(live.id)) continue;
+    if (hydratedIds.has(live.id) || epoch.seededIds.has(live.id)) continue;
     docs.push(live);
   }
   const sorted = sortNotes(docs, order, locale);
@@ -1481,11 +1507,39 @@ export function useNotesLoader(
       // must survive the final commit; one inside it is a projection entry
       // that the disk result replaces or drops.
       const seededIds = new Set<string>();
+      // Ids whose store entry is still the body-less manifest-cache placeholder.
+      const projectionIds = new Set<string>();
+      // Ids a non-loader commit removed from the store this epoch.
+      const deletedIds = new Set<string>();
+      const epoch: HydrationEpochState = { seededIds, projectionIds, deletedIds };
+      // Watch every commit in this generation so the final rebase can tell a
+      // peer deletion from a doc that simply had not been projected yet, and a
+      // real (possibly empty) peer body from the cache placeholder. Neither is
+      // recoverable from the hydrated result alone.
+      let observedDocs = new Map<string, NoteDoc>();
+      let unwatchEpoch: (() => void) | null = null;
+      const watchEpoch = () => {
+        const snapshot = libraryStore.getSnapshot();
+        if (snapshot.directoryGeneration !== hydrationGeneration) return;
+        const next = new Map(snapshot.docs.map((doc) => [doc.id, doc]));
+        if (snapshot.origin !== "hydrate") {
+          for (const [id, doc] of observedDocs) {
+            const live = next.get(id);
+            // A peer/local/watcher write to a projected id supersedes the
+            // placeholder, including one that clears the body to "".
+            if (!live) deletedIds.add(id);
+            else if (live !== doc) projectionIds.delete(id);
+          }
+        }
+        // A re-created id is live again; its tombstone no longer applies.
+        for (const id of next.keys()) deletedIds.delete(id);
+        observedDocs = next;
+      };
       const commitHydration = (data: LibraryData) => {
         if (hydrationGeneration == null) return null;
         return commitLibraryForGeneration(
           hydrationGeneration,
-          (current) => mergeHydratedLibrary(current, data, seededIds, notesSortOrder, locale),
+          (current) => mergeHydratedLibrary(current, data, epoch, notesSortOrder, locale),
           "hydrate",
         );
       };
@@ -1506,6 +1560,8 @@ export function useNotesLoader(
         }, "hydrate");
         hydrationGeneration = seeded.directoryGeneration;
         for (const doc of seeded.docs) seededIds.add(doc.id);
+        observedDocs = new Map(seeded.docs.map((doc) => [doc.id, doc]));
+        unwatchEpoch = libraryStore.subscribe(watchEpoch);
 
         const cache = await readLocalCache(dir);
         if (cache && cache.notes.length > 0) {
@@ -1514,7 +1570,10 @@ export function useNotesLoader(
             isDirty: false,
             content: "",
           } as NoteDoc));
-          for (const doc of cachedDocs) seededIds.add(doc.id);
+          for (const doc of cachedDocs) {
+            seededIds.add(doc.id);
+            projectionIds.add(doc.id);
+          }
           const before = libraryStore.getSnapshot();
           const cached = commitHydration({
             docs: cachedDocs,
@@ -1714,6 +1773,7 @@ export function useNotesLoader(
         else commitHydration(fallback);
       } finally {
         finished = true;
+        unwatchEpoch?.();
         // A torn-down load must not drop the flags a newer load has raised.
         if (effectActive) {
           setMigrationInProgress(false);

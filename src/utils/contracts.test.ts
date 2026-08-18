@@ -225,7 +225,7 @@ describe("contract: hydration is generation-bound and pauses full persistence", 
     const effect = text.match(/if \(!enabled \|\| initialized\.current\) return;[\s\S]*?\n  \}, \[[^\]]*\]\);/)?.[0];
     expect(effect, "load effect not found").toBeDefined();
     expect(effect).not.toContain("commitIfCurrent(");
-    expect(effect).toContain("mergeHydratedLibrary(current, data, seededIds");
+    expect(effect).toContain("mergeHydratedLibrary(current, data, epoch");
     expect(effect).toMatch(/\}, \[enabled, reloadKey, commitLibraryForGeneration, commitWholeLibrary\]\);$/);
     expect(effect).toContain("if (!finished) initialized.current = false;");
   });

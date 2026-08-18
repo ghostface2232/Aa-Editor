@@ -489,6 +489,91 @@ describe("useNotesLoader — canonical library store adapter", () => {
     expect(result.current.docs.map((doc) => doc.id).sort()).toEqual(["a", "remote"]);
   });
 
+  it("keeps a note a peer deleted between reconcile and the final commit deleted", async () => {
+    let releaseReconcile!: () => void;
+    refs.reconcileGate = new Promise<void>((resolve) => { releaseReconcile = resolve; });
+    const a = makeDoc("a");
+    const b = makeDoc("b");
+    refs.fs!.seedTextFile(a.filePath, "body-a");
+    refs.fs!.seedTextFile(b.filePath, "body-b");
+    refs.decomposedDocs = [a, b];
+    // The cache projection puts both ids in the store before the disk read
+    // finishes, so the deletion has something to remove.
+    refs.localCache = {
+      version: 2,
+      notesDirectory: "/test-appdata/notes",
+      notes: [a, b].map(({ id, filePath, fileName, createdAt, updatedAt }) => ({
+        id, filePath, fileName, createdAt, updatedAt,
+      })),
+    };
+    const { result } = renderHook(() => useNotesLoader("en", "updated-desc"));
+    await waitFor(() => expect(reconcileFolderModule.reconcileFolder).toHaveBeenCalledTimes(1));
+    expect(libraryStore.getSnapshot().docs.map((doc) => doc.id).sort()).toEqual(["a", "b"]);
+
+    // useWindowSync's doc-deleted handler for a peer's delete of "a". The
+    // loader already holds a disk result that still contains it.
+    act(() => result.current.commitLibraryFromRemote((current) => ({
+      docs: current.docs.filter((doc) => doc.id !== "a"),
+      activeNoteId: "b",
+    })));
+
+    await act(async () => {
+      releaseReconcile();
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(result.current.isLoading).toBe(false), { timeout: 2000 });
+
+    // Pre-fix the stale hydration resurrected "a" because merge could not tell
+    // "deleted by a peer" from "not projected yet".
+    const snapshot = libraryStore.getSnapshot();
+    expect(snapshot.docs.map((doc) => doc.id)).toEqual(["b"]);
+    expect(snapshot.docs[0].content).toBe("body-b");
+    expect(result.current.docs.map((doc) => doc.id)).toEqual(["b"]);
+  });
+
+  it("keeps a body a peer cleared between reconcile and the final commit empty", async () => {
+    let releaseReconcile!: () => void;
+    refs.reconcileGate = new Promise<void>((resolve) => { releaseReconcile = resolve; });
+    const a = makeDoc("a");
+    refs.fs!.seedTextFile(a.filePath, "body-a");
+    refs.decomposedDocs = [a];
+    refs.localCache = {
+      version: 2,
+      notesDirectory: "/test-appdata/notes",
+      notes: [{
+        id: a.id,
+        filePath: a.filePath,
+        fileName: a.fileName,
+        createdAt: a.createdAt,
+        updatedAt: a.updatedAt,
+      }],
+    };
+    const { result } = renderHook(() => useNotesLoader("en", "updated-desc"));
+    await waitFor(() => expect(reconcileFolderModule.reconcileFolder).toHaveBeenCalledTimes(1));
+    // The projection is in the store, bodies still blank.
+    expect(libraryStore.getSnapshot().docs.map((doc) => doc.content)).toEqual([""]);
+
+    // The peer selected all and deleted: an empty body is a legitimate newer
+    // state, not the projection placeholder it happens to look like.
+    act(() => result.current.commitLibraryFromRemote((current) => ({
+      docs: current.docs.map((doc) => (
+        doc.id === "a" ? { ...doc, content: "", updatedAt: doc.updatedAt + 5000 } : doc
+      )),
+    })));
+
+    await act(async () => {
+      releaseReconcile();
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(result.current.isLoading).toBe(false), { timeout: 2000 });
+
+    const snapshot = libraryStore.getSnapshot();
+    expect(snapshot.docs.map((doc) => doc.id)).toEqual(["a"]);
+    // Pre-fix the disk read's stale "body-a" won back.
+    expect(snapshot.docs[0].content).toBe("");
+    expect(snapshot.docs[0].updatedAt).toBe(a.updatedAt + 5000);
+  });
+
   it("does not persist or flush the cache projection while hydration is in flight", async () => {
     let releaseReconcile!: () => void;
     refs.reconcileGate = new Promise<void>((resolve) => { releaseReconcile = resolve; });
