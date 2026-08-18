@@ -28,7 +28,7 @@ vi.mock("./useNotesLoader", () => ({
   getNotesDir: vi.fn(async () => "/notes"),
 }));
 
-import { useWindowSync } from "./useWindowSync";
+import { useWindowSync, emitDocUpdated, resetDocBodyClocks } from "./useWindowSync";
 
 function makeDoc(id: string): NoteDoc {
   return {
@@ -91,6 +91,7 @@ function renderWindowSync(
 
 beforeEach(() => {
   refs.handlers.clear();
+  resetDocBodyClocks();
 });
 
 describe("useWindowSync — remote body update", () => {
@@ -121,6 +122,68 @@ describe("useWindowSync — remote body update", () => {
       content: "remote body",
       fileName: "Newest sidecar title",
       updatedAt: 10_000,
+    });
+  });
+  it("ignores a body event that predates a body this window already saved", async () => {
+    const { result } = renderWindowSync(async () => true, [makeDoc("a"), makeDoc("b")]);
+    await waitFor(() => expect(refs.handlers.has("doc-updated")).toBe(true));
+
+    // This window persisted "b" at 9000 and broadcast it. The doc's own
+    // updatedAt is not the guard here — a peer body from BEFORE that save
+    // arriving late must not roll our newer body back.
+    act(() => { emitDocUpdated("b", "our newer body", 9000); });
+    act(() => {
+      refs.handlers.get("doc-updated")?.({
+        payload: { sourceWindow: "window-b", docId: "b", content: "older peer body", updatedAt: 8000 },
+      });
+    });
+
+    expect(result.current.docs.find((doc) => doc.id === "b")).toMatchObject({ content: "b" });
+  });
+
+  it("ignores a body event delivered out of order after a newer peer body", async () => {
+    const { result } = renderWindowSync(async () => true, [makeDoc("a"), makeDoc("b")]);
+    await waitFor(() => expect(refs.handlers.has("doc-updated")).toBe(true));
+
+    // Two peers saved the same note; their events reach this window in the
+    // wrong order. Applying the loser would leave content and updatedAt
+    // describing different revisions, and the next local save would write the
+    // older body back over the newer one.
+    act(() => {
+      refs.handlers.get("doc-updated")?.({
+        payload: { sourceWindow: "window-c", docId: "b", content: "newest body", updatedAt: 5000 },
+      });
+    });
+    act(() => {
+      refs.handlers.get("doc-updated")?.({
+        payload: { sourceWindow: "window-b", docId: "b", content: "older body", updatedAt: 4000 },
+      });
+    });
+
+    expect(result.current.docs.find((doc) => doc.id === "b")).toMatchObject({
+      content: "newest body",
+      updatedAt: 5000,
+    });
+  });
+
+  it("applies a body event that is newer than the last one seen for that doc", async () => {
+    const { result } = renderWindowSync(async () => true, [makeDoc("a"), makeDoc("b")]);
+    await waitFor(() => expect(refs.handlers.has("doc-updated")).toBe(true));
+
+    act(() => {
+      refs.handlers.get("doc-updated")?.({
+        payload: { sourceWindow: "window-b", docId: "b", content: "first", updatedAt: 4000 },
+      });
+    });
+    act(() => {
+      refs.handlers.get("doc-updated")?.({
+        payload: { sourceWindow: "window-b", docId: "b", content: "second", updatedAt: 5000 },
+      });
+    });
+
+    expect(result.current.docs.find((doc) => doc.id === "b")).toMatchObject({
+      content: "second",
+      updatedAt: 5000,
     });
   });
 });

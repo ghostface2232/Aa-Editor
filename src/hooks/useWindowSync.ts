@@ -57,10 +57,45 @@ interface TrashUpdatedPayload {
 
 const WINDOW_LABEL = getCurrentWindow().label;
 
+// Newest body revision this window has seen on the doc-updated channel, per
+// doc: our own persisted saves plus every peer body we accepted. A doc's own
+// `updatedAt` cannot serve as this clock — renames and pin/color writes bump it
+// without touching the body, which is exactly why applying a remote body keeps
+// max(updatedAt) instead of the event's value. Without a body-specific clock,
+// a doc-updated that lost the race (two peers saving the same note, or an
+// event delayed behind its own disk I/O past our newer save) silently replaces
+// a newer body with an older one while the timestamp keeps reading newer — and
+// the next local save writes that stale body back over the newer one.
+const lastBodyAtByDoc = new Map<string, number>();
+
+/** Drops one doc's body clock. Called when the note is deleted. */
+function forgetDocBodyClock(docId: string) {
+  lastBodyAtByDoc.delete(docId);
+}
+
+/** Clears every body clock. Exists so tests start from a known state. */
+export function resetDocBodyClocks() {
+  lastBodyAtByDoc.clear();
+}
+
 export function emitDocUpdated(docId: string, content: string, updatedAt: number) {
+  // Our own write is the newest body we know of, so a peer event that predates
+  // it is stale even though this window skips its own broadcasts.
+  noteBodyRevision(docId, updatedAt);
   emit("doc-updated", {
     sourceWindow: WINDOW_LABEL, docId, content, updatedAt,
   } satisfies DocUpdatedPayload).catch(() => {});
+}
+
+function noteBodyRevision(docId: string, updatedAt: number) {
+  const seen = lastBodyAtByDoc.get(docId);
+  if (seen == null || updatedAt > seen) lastBodyAtByDoc.set(docId, updatedAt);
+}
+
+/** True when this body event predates one already applied for the same doc. */
+function isStaleBodyEvent(docId: string, updatedAt: number): boolean {
+  const seen = lastBodyAtByDoc.get(docId);
+  return seen != null && updatedAt < seen;
 }
 
 export function emitDocRenamed(docId: string, oldFilePath: string, newFilePath: string, newFileName: string) {
@@ -70,6 +105,9 @@ export function emitDocRenamed(docId: string, oldFilePath: string, newFilePath: 
 }
 
 export function emitDocDeleted(docId: string) {
+  // A restore reuses the id, so the deleted note's body clock must not outlive
+  // it and reject the restored body.
+  forgetDocBodyClock(docId);
   emit("doc-deleted", {
     sourceWindow: WINDOW_LABEL, docId,
   } satisfies DocDeletedPayload).catch(() => {});
@@ -142,6 +180,13 @@ export function useWindowSync(
       listen<DocUpdatedPayload>("doc-updated", (event) => {
         const { sourceWindow, docId, content, updatedAt } = event.payload;
         if (sourceWindow === WINDOW_LABEL) return;
+        // Event delivery is not ordered across source windows, and a body
+        // event can arrive after this window has already saved a newer body.
+        if (isStaleBodyEvent(docId, updatedAt)) return;
+        // Recorded even when the commit below declines (locally dirty): the
+        // body still lost to something newer, and only strictly older events
+        // are dropped, so a later peer body still applies.
+        noteBodyRevision(docId, updatedAt);
 
         const committed = commitRemote((current) => {
           const idx = current.docs.findIndex((d) => d.id === docId);
@@ -184,6 +229,7 @@ export function useWindowSync(
         const { sourceWindow, docId } = event.payload;
         if (sourceWindow === WINDOW_LABEL || deletingDocIds.has(docId)) return;
         deletingDocIds.add(docId);
+        forgetDocBodyClock(docId);
 
         void (async () => {
           try {
