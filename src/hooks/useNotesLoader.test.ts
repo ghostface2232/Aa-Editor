@@ -489,6 +489,130 @@ describe("useNotesLoader — canonical library store adapter", () => {
     expect(result.current.docs.map((doc) => doc.id).sort()).toEqual(["a", "remote"]);
   });
 
+  it("keeps the trash entry a peer created while the disk read was in flight", async () => {
+    let releaseReconcile!: () => void;
+    refs.reconcileGate = new Promise<void>((resolve) => { releaseReconcile = resolve; });
+    const a = makeDoc("a");
+    const b = makeDoc("b");
+    refs.fs!.seedTextFile(a.filePath, "body-a");
+    refs.fs!.seedTextFile(b.filePath, "body-b");
+    refs.decomposedDocs = [a, b];
+    refs.decomposedTrashed = [];
+    refs.localCache = {
+      version: 2,
+      notesDirectory: "/test-appdata/notes",
+      notes: [a, b].map(({ id, filePath, fileName, createdAt, updatedAt }) => ({
+        id, filePath, fileName, createdAt, updatedAt,
+      })),
+    };
+    const { result } = renderHook(() => useNotesLoader("en", "updated-desc"));
+    await waitFor(() => expect(reconcileFolderModule.reconcileFolder).toHaveBeenCalledTimes(1));
+
+    // A peer trashed "a": doc-deleted removes the live doc, trash-updated adds
+    // the entry. Our disk read predates both and still reports an empty trash.
+    act(() => result.current.commitLibraryFromRemote((current) => ({
+      docs: current.docs.filter((doc) => doc.id !== "a"),
+      trashedNotes: [{
+        id: "a",
+        fileName: "Note a",
+        originalFilePath: a.filePath,
+        trashFilePath: "/test-appdata/notes/.trash/a.md",
+        trashedAt: 7000,
+        groupId: null,
+        createdAt: a.createdAt,
+        updatedAt: a.updatedAt,
+      }],
+      activeNoteId: "b",
+    })));
+
+    await act(async () => {
+      releaseReconcile();
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(result.current.isLoading).toBe(false), { timeout: 2000 });
+
+    // Pre-fix the doc stayed deleted but the stale empty trash won, so the note
+    // existed neither in the library nor in Recently Deleted.
+    const snapshot = libraryStore.getSnapshot();
+    expect(snapshot.docs.map((doc) => doc.id)).toEqual(["b"]);
+    expect(snapshot.trashedNotes.map((note) => note.id)).toEqual(["a"]);
+    expect(result.current.trashedNotes.map((note) => note.id)).toEqual(["a"]);
+  });
+
+  it("does not resurrect a trash entry a peer restored while the disk read was in flight", async () => {
+    let releaseReconcile!: () => void;
+    refs.reconcileGate = new Promise<void>((resolve) => { releaseReconcile = resolve; });
+    const a = makeDoc("a");
+    refs.fs!.seedTextFile(a.filePath, "body-a");
+    refs.decomposedDocs = [a];
+    const trashed = {
+      id: "t1",
+      fileName: "Note t1",
+      originalFilePath: "/test-appdata/notes/t1.md",
+      trashFilePath: "/test-appdata/notes/.trash/t1.md",
+      // Recent enough that purgeExpiredTrash keeps it.
+      trashedAt: Date.now(),
+      groupId: null,
+      createdAt: 1000,
+      updatedAt: 1000,
+    };
+    // The disk read still sees the tombstone the peer is about to clear.
+    refs.decomposedTrashed = [trashed];
+    refs.localCache = {
+      version: 2,
+      notesDirectory: "/test-appdata/notes",
+      notes: [{ id: a.id, filePath: a.filePath, fileName: a.fileName, createdAt: a.createdAt, updatedAt: a.updatedAt }],
+      trashedNotes: [trashed],
+    };
+    const { result } = renderHook(() => useNotesLoader("en", "updated-desc"));
+    await waitFor(() => expect(reconcileFolderModule.reconcileFolder).toHaveBeenCalledTimes(1));
+    expect(libraryStore.getSnapshot().trashedNotes.map((note) => note.id)).toEqual(["t1"]);
+
+    act(() => result.current.commitLibraryFromRemote((current) => ({
+      trashedNotes: current.trashedNotes.filter((note) => note.id !== "t1"),
+    })));
+
+    await act(async () => {
+      releaseReconcile();
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(result.current.isLoading).toBe(false), { timeout: 2000 });
+
+    expect(libraryStore.getSnapshot().trashedNotes).toEqual([]);
+  });
+
+  it("keeps a group change a peer committed while the disk read was in flight", async () => {
+    let releaseReconcile!: () => void;
+    refs.reconcileGate = new Promise<void>((resolve) => { releaseReconcile = resolve; });
+    const a = makeDoc("a");
+    refs.fs!.seedTextFile(a.filePath, "body-a");
+    refs.decomposedDocs = [a];
+    refs.decomposedGroups = [{ id: "g1", name: "Disk name", noteIds: ["a"], collapsed: false, createdAt: 1 }];
+    const { result } = renderHook(() => useNotesLoader("en", "updated-desc"));
+    await waitFor(() => expect(reconcileFolderModule.reconcileFolder).toHaveBeenCalledTimes(1));
+
+    // groups-updated from a peer that renamed g1 and added g2.
+    act(() => result.current.commitLibraryFromRemote(() => ({
+      groups: [
+        { id: "g1", name: "Peer name", noteIds: ["a"], collapsed: false, createdAt: 1 },
+        { id: "g2", name: "Peer group", noteIds: [], collapsed: false, createdAt: 2 },
+      ],
+    })));
+
+    await act(async () => {
+      releaseReconcile();
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(result.current.isLoading).toBe(false), { timeout: 2000 });
+
+    // Pre-fix the stale disk groups overwrote both changes.
+    const snapshot = libraryStore.getSnapshot();
+    expect(snapshot.groups.map((group) => ({ id: group.id, name: group.name }))).toEqual([
+      { id: "g1", name: "Peer name" },
+      { id: "g2", name: "Peer group" },
+    ]);
+  });
+
   it("keeps a note a peer deleted between reconcile and the final commit deleted", async () => {
     let releaseReconcile!: () => void;
     refs.reconcileGate = new Promise<void>((resolve) => { releaseReconcile = resolve; });

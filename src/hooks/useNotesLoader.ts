@@ -256,8 +256,11 @@ export function sortNotes(docs: NoteDoc[], order: NotesSortOrder, locale: Locale
 /**
  * Live bookkeeping for one hydration epoch, maintained by the loader while the
  * disk read is in flight and read when the result is rebased. Provenance is
- * recorded explicitly here rather than inferred from doc contents: an empty
- * body is a legitimate document state, not a marker for a cache projection.
+ * recorded explicitly here rather than inferred from the data: an empty body is
+ * a legitimate document state, not a marker for a cache projection, and an id
+ * missing from the store may have been deleted by a peer or may simply not have
+ * been projected yet. It covers docs, groups, and trash alike — a stale disk
+ * read wins over a concurrent peer change in any of the three otherwise.
  */
 export interface HydrationEpochState {
   /** Every doc id the loader itself put in the store this epoch. */
@@ -266,18 +269,32 @@ export interface HydrationEpochState {
   readonly projectionIds: ReadonlySet<string>;
   /** Ids a non-loader commit removed this epoch: peer or local deletions. */
   readonly deletedIds: ReadonlySet<string>;
+  /** Group ids the loader itself put in the store this epoch. */
+  readonly seededGroupIds: ReadonlySet<string>;
+  /** Group ids a non-loader commit added or changed this epoch. */
+  readonly touchedGroupIds: ReadonlySet<string>;
+  /** Group ids a non-loader commit removed this epoch. */
+  readonly removedGroupIds: ReadonlySet<string>;
+  /** Trash ids the loader itself put in the store this epoch. */
+  readonly seededTrashIds: ReadonlySet<string>;
+  /**
+   * Trash entries a non-loader commit removed this epoch (restore / purge),
+   * by the `trashedAt` of the incarnation that was removed — the id alone
+   * would also retire a later re-trash.
+   */
+  readonly trashRemovals: ReadonlyMap<string, number>;
 }
 
 /**
  * Rebase a hydration result onto whatever the store holds now. Hydration is
  * generation-bound, not revision-bound: a peer window's doc-updated /
- * doc-created / groups event, or App's own projection effects, may commit
- * while the disk load is in flight, and aborting on that would leave the
- * manifest-cache projection (empty bodies) as the canonical library. Disk
- * wins for metadata, groups, trash, and active identity; a peer body that is
- * newer than the disk read survives, a doc the loader never seeded (a
- * peer-created note) is kept rather than dropped, and a doc a peer deleted
- * mid-epoch stays deleted rather than being resurrected by the stale read.
+ * doc-created / groups-updated / trash-updated event, or App's own projection
+ * effects, may commit while the disk load is in flight, and aborting on that
+ * would leave the manifest-cache projection (empty bodies) as the canonical
+ * library. Disk wins wherever the epoch saw no concurrent change; a peer body
+ * newer than the disk read survives, an entity the loader never seeded (a
+ * peer-created note, group, or trash entry) is kept rather than dropped, and
+ * one a peer deleted mid-epoch stays deleted rather than being resurrected.
  */
 export function mergeHydratedLibrary(
   current: LibrarySnapshot,
@@ -312,6 +329,42 @@ export function mergeHydratedLibrary(
     if (hydratedIds.has(live.id) || epoch.seededIds.has(live.id)) continue;
     docs.push(live);
   }
+
+  // Groups carry no reliable version (updatedAt is optional), so the epoch's
+  // record of what a peer touched decides, not a timestamp comparison.
+  const liveGroupById = new Map(current.groups.map((group) => [group.id, group]));
+  const groups: LibraryData["groups"][number][] = [];
+  for (const group of hydrated.groups) {
+    if (epoch.removedGroupIds.has(group.id)) continue;
+    const live = liveGroupById.get(group.id);
+    groups.push(live && epoch.touchedGroupIds.has(group.id) ? live : group);
+  }
+  const hydratedGroupIds = new Set(hydrated.groups.map((group) => group.id));
+  for (const live of current.groups) {
+    if (hydratedGroupIds.has(live.id) || epoch.seededGroupIds.has(live.id)) continue;
+    groups.push(live);
+  }
+
+  // Trash does carry a version — `trashedAt` — and the same incarnation rule
+  // the trash-updated receiver applies: a removal retires one incarnation.
+  const liveTrashById = new Map(current.trashedNotes.map((note) => [note.id, note]));
+  const trashedNotes: LibraryData["trashedNotes"][number][] = [];
+  for (const note of hydrated.trashedNotes) {
+    const live = liveTrashById.get(note.id);
+    if (!live) {
+      const retiredAt = epoch.trashRemovals.get(note.id);
+      if (retiredAt != null && note.trashedAt <= retiredAt) continue;
+      trashedNotes.push(note);
+      continue;
+    }
+    trashedNotes.push(live.trashedAt > note.trashedAt ? live : note);
+  }
+  const hydratedTrashIds = new Set(hydrated.trashedNotes.map((note) => note.id));
+  for (const live of current.trashedNotes) {
+    if (hydratedTrashIds.has(live.id) || epoch.seededTrashIds.has(live.id)) continue;
+    trashedNotes.push(live);
+  }
+
   const sorted = sortNotes(docs, order, locale);
   const has = (id: string | null) => id != null && sorted.some((doc) => doc.id === id);
   const activeNoteId = has(hydrated.activeNoteId)
@@ -321,8 +374,8 @@ export function mergeHydratedLibrary(
       : (sorted[0]?.id ?? null);
   return {
     docs: sorted,
-    groups: hydrated.groups,
-    trashedNotes: hydrated.trashedNotes,
+    groups,
+    trashedNotes,
     activeNoteId,
   };
 }
@@ -1511,18 +1564,44 @@ export function useNotesLoader(
       const projectionIds = new Set<string>();
       // Ids a non-loader commit removed from the store this epoch.
       const deletedIds = new Set<string>();
-      const epoch: HydrationEpochState = { seededIds, projectionIds, deletedIds };
+      // The same three questions for groups and trash. A peer that trashes,
+      // restores, or regroups a note while we load commits only to the store;
+      // the disk read that started before it knows nothing about the change.
+      const seededGroupIds = new Set<string>();
+      const touchedGroupIds = new Set<string>();
+      const removedGroupIds = new Set<string>();
+      const seededTrashIds = new Set<string>();
+      const trashRemovals = new Map<string, number>();
+      const epoch: HydrationEpochState = {
+        seededIds,
+        projectionIds,
+        deletedIds,
+        seededGroupIds,
+        touchedGroupIds,
+        removedGroupIds,
+        seededTrashIds,
+        trashRemovals,
+      };
       // Watch every commit in this generation so the final rebase can tell a
-      // peer deletion from a doc that simply had not been projected yet, and a
-      // real (possibly empty) peer body from the cache placeholder. Neither is
-      // recoverable from the hydrated result alone.
+      // peer deletion from an entity that simply had not been projected yet,
+      // and a real (possibly empty) peer body from the cache placeholder.
+      // Neither is recoverable from the hydrated result alone.
       let observedDocs = new Map<string, NoteDoc>();
+      let observedGroups = new Map<string, LibraryData["groups"][number]>();
+      let observedTrash = new Map<string, LibraryData["trashedNotes"][number]>();
       let unwatchEpoch: (() => void) | null = null;
       const watchEpoch = () => {
         const snapshot = libraryStore.getSnapshot();
         if (snapshot.directoryGeneration !== hydrationGeneration) return;
         const next = new Map(snapshot.docs.map((doc) => [doc.id, doc]));
-        if (snapshot.origin !== "hydrate") {
+        const nextGroups = new Map(snapshot.groups.map((group) => [group.id, group]));
+        const nextTrash = new Map(snapshot.trashedNotes.map((note) => [note.id, note]));
+        if (snapshot.origin === "hydrate") {
+          // Whatever the loader publishes is the loader's own seed: a later
+          // disk result may drop it without that reading as a peer addition.
+          for (const id of nextGroups.keys()) seededGroupIds.add(id);
+          for (const id of nextTrash.keys()) seededTrashIds.add(id);
+        } else {
           for (const [id, doc] of observedDocs) {
             const live = next.get(id);
             // A peer/local/watcher write to a projected id supersedes the
@@ -1530,10 +1609,35 @@ export function useNotesLoader(
             if (!live) deletedIds.add(id);
             else if (live !== doc) projectionIds.delete(id);
           }
+          for (const [id, group] of observedGroups) {
+            const live = nextGroups.get(id);
+            if (!live) removedGroupIds.add(id);
+            else if (live !== group) touchedGroupIds.add(id);
+          }
+          for (const id of nextGroups.keys()) {
+            if (!observedGroups.has(id)) touchedGroupIds.add(id);
+          }
+          for (const [id, note] of observedTrash) {
+            if (nextTrash.has(id)) continue;
+            // Record which incarnation was retired: a note restored and
+            // trashed again is a newer entry the stale read may legitimately
+            // carry.
+            const retiredAt = trashRemovals.get(id);
+            if (retiredAt == null || note.trashedAt > retiredAt) {
+              trashRemovals.set(id, note.trashedAt);
+            }
+          }
         }
         // A re-created id is live again; its tombstone no longer applies.
         for (const id of next.keys()) deletedIds.delete(id);
+        for (const id of nextGroups.keys()) removedGroupIds.delete(id);
+        for (const [id, note] of nextTrash) {
+          const retiredAt = trashRemovals.get(id);
+          if (retiredAt != null && note.trashedAt > retiredAt) trashRemovals.delete(id);
+        }
         observedDocs = next;
+        observedGroups = nextGroups;
+        observedTrash = nextTrash;
       };
       const commitHydration = (data: LibraryData) => {
         if (hydrationGeneration == null) return null;
@@ -1561,6 +1665,10 @@ export function useNotesLoader(
         hydrationGeneration = seeded.directoryGeneration;
         for (const doc of seeded.docs) seededIds.add(doc.id);
         observedDocs = new Map(seeded.docs.map((doc) => [doc.id, doc]));
+        observedGroups = new Map(seeded.groups.map((group) => [group.id, group]));
+        observedTrash = new Map(seeded.trashedNotes.map((note) => [note.id, note]));
+        for (const group of seeded.groups) seededGroupIds.add(group.id);
+        for (const note of seeded.trashedNotes) seededTrashIds.add(note.id);
         unwatchEpoch = libraryStore.subscribe(watchEpoch);
 
         const cache = await readLocalCache(dir);
