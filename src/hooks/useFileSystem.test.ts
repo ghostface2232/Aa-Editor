@@ -608,6 +608,112 @@ describe("useFileSystem — deleteNote trash-copy guard", () => {
   });
 });
 
+describe("useFileSystem — active-target flush verdicts", () => {
+  // flushAutoSave reports `false` structurally after provisioning a pathless
+  // active doc even when the body landed; a genuine write failure also reports
+  // false. Delete must tell them apart via the store; restore must not care.
+  it("still deletes an active doc that flushAutoSave provisioned but reported false for", async () => {
+    const pathless = makeDoc("a", { filePath: "", content: "typed", isDirty: true });
+    const state = makeState({ isDirty: true });
+    const { result, flushAutoSave, flushDocSave } = renderFs({ docs: [pathless, makeDoc("b")], activeIndex: 0, state });
+    flushAutoSave.mockImplementation(async () => {
+      // Provisioning adopts the path in the store synchronously, then reports false.
+      libraryStore.commit((current) => ({
+        docs: current.docs.map((doc) => (doc.id === "a" ? { ...doc, filePath: "/notes/a.md" } : doc)),
+      }), "local");
+      refs.librarySnapshot = libraryStore.getSnapshot();
+      return false;
+    });
+
+    let deleted: string[] = [];
+    await act(async () => {
+      deleted = await result.current.deleteNote(0);
+    });
+
+    expect(deleted).toEqual(["a"]);
+    expect(flushDocSave).toHaveBeenCalledWith("a");
+    expect(copyFileMock).toHaveBeenCalledWith("/notes/a.md", "/notes/.trash/a.md");
+  });
+
+  it("skips a provisioned active doc whose post-provision save is still failing", async () => {
+    const pathless = makeDoc("a", { filePath: "", content: "typed", isDirty: true });
+    const state = makeState({ isDirty: true });
+    const flushDocSave = vi.fn(async (docId: string) => docId !== "a");
+    const { result, flushAutoSave } = renderFs({
+      docs: [pathless, makeDoc("b")],
+      activeIndex: 0,
+      state,
+      flushDocSave,
+    });
+    flushAutoSave.mockImplementation(async () => {
+      libraryStore.commit((current) => ({
+        docs: current.docs.map((doc) => (doc.id === "a" ? { ...doc, filePath: "/notes/a.md" } : doc)),
+      }), "local");
+      refs.librarySnapshot = libraryStore.getSnapshot();
+      return false;
+    });
+
+    let deleted: string[] = [];
+    await act(async () => {
+      deleted = await result.current.deleteNote(0);
+    });
+
+    expect(deleted).toEqual([]);
+    expect(copyFileMock).not.toHaveBeenCalled();
+  });
+
+  it("skips an active doc whose body write genuinely failed", async () => {
+    const state = makeState({ isDirty: true });
+    const flushDocSave = vi.fn(async (docId: string) => docId !== "a");
+    const { result, flushAutoSave } = renderFs({
+      docs: [makeDoc("a", { content: "typed", isDirty: true }), makeDoc("b")],
+      activeIndex: 0,
+      state,
+      flushDocSave,
+    });
+    flushAutoSave.mockResolvedValue(false);
+
+    let deleted: string[] = [];
+    await act(async () => {
+      deleted = await result.current.deleteNote(0);
+    });
+
+    expect(deleted).toEqual([]);
+    expect(copyFileMock).not.toHaveBeenCalled();
+  });
+
+  it("restores even when flushing the leaving doc reports false", async () => {
+    const trashed: TrashedNote = {
+      id: "t1",
+      fileName: "Trashed",
+      originalFilePath: "/notes/t1.md",
+      trashFilePath: "/notes/.trash/t1.md",
+      trashedAt: 2000,
+      groupId: null,
+      createdAt: 1000,
+      updatedAt: 1500,
+      pinned: false,
+    };
+    const state = makeState({ isDirty: true });
+    const { result, flushAutoSave } = renderFs({
+      docs: [makeDoc("a", { content: "typed", isDirty: true })],
+      state,
+      trashedNotes: [trashed],
+    });
+    flushAutoSave.mockResolvedValue(false);
+
+    await act(async () => {
+      await result.current.restoreNote("t1");
+    });
+
+    expect(copyFileMock).toHaveBeenCalledWith("/notes/.trash/t1.md", "/notes/t1.md");
+    expect(refs.librarySnapshot?.docs.map((doc) => doc.id).sort()).toEqual(["a", "t1"]);
+    expect(refs.librarySnapshot?.activeNoteId).toBe("t1");
+    // The leaving doc stays dirty; its edits are captured, not marked clean.
+    expect(refs.librarySnapshot?.docs.find((doc) => doc.id === "a")?.isDirty).toBe(true);
+  });
+});
+
 describe("useFileSystem — deleteNotes meta-first ordering", () => {
   const writeMetaMock = metadataIOModule.writeMeta as ReturnType<typeof vi.fn>;
   const readMetaMock = metadataIOModule.readMeta as ReturnType<typeof vi.fn>;

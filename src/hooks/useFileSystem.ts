@@ -263,6 +263,20 @@ export function useFileSystem(
     return flushAutoSaveRef.current();
   }, [flushAutoSaveRef, state.isDirty]);
 
+  // flushAutoSave reports `false` structurally after provisioning a pathless
+  // active doc even when everything was written (its docs-snapshot callers
+  // must not mark a stale pathless entry clean). A destructive caller that
+  // would otherwise skip the doc can re-verify against the store: the doc was
+  // pathless before the flush, has a path now, and its save queue drains. A
+  // doc that already had a path (a genuine write failure), stayed pathless,
+  // or whose post-provision retry is still pending reads as not drained.
+  const provisionedByFlush = useCallback(async (docId: string, filePathBeforeFlush: string) => {
+    if (filePathBeforeFlush) return false;
+    const now = libraryStore.getSnapshot().docs.find((doc) => doc.id === docId);
+    if (!now?.filePath) return false;
+    return (await flushDocSaveRef?.current?.(docId)) !== false;
+  }, [flushDocSaveRef]);
+
   const getLiveDocsSnapshot = useCallback((baseDocs: NoteDoc[] = docsRef.current) => {
     const currentActiveIndex = activeIndexRef.current;
     const activeDoc = baseDocs[currentActiveIndex];
@@ -820,9 +834,10 @@ export function useFileSystem(
     // The active note can change while a cloud-backed flush is awaiting I/O.
     // Re-check until the same active identity survives an awaited capture.
     while (true) {
-      const beforeActiveId = docsRef.current[activeIndexRef.current]?.id ?? null;
-      if (beforeActiveId && targetIds.includes(beforeActiveId)) {
-        if (!(await leaveCurrentDoc())) {
+      const beforeActive = docsRef.current[activeIndexRef.current];
+      const beforeActiveId = beforeActive?.id ?? null;
+      if (beforeActive && beforeActiveId && targetIds.includes(beforeActiveId)) {
+        if (!(await leaveCurrentDoc()) && !(await provisionedByFlush(beforeActiveId, beforeActive.filePath))) {
           targetIds = targetIds.filter((id) => id !== beforeActiveId);
         }
       }
@@ -1105,7 +1120,7 @@ export function useFileSystem(
         if (!committedDeletedIds.has(id)) await flushDocSaveRef?.current?.(id);
       }
     }
-  }, [cancelDocSaveRef, commitLibraryForGeneration, flushDocSaveRef, getLiveDocsSnapshot, leaveCurrentDoc, locale, notesSortOrder, state, tiptapRef]);
+  }, [provisionedByFlush, cancelDocSaveRef, commitLibraryForGeneration, flushDocSaveRef, getLiveDocsSnapshot, leaveCurrentDoc, locale, notesSortOrder, state, tiptapRef]);
 
   const deleteNote = useCallback(async (index: number): Promise<string[]> => {
     const doc = docsRef.current[index];
@@ -1378,8 +1393,11 @@ export function useFileSystem(
   // in the same commit.
   const restoreNote = useCallback(async (trashedNoteId: string) => {
     if (!trashedNotesRef.current?.some((note) => note.id === trashedNoteId)) return;
-    const didPersistCurrentDoc = await leaveCurrentDoc();
-    if (!didPersistCurrentDoc) return;
+    // The leaving doc is not the subject of this transition, so a failed or
+    // structurally-false flush must not turn Restore into a silent no-op: it
+    // stays dirty in the store, and afterCommit captures the editor's latest
+    // input before the editor is repointed (like switchDocument's fast path).
+    await leaveCurrentDoc();
     if (!trashedNotesRef.current?.some((note) => note.id === trashedNoteId) || !commitLibraryForGeneration) return;
 
     // The prune candidate must be bound as a transaction target up front so
