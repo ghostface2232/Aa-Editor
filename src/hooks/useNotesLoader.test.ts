@@ -359,7 +359,7 @@ describe("useNotesLoader — canonical library store adapter", () => {
     expect(result.current.activeIndex).toBe(0);
   });
 
-  it("resolves a nested active-index update against the docs returned by its updater", async () => {
+  it("keeps active identity by id across a docs-only commit and commits docs+active atomically", async () => {
     const a = makeDoc("a");
     refs.fs!.seedTextFile(a.filePath, "body-a");
     refs.decomposedDocs = [a];
@@ -369,18 +369,32 @@ describe("useNotesLoader — canonical library store adapter", () => {
     const c = makeDoc("c");
     act(() => {
       result.current.setDocs([a, b, c]);
-      result.current.setActiveIndex(1);
+      result.current.setActiveIndex(2);
     });
 
-    act(() => result.current.setDocs((prev) => {
-      const withoutActive = prev.filter((doc) => doc.id !== "b");
-      result.current.setActiveIndex(1);
-      return withoutActive;
-    }));
-
-    expect(result.current.docs.map((doc) => doc.id)).toEqual(["a", "c"]);
+    // Removing a doc before the active one needs no index bookkeeping.
+    act(() => result.current.setDocs((prev) => prev.filter((doc) => doc.id !== "a")));
+    expect(result.current.docs.map((doc) => doc.id)).toEqual(["b", "c"]);
     expect(result.current.activeIndex).toBe(1);
     expect(libraryStore.getSnapshot().activeNoteId).toBe("c");
+
+    // Removing the active doc and handing off happens in one revision.
+    const before = libraryStore.getSnapshot().revision;
+    act(() => {
+      result.current.commitLibraryFromRemote((current) => ({
+        docs: current.docs.filter((doc) => doc.id !== "c"),
+        activeNoteId: "b",
+      }));
+    });
+    expect(libraryStore.getSnapshot().revision).toBe(before + 1);
+    expect(libraryStore.getSnapshot()).toMatchObject({ activeNoteId: "b", origin: "remote" });
+    expect(result.current.docs.map((doc) => doc.id)).toEqual(["b"]);
+    expect(result.current.activeIndex).toBe(0);
+    // A no-op updater reports null and leaves the revision alone.
+    let committed: unknown = "unset";
+    act(() => { committed = result.current.commitLibraryFromRemote(() => null); });
+    expect(committed).toBeNull();
+    expect(libraryStore.getSnapshot().revision).toBe(before + 1);
   });
 
   it("records window-sync and watcher mutations with their real origins", async () => {
@@ -390,10 +404,9 @@ describe("useNotesLoader — canonical library store adapter", () => {
     const { result } = renderHook(() => useNotesLoader("en", "updated-desc"));
     await waitFor(() => expect(result.current.isLoading).toBe(false), { timeout: 2000 });
 
-    act(() => result.current.setDocsFromRemote((prev) => [
-      ...prev,
-      makeDoc("remote"),
-    ]));
+    act(() => result.current.commitLibraryFromRemote((current) => ({
+      docs: [...current.docs, makeDoc("remote")],
+    })));
     expect(libraryStore.getSnapshot().origin).toBe("remote");
 
     act(() => result.current.setGroupsFromReconcile([{
@@ -450,11 +463,13 @@ describe("useNotesLoader — canonical library store adapter", () => {
 
     // A peer created a note and pushed a body for "a" newer than our disk read
     // while we loaded (no cache projection here, so "a" arrives via the peer).
-    act(() => result.current.setDocsFromRemote((prev) => [
-      ...prev,
-      { ...a, content: "peer-a", updatedAt: a.updatedAt + 5000 },
-      remote,
-    ]));
+    act(() => result.current.commitLibraryFromRemote((current) => ({
+      docs: [
+        ...current.docs,
+        { ...a, content: "peer-a", updatedAt: a.updatedAt + 5000 },
+        remote,
+      ],
+    })));
     expect(libraryStore.getSnapshot()).toMatchObject({ origin: "remote", directoryGeneration: generation });
 
     await act(async () => {

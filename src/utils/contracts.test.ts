@@ -177,6 +177,42 @@ describe("contract: notes directory setting commits after copy, before source cl
   });
 });
 
+describe("contract: observed state commits through remote/reconcile adapters", () => {
+  // Regression class: window-sync and watcher state must not be committed as
+  // a local intent, and window-sync must express each event as one store
+  // updater instead of nesting setActiveIndex inside a setDocs updater.
+  const APP = resolve(SRC_ROOT, "App.tsx");
+  const WINDOW_SYNC = resolve(SRC_ROOT, "hooks/useWindowSync.ts");
+  const LOADER = resolve(SRC_ROOT, "hooks/useNotesLoader.ts");
+
+  it("App wires useWindowSync to commitLibraryFromRemote and useFileWatcher to reconcile setters", () => {
+    const text = read(APP);
+    const sync = text.match(/useWindowSync\(\n([\s\S]*?)\n  \);/)?.[1];
+    const watcher = text.match(/useFileWatcher\(\n([\s\S]*?)\n  \);/)?.[1];
+    expect(sync, "useWindowSync call not found").toBeDefined();
+    expect(watcher, "useFileWatcher call not found").toBeDefined();
+    expect(sync).toContain("commitLibraryFromRemote");
+    expect(sync).not.toMatch(/\bset(Docs|Groups|TrashedNotes|ActiveIndex)\b/);
+    expect(watcher).toContain("setDocsFromReconcile");
+    expect(watcher).toContain("setGroupsFromReconcile");
+    expect(watcher).toContain("setActiveIndexFromReconcile");
+    expect(watcher).not.toMatch(/\bset(Docs|Groups|ActiveIndex),/);
+  });
+
+  it("useWindowSync uses only the remote commit adapter and no React setters", () => {
+    const text = read(WINDOW_SYNC);
+    expect(text).not.toMatch(/\bset(Docs|Groups|TrashedNotes|ActiveIndex)\b/);
+    expect(text).not.toContain("flushSync");
+    expect(text).toContain("commitRemote((current) =>");
+  });
+
+  it("the store adapters no longer buffer nested active-index updates", () => {
+    const text = read(LOADER);
+    expect(text).not.toContain("nestedActiveUpdatesRef");
+    expect(text).not.toContain("nested setDocs is not supported");
+  });
+});
+
 describe("contract: hydration is generation-bound and pauses full persistence", () => {
   // Regression class: the loader effect used to gate its commits on strict
   // revision equality and re-run on locale/sort changes. A peer window's

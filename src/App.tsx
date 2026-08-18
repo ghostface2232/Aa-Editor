@@ -356,20 +356,17 @@ function App() {
   const {
     docs,
     setDocs,
-    setDocsFromRemote,
     setDocsFromReconcile,
     activeIndex,
     setActiveIndex,
-    setActiveIndexFromRemote,
     setActiveIndexFromReconcile,
     groups,
     setGroups,
-    setGroupsFromRemote,
     setGroupsFromReconcile,
     trashedNotes,
     setTrashedNotes,
-    setTrashedNotesFromRemote,
     commitLibraryForGeneration,
+    commitLibraryFromRemote,
     isLoading,
   } = useNotesLoader(
     locale,
@@ -531,13 +528,9 @@ function App() {
     state.setIsDirty(false);
   }, [state]);
   useWindowSync(
-    setDocsFromRemote,
-    activeIndex,
+    commitLibraryFromRemote,
     docs[activeIndex]?.id ?? null,
     tiptapRef,
-    setActiveIndexFromRemote,
-    setGroupsFromRemote,
-    setTrashedNotesFromRemote,
     handleActiveDocChanged,
     settings.notesSortOrder,
     locale,

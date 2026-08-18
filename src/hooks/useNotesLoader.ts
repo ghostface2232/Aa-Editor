@@ -1254,7 +1254,6 @@ export function useNotesLoader(
   const [trashedNotes, setTrashedNotesState] = useState<TrashedNote[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const initialized = useRef(false);
-  const nestedActiveUpdatesRef = useRef<SetStateAction<number>[] | null>(null);
 
   const activeIndexFromSnapshot = useCallback((snapshot: LibrarySnapshot) => (
     snapshot.activeNoteId
@@ -1298,48 +1297,35 @@ export function useNotesLoader(
     return committed;
   }, [syncAllReactState]);
 
+  // Direct store commit for observed (peer window) state: one updater may
+  // change docs, groups, trash, and active identity together, so callers no
+  // longer need to nest setActiveIndex inside a setDocs updater. Returns null
+  // when nothing changed so callers can skip editor side effects.
+  const commitLibraryFromRemote = useCallback((update: LibraryUpdater) => {
+    const before = libraryStore.getSnapshot();
+    const committed = libraryStore.commit(update, "remote");
+    if (committed === before) return null;
+    syncAllReactState(committed);
+    return committed;
+  }, [syncAllReactState]);
+
   const commitDocsUpdate = useCallback((
     updater: SetStateAction<NoteDoc[]>,
     origin: LibraryCommitOrigin,
   ) => {
     const current = libraryStore.getSnapshot();
     const previous = [...current.docs];
-    if (nestedActiveUpdatesRef.current) {
-      throw new Error("useNotesLoader: nested setDocs is not supported");
-    }
-    const nestedActiveUpdates: SetStateAction<number>[] = [];
-    nestedActiveUpdatesRef.current = nestedActiveUpdates;
-    let next: NoteDoc[];
-    try {
-      next = typeof updater === "function" ? updater(previous) : updater;
-    } finally {
-      nestedActiveUpdatesRef.current = null;
-    }
-    if (next === previous && nestedActiveUpdates.length === 0) return;
-
-    let activeNoteId = current.activeNoteId;
-    if (nestedActiveUpdates.length > 0) {
-      let requestedIndex = activeIndexFromSnapshot(current);
-      for (const activeUpdate of nestedActiveUpdates) {
-        requestedIndex = typeof activeUpdate === "function"
-          ? activeUpdate(requestedIndex)
-          : activeUpdate;
-      }
-      const boundedIndex = next.length > 0
-        ? Math.min(Math.max(requestedIndex, 0), next.length - 1)
-        : 0;
-      activeNoteId = next[boundedIndex]?.id ?? null;
-    }
-    const committed = libraryStore.commit({ docs: next, activeNoteId }, origin);
+    const next = typeof updater === "function" ? updater(previous) : updater;
+    if (next === previous) return;
+    // Active identity is an id, so it survives a docs-only commit; callers that
+    // change docs and active together use a store updater (commitLibraryFromRemote
+    // / commitLibraryForGeneration) rather than nesting setters.
+    const committed = libraryStore.commit({ docs: next }, origin);
     setDocsState([...committed.docs]);
     setActiveIndexState(activeIndexFromSnapshot(committed));
   }, [activeIndexFromSnapshot]);
   const setDocs = useCallback<Dispatch<SetStateAction<NoteDoc[]>>>(
     (updater) => commitDocsUpdate(updater, "local"),
-    [commitDocsUpdate],
-  );
-  const setDocsFromRemote = useCallback<Dispatch<SetStateAction<NoteDoc[]>>>(
-    (updater) => commitDocsUpdate(updater, "remote"),
     [commitDocsUpdate],
   );
   const setDocsFromReconcile = useCallback<Dispatch<SetStateAction<NoteDoc[]>>>(
@@ -1368,10 +1354,6 @@ export function useNotesLoader(
     (updater) => commitGroupsUpdate(updater, "local"),
     [commitGroupsUpdate],
   );
-  const setGroupsFromRemote = useCallback<Dispatch<SetStateAction<NoteGroup[]>>>(
-    (updater) => commitGroupsUpdate(updater, "remote"),
-    [commitGroupsUpdate],
-  );
   const setGroupsFromReconcile = useCallback<Dispatch<SetStateAction<NoteGroup[]>>>(
     (updater) => commitGroupsUpdate(updater, "reconcile"),
     [commitGroupsUpdate],
@@ -1393,19 +1375,11 @@ export function useNotesLoader(
   const setTrashedNotes = useCallback((
     updater: TrashedNote[] | ((prev: TrashedNote[]) => TrashedNote[]),
   ) => commitTrashedNotesUpdate(updater, "local"), [commitTrashedNotesUpdate]);
-  const setTrashedNotesFromRemote = useCallback((
-    updater: TrashedNote[] | ((prev: TrashedNote[]) => TrashedNote[]),
-  ) => commitTrashedNotesUpdate(updater, "remote"), [commitTrashedNotesUpdate]);
 
   const commitActiveIndexUpdate = useCallback((
     updater: SetStateAction<number>,
     origin: LibraryCommitOrigin,
   ) => {
-    const nestedActiveUpdates = nestedActiveUpdatesRef.current;
-    if (nestedActiveUpdates) {
-      nestedActiveUpdates.push(updater);
-      return;
-    }
     const current = libraryStore.getSnapshot();
     const previousIndex = activeIndexFromSnapshot(current);
     const requestedIndex = typeof updater === "function" ? updater(previousIndex) : updater;
@@ -1419,10 +1393,6 @@ export function useNotesLoader(
   }, [activeIndexFromSnapshot]);
   const setActiveIndex = useCallback<Dispatch<SetStateAction<number>>>(
     (updater) => commitActiveIndexUpdate(updater, "local"),
-    [commitActiveIndexUpdate],
-  );
-  const setActiveIndexFromRemote = useCallback<Dispatch<SetStateAction<number>>>(
-    (updater) => commitActiveIndexUpdate(updater, "remote"),
     [commitActiveIndexUpdate],
   );
   const setActiveIndexFromReconcile = useCallback<Dispatch<SetStateAction<number>>>(
@@ -1724,20 +1694,17 @@ export function useNotesLoader(
   return {
     docs,
     setDocs,
-    setDocsFromRemote,
     setDocsFromReconcile,
     activeIndex,
     setActiveIndex,
-    setActiveIndexFromRemote,
     setActiveIndexFromReconcile,
     groups,
     setGroups,
-    setGroupsFromRemote,
     setGroupsFromReconcile,
     trashedNotes,
     setTrashedNotes,
-    setTrashedNotesFromRemote,
     commitLibraryForGeneration,
+    commitLibraryFromRemote,
     isLoading,
   };
 }

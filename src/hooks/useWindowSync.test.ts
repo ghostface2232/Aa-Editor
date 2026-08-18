@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { NoteDoc } from "../utils/noteTypes";
 import type { TiptapEditorHandle } from "../components/TiptapEditor";
+import { createLibraryStore, type LibrarySnapshot, type LibraryUpdater } from "../utils/libraryStore";
 
 const refs = vi.hoisted(() => ({
   handlers: new Map<string, (event: { payload: unknown }) => void>(),
@@ -55,22 +56,35 @@ function renderWindowSync(
   };
 
   const hook = renderHook(() => {
-    const [docs, setDocs] = useState(initialDocs);
-    const [activeIndex, setActiveIndex] = useState(0);
+    // A private canonical store stands in for useNotesLoader's adapter: the
+    // hook must express every remote change as one store updater.
+    const store = useMemo(() => createLibraryStore({
+      docs: initialDocs,
+      activeNoteId: initialDocs[0]?.id ?? null,
+      notesDirectory: "/notes",
+    }), []);
+    const [snapshot, setSnapshot] = useState<LibrarySnapshot>(() => store.getSnapshot());
+    const commitRemote = useCallback((update: LibraryUpdater) => {
+      const before = store.getSnapshot();
+      const committed = store.commit(update, "remote");
+      if (committed === before) return null;
+      setSnapshot(committed);
+      return committed;
+    }, [store]);
+    const docs = snapshot.docs as NoteDoc[];
+    const activeIndex = snapshot.activeNoteId
+      ? Math.max(docs.findIndex((doc) => doc.id === snapshot.activeNoteId), 0)
+      : 0;
     useWindowSync(
-      setDocs,
-      activeIndex,
+      commitRemote,
       docs[activeIndex]?.id ?? null,
       tiptapRef,
-      setActiveIndex,
-      undefined,
-      undefined,
       onActiveDocChanged,
       "updated-desc",
       "en",
       settleRemoteDeletedDoc,
     );
-    return { docs, activeIndex };
+    return { docs, activeIndex, snapshot };
   });
   return { ...hook, openDocument, onActiveDocChanged };
 }

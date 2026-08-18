@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef } from "react";
-import { flushSync } from "react-dom";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { emit, listen } from "@tauri-apps/api/event";
 import { sortNotes, type NoteDoc, type NoteGroup, type TrashedNote } from "./useNotesLoader";
 import type { TiptapEditorHandle } from "../components/TiptapEditor";
-import { setTrashedNotesCache, syncGroupsSnapshotFromDisk, getNotesDir } from "./useNotesLoader";
+import { syncGroupsSnapshotFromDisk, getNotesDir } from "./useNotesLoader";
+import type { LibrarySnapshot, LibraryUpdater } from "../utils/libraryStore";
 import type { Locale, NotesSortOrder } from "./useSettings";
 import type { NoteColorId } from "../utils/noteColors";
 
@@ -107,20 +107,14 @@ export function emitTrashUpdated(trashedNotes: TrashedNote[]) {
 }
 
 export function useWindowSync(
-  setDocs: React.Dispatch<React.SetStateAction<NoteDoc[]>>,
-  activeIndex: number,
+  commitRemote: (update: LibraryUpdater) => LibrarySnapshot | null,
   activeDocId: string | null,
   tiptapRef: React.RefObject<TiptapEditorHandle | null>,
-  setActiveIndex: React.Dispatch<React.SetStateAction<number>>,
-  setGroups?: React.Dispatch<React.SetStateAction<NoteGroup[]>>,
-  setTrashedNotes?: (updater: TrashedNote[] | ((prev: TrashedNote[]) => TrashedNote[])) => void,
   onActiveDocChanged?: (doc: { filePath: string; content: string }) => void,
   notesSortOrder: NotesSortOrder = "updated-desc",
   locale: Locale = "en",
   settleRemoteDeletedDoc?: (docId: string) => Promise<boolean>,
 ) {
-  const activeIndexRef = useRef(activeIndex);
-  activeIndexRef.current = activeIndex;
   const activeDocIdRef = useRef(activeDocId);
   activeDocIdRef.current = activeDocId;
   const onActiveDocChangedRef = useRef(onActiveDocChanged);
@@ -128,6 +122,15 @@ export function useWindowSync(
   const getRoutedActiveDocId = useCallback(() => {
     const editorDocId = tiptapRef.current?.getEditor?.()?.storage.documentContext.noteId ?? null;
     return editorDocId ?? activeDocIdRef.current;
+  }, [tiptapRef]);
+  const showInEditor = useCallback((doc: NoteDoc) => {
+    tiptapRef.current?.openDocument?.({
+      noteId: doc.id,
+      filePath: doc.filePath,
+      markdown: doc.content,
+      reason: "window-sync",
+    });
+    onActiveDocChangedRef.current?.({ filePath: doc.filePath, content: doc.content });
   }, [tiptapRef]);
 
   useEffect(() => {
@@ -140,59 +143,40 @@ export function useWindowSync(
         const { sourceWindow, docId, content, updatedAt } = event.payload;
         if (sourceWindow === WINDOW_LABEL) return;
 
-        let needsSyncMarkdown = false;
-        let syncFilePath = "";
-
-        // flushSync forces the updater to run synchronously so the
-        // flags it sets are reliable when checked afterwards.
-        flushSync(() => {
-          setDocs((prev) => {
-            const idx = prev.findIndex((d) => d.id === docId);
-            if (idx < 0) return prev;
-            // Mirror useFileWatcher's guard: a locally-dirty doc means the
-            // user is actively editing here, so refuse to overwrite content
-            // and keep the dirty flag. Last-write-wins on the disk side
-            // (our own autosave) resolves conflicts, not remote events.
-            if (prev[idx].isDirty) return prev;
-            const updated = [...prev];
-            // Titles are sidecar/rename metadata. A delayed body notification
-            // must not roll a newer rename back in the receiving window.
-            updated[idx] = {
-              ...updated[idx],
-              content,
-              updatedAt: Math.max(updated[idx].updatedAt, updatedAt),
-              isDirty: false,
-            };
-
-            if (updated[idx].id === getRoutedActiveDocId()) {
-              needsSyncMarkdown = true;
-              syncFilePath = updated[idx].filePath;
-            }
-            return updated;
-          });
+        const committed = commitRemote((current) => {
+          const idx = current.docs.findIndex((d) => d.id === docId);
+          if (idx < 0) return null;
+          // Mirror useFileWatcher's guard: a locally-dirty doc means the
+          // user is actively editing here, so refuse to overwrite content
+          // and keep the dirty flag. Last-write-wins on the disk side
+          // (our own autosave) resolves conflicts, not remote events.
+          if (current.docs[idx].isDirty) return null;
+          const docs = [...current.docs];
+          // Titles are sidecar/rename metadata. A delayed body notification
+          // must not roll a newer rename back in the receiving window.
+          docs[idx] = {
+            ...docs[idx],
+            content,
+            updatedAt: Math.max(docs[idx].updatedAt, updatedAt),
+            isDirty: false,
+          };
+          return { docs };
         });
-
-        if (needsSyncMarkdown && tiptapRef.current) {
-          tiptapRef.current.openDocument?.({
-            noteId: docId,
-            filePath: syncFilePath,
-            markdown: content,
-            reason: "window-sync",
-          });
-          onActiveDocChangedRef.current?.({ filePath: syncFilePath, content });
-        }
+        if (!committed || docId !== getRoutedActiveDocId()) return;
+        const updated = committed.docs.find((d) => d.id === docId);
+        if (updated) showInEditor(updated);
       }),
 
       listen<DocRenamedPayload>("doc-renamed", (event) => {
         const { sourceWindow, docId, newFilePath, newFileName } = event.payload;
         if (sourceWindow === WINDOW_LABEL) return;
 
-        setDocs((prev) => {
-          const idx = prev.findIndex((d) => d.id === docId);
-          if (idx < 0) return prev;
-          const updated = [...prev];
-          updated[idx] = { ...updated[idx], filePath: newFilePath, fileName: newFileName };
-          return updated;
+        commitRemote((current) => {
+          const idx = current.docs.findIndex((d) => d.id === docId);
+          if (idx < 0) return null;
+          const docs = [...current.docs];
+          docs[idx] = { ...docs[idx], filePath: newFilePath, fileName: newFileName };
+          return { docs };
         });
       }),
 
@@ -212,42 +196,22 @@ export function useWindowSync(
               try { settlement = settleRemoteDeletedDoc(docId); } catch { /* deletion remains authoritative */ }
             }
 
-            flushSync(() => {
-              setDocs((prev) => {
-                const idx = prev.findIndex((d) => d.id === docId);
-                if (idx < 0) return prev;
-
-                const filtered = prev.filter((d) => d.id !== docId);
-                if (filtered.length === 0) {
-                  setActiveIndex(0);
-                  return filtered;
-                }
-
-                const currentActive = activeIndexRef.current;
-                const deletedActiveDoc = getRoutedActiveDocId() === docId;
-
-                if (deletedActiveDoc) {
-                  const newIdx = Math.min(idx, filtered.length - 1);
-                  setActiveIndex(newIdx);
-                  const newDoc = filtered[newIdx];
-                  if (tiptapRef.current && newDoc) {
-                    tiptapRef.current.openDocument?.({
-                      noteId: newDoc.id,
-                      filePath: newDoc.filePath,
-                      markdown: newDoc.content,
-                      reason: "window-sync",
-                    });
-                  }
-                  if (newDoc) {
-                    onActiveDocChangedRef.current?.({ filePath: newDoc.filePath, content: newDoc.content });
-                  }
-                } else if (idx < currentActive) {
-                  setActiveIndex(currentActive - 1);
-                }
-
-                return filtered;
-              });
+            // Active identity is stored by id, so removing a doc before the
+            // active one needs no index shuffling; only a deleted active doc
+            // hands off to its neighbour, in the same commit as the removal.
+            let deletedActiveDoc = false;
+            const committed = commitRemote((current) => {
+              const idx = current.docs.findIndex((d) => d.id === docId);
+              if (idx < 0) return null;
+              const docs = current.docs.filter((d) => d.id !== docId);
+              deletedActiveDoc = current.activeNoteId === docId || getRoutedActiveDocId() === docId;
+              if (!deletedActiveDoc) return { docs };
+              return { docs, activeNoteId: docs[Math.min(idx, docs.length - 1)]?.id ?? null };
             });
+            if (committed && deletedActiveDoc && committed.activeNoteId) {
+              const next = committed.docs.find((d) => d.id === committed.activeNoteId);
+              if (next) showInEditor(next);
+            }
             // Preservation is best-effort and is also tracked by the autosave
             // close/migration drain. The originating window already committed
             // the delete, so failure must not put the document back in state.
@@ -264,45 +228,28 @@ export function useWindowSync(
         const { sourceWindow, doc } = event.payload;
         if (sourceWindow === WINDOW_LABEL) return;
 
-        let shouldActivate = false;
-        flushSync(() => {
-          setDocs((prev) => {
-            if (prev.some((d) => d.id === doc.id || d.filePath === doc.filePath)) return prev;
-            shouldActivate = prev.length === 0;
-            if (shouldActivate) setActiveIndex(0);
-            return [...prev, { ...doc, isDirty: false }];
-          });
-        });
-
         // Deletion and creation are separate Tauri events, so the replacement
         // may arrive after the peer has already removed its last document.
-        if (shouldActivate) {
-          tiptapRef.current?.openDocument?.({
-            noteId: doc.id,
-            filePath: doc.filePath,
-            markdown: doc.content,
-            reason: "window-sync",
-          });
-          onActiveDocChangedRef.current?.({ filePath: doc.filePath, content: doc.content });
-        }
+        let shouldActivate = false;
+        const committed = commitRemote((current) => {
+          if (current.docs.some((d) => d.id === doc.id || d.filePath === doc.filePath)) return null;
+          shouldActivate = current.docs.length === 0;
+          const docs = [...current.docs, { ...doc, isDirty: false }];
+          return shouldActivate ? { docs, activeNoteId: doc.id } : { docs };
+        });
+        if (committed && shouldActivate) showInEditor({ ...doc, isDirty: false });
       }),
 
       listen<NotePinnedUpdatedPayload>("note-pinned-updated", (event) => {
         const { sourceWindow, docId, pinned } = event.payload;
         if (sourceWindow === WINDOW_LABEL) return;
 
-        setDocs((prev) => {
-          const idx = prev.findIndex((d) => d.id === docId);
-          if (idx < 0) return prev;
-          const next = [...prev];
-          next[idx] = { ...next[idx], pinned };
-          const sorted = sortNotes(next, notesSortOrder, locale);
-          const activeId = getRoutedActiveDocId();
-          if (activeId) {
-            const nextActiveIndex = sorted.findIndex((d) => d.id === activeId);
-            if (nextActiveIndex >= 0) setActiveIndex(nextActiveIndex);
-          }
-          return sorted;
+        commitRemote((current) => {
+          const idx = current.docs.findIndex((d) => d.id === docId);
+          if (idx < 0) return null;
+          const docs = [...current.docs];
+          docs[idx] = { ...docs[idx], pinned };
+          return { docs: sortNotes(docs, notesSortOrder, locale) };
         });
       }),
 
@@ -310,19 +257,19 @@ export function useWindowSync(
         const { sourceWindow, docId, color } = event.payload;
         if (sourceWindow === WINDOW_LABEL) return;
 
-        setDocs((prev) => {
-          const idx = prev.findIndex((d) => d.id === docId);
-          if (idx < 0 || prev[idx].color === (color ?? undefined)) return prev;
-          const next = [...prev];
-          next[idx] = { ...next[idx], color: color ?? undefined };
-          return next;
+        commitRemote((current) => {
+          const idx = current.docs.findIndex((d) => d.id === docId);
+          if (idx < 0 || current.docs[idx].color === (color ?? undefined)) return null;
+          const docs = [...current.docs];
+          docs[idx] = { ...docs[idx], color: color ?? undefined };
+          return { docs };
         });
       }),
 
       listen<GroupsUpdatedPayload>("groups-updated", (event) => {
         const { sourceWindow, groups } = event.payload;
         if (sourceWindow === WINDOW_LABEL) return;
-        setGroups?.(groups);
+        commitRemote(() => ({ groups }));
         // Keep saveManifest's deletion-detection snapshot aligned with what
         // the other window just observed on disk; otherwise deleting a group
         // here would silently fail to emit a tombstone.
@@ -332,8 +279,7 @@ export function useWindowSync(
       listen<TrashUpdatedPayload>("trash-updated", (event) => {
         const { sourceWindow, trashedNotes } = event.payload;
         if (sourceWindow === WINDOW_LABEL) return;
-        setTrashedNotesCache(trashedNotes);
-        setTrashedNotes?.(trashedNotes);
+        commitRemote(() => ({ trashedNotes }));
       }),
     ]).then((fns) => {
       if (!mounted) { fns.forEach((fn) => fn()); return; }
@@ -341,5 +287,5 @@ export function useWindowSync(
     });
 
     return () => { mounted = false; unlisteners.forEach((fn) => fn()); };
-  }, [getRoutedActiveDocId, setDocs, setActiveIndex, tiptapRef, setGroups, setTrashedNotes, onActiveDocChanged, notesSortOrder, locale, settleRemoteDeletedDoc]);
+  }, [commitRemote, getRoutedActiveDocId, showInEditor, notesSortOrder, locale, settleRemoteDeletedDoc]);
 }
