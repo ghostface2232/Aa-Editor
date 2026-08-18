@@ -134,7 +134,7 @@ vi.mock("../utils/documentTitle", () => ({
 }));
 
 // Imports must come AFTER vi.mock() registrations.
-import { useAutoSave } from "./useAutoSave";
+import { useAutoSave, type FlushResult } from "./useAutoSave";
 import * as useNotesLoaderModule from "./useNotesLoader";
 import * as useFileSystemModule from "./useFileSystem";
 import * as conflictBackupModule from "../utils/conflictBackup";
@@ -447,7 +447,7 @@ describe("useAutoSave — remote deletion tombstone lifecycle", () => {
 
     refs.editorContent = "unsaved edit at close";
     await act(async () => {
-      expect(await result.current.flushAutoSave()).toBe(true);
+      expect(await result.current.flushAutoSave()).toEqual({ status: "saved" });
     });
 
     expect(writeMock).toHaveBeenCalledWith("/notes/a.md", "unsaved edit at close");
@@ -464,7 +464,7 @@ describe("useAutoSave — doSave golden path", () => {
 
     await act(async () => {
       const ok = await result.current.flushAutoSave();
-      expect(ok).toBe(true);
+      expect(ok).toEqual({ status: "saved" });
     });
 
     expect(backupMock).toHaveBeenCalledTimes(1);
@@ -502,7 +502,7 @@ describe("useAutoSave — doSave golden path", () => {
     });
 
     await act(async () => {
-      expect(await result.current.flushAutoSave()).toBe(true);
+      expect(await result.current.flushAutoSave()).toEqual({ status: "saved" });
     });
 
     const updater = setDocs.mock.calls[setDocs.mock.calls.length - 1][0] as (prev: NoteDoc[]) => NoteDoc[];
@@ -557,7 +557,7 @@ describe("useAutoSave — doSave golden path", () => {
       state: makeState({ isDirty: true }),
     });
 
-    let save!: Promise<boolean>;
+    let save!: Promise<FlushResult>;
     act(() => { save = result.current.flushAutoSave(); });
     await waitFor(() => expect(saveNoteMetadataMock).toHaveBeenCalledTimes(1));
     const locallyChanged = makeDoc("a", {
@@ -571,7 +571,7 @@ describe("useAutoSave — doSave golden path", () => {
 
     await act(async () => {
       releaseWriter();
-      expect(await save).toBe(true);
+      expect(await save).toEqual({ status: "saved" });
     });
 
     let committed = [locallyChanged];
@@ -641,7 +641,7 @@ describe("useAutoSave — doSave golden path", () => {
 
     refs.editorContent = "# First title\nbody";
     await act(async () => {
-      expect(await result.current.flushAutoSave()).toBe(true);
+      expect(await result.current.flushAutoSave()).toEqual({ status: "saved" });
     });
     expect(canonicalDocs[0].fileName).toBe("First title");
 
@@ -649,7 +649,7 @@ describe("useAutoSave — doSave golden path", () => {
     // rendered the first queue callback before the next snapshot is captured.
     refs.editorContent = "# Second title\nbody";
     await act(async () => {
-      expect(await result.current.flushAutoSave()).toBe(true);
+      expect(await result.current.flushAutoSave()).toEqual({ status: "saved" });
     });
 
     expect(canonicalDocs[0].fileName).toBe("Second title");
@@ -664,7 +664,7 @@ describe("useAutoSave — doSave golden path", () => {
     });
 
     await act(async () => {
-      expect(await result.current.flushAutoSave()).toBe(false);
+      expect(await result.current.flushAutoSave()).toMatchObject({ status: "failed" });
     });
 
     expect(writeMock).toHaveBeenCalledTimes(1);
@@ -675,7 +675,7 @@ describe("useAutoSave — doSave golden path", () => {
 });
 
 describe("useAutoSave — backup-failure defers save", () => {
-  it("returns false, skips writeTextFile, leaves isDirty alone, and logs the BACKUP_FAILED", async () => {
+  it("reports save-failed, skips writeTextFile, leaves isDirty alone, and logs the BACKUP_FAILED", async () => {
     refs.backupShouldThrow = new NotenError(
       "BACKUP_FAILED",
       "fatal",
@@ -685,12 +685,12 @@ describe("useAutoSave — backup-failure defers save", () => {
     const state = makeState({ isDirty: true, setIsDirty });
     const { result } = renderAutoSave({ state });
 
-    let ok: boolean | undefined;
+    let ok: FlushResult | undefined;
     await act(async () => {
       ok = await result.current.flushAutoSave();
     });
 
-    expect(ok).toBe(false);
+    expect(ok).toEqual({ status: "failed", reason: "save-failed" });
     expect(writeMock).not.toHaveBeenCalled();
     expect(saveNoteMetadataMock).not.toHaveBeenCalled();
     expect(setIsDirty).not.toHaveBeenCalled();
@@ -784,12 +784,12 @@ describe("useAutoSave — pathless fallback doc (loader failure stub)", () => {
     expect(writeMock).toHaveBeenCalledWith("/notes/local.md", "typed after provisioning");
   });
 
-  it("flushAutoSave provisions and re-snapshots, but still reports false so stale-snapshot callers don't mark the doc clean", async () => {
+  it("flushAutoSave provisions and re-snapshots, and reports \"provisioned\" so stale-snapshot callers don't mark the doc clean", async () => {
     const { result } = renderAutoSave({
       docs: [makeDoc("local", { filePath: "", isDirty: true })],
     });
 
-    let flushed = true;
+    let flushed: FlushResult | undefined;
     await act(async () => {
       flushed = await result.current.flushAutoSave();
     });
@@ -799,8 +799,9 @@ describe("useAutoSave — pathless fallback doc (loader failure stub)", () => {
     // ...through the normal pipeline via the post-provision re-snapshot...
     expect(writeMock).toHaveBeenCalledWith("/notes/local.md", "hello world");
     // ...but callers that snapshotted docs before the flush would commit a
-    // clean-but-pathless entry on `true`, so the flush stays conservative.
-    expect(flushed).toBe(false);
+    // clean-but-pathless entry if this read as a plain save, so the adopted
+    // path is reported instead of a bare success.
+    expect(flushed).toEqual({ status: "provisioned", filePath: "/notes/local.md" });
   });
 
   it("flushAutoSave does not provision while a migration is in progress", async () => {
@@ -809,12 +810,12 @@ describe("useAutoSave — pathless fallback doc (loader failure stub)", () => {
       docs: [makeDoc("local", { filePath: "", isDirty: true })],
     });
 
-    let flushed = true;
+    let flushed: FlushResult | undefined;
     await act(async () => {
       flushed = await result.current.flushAutoSave();
     });
 
-    expect(flushed).toBe(false);
+    expect(flushed).toEqual({ status: "failed", reason: "provision-failed" });
     expect(provisionMock).not.toHaveBeenCalled();
   });
 
@@ -842,18 +843,18 @@ describe("useAutoSave — pathless fallback doc (loader failure stub)", () => {
     expect(setDocs).not.toHaveBeenCalled();
   });
 
-  it("flushAutoSave returns false and hasUnsaveableChanges stays true while provisioning fails", async () => {
+  it("flushAutoSave reports provision-failed and hasUnsaveableChanges stays true while provisioning fails", async () => {
     refs.provisionShouldFail = true;
     const { result } = renderAutoSave({
       docs: [makeDoc("local", { filePath: "", isDirty: true })],
     });
 
-    let flushed = true;
+    let flushed: FlushResult | undefined;
     await act(async () => {
       flushed = await result.current.flushAutoSave();
     });
 
-    expect(flushed).toBe(false);
+    expect(flushed).toEqual({ status: "failed", reason: "provision-failed" });
     expect(writeMock).not.toHaveBeenCalled();
     expect(result.current.hasUnsaveableChanges()).toBe(true);
   });
@@ -1056,7 +1057,7 @@ describe("useAutoSave — revision-mismatch guard", () => {
     act(() => result.current.scheduleAutoSave());
     await act(async () => {
       const ok = await result.current.flushAutoSave();
-      expect(ok).toBe(true);
+      expect(ok).toEqual({ status: "saved" });
     });
     expect(writeMock).toHaveBeenCalledTimes(1);
     expect(writeMock).toHaveBeenLastCalledWith("/notes/a.md", "newer content");
@@ -1072,15 +1073,15 @@ describe("useAutoSave — revision-mismatch guard", () => {
 });
 
 describe("useAutoSave — flushAutoSave behavior", () => {
-  it("resolves true without calling doSave when nothing is pending and the editor is clean", async () => {
+  it("resolves clean without calling doSave when nothing is pending and the editor is clean", async () => {
     const { result } = renderAutoSave({ state: makeState({ isDirty: false }) });
 
-    let ok: boolean | undefined;
+    let ok: FlushResult | undefined;
     await act(async () => {
       ok = await result.current.flushAutoSave();
     });
 
-    expect(ok).toBe(true);
+    expect(ok).toEqual({ status: "clean" });
     expect(backupMock).not.toHaveBeenCalled();
     expect(writeMock).not.toHaveBeenCalled();
   });
@@ -1129,7 +1130,7 @@ describe("useAutoSave — flushAutoSave behavior", () => {
 
     await act(async () => {
       const ok = await result.current.flushAutoSave();
-      expect(ok).toBe(true);
+      expect(ok).toEqual({ status: "clean" });
     });
 
     expect(getCurrentMarkdownMock).not.toHaveBeenCalled();
@@ -1154,12 +1155,12 @@ describe("useAutoSave — migration short-circuit", () => {
     const { result } = renderAutoSave({ state: makeState({ isDirty: true }) });
 
     refs.migrationInProgress = true;
-    let ok: boolean | undefined;
+    let ok: FlushResult | undefined;
     await act(async () => {
       ok = await result.current.flushAutoSave();
     });
 
-    expect(ok).toBe(false);
+    expect(ok).toEqual({ status: "failed", reason: "save-failed" });
     expect(writeMock).not.toHaveBeenCalled();
   });
 });
@@ -1180,12 +1181,12 @@ describe("useAutoSave — cancelDocSave", () => {
     const release = blockNoteLifecycle(["a"]);
     try {
       const { result } = renderAutoSave({ state: makeState({ isDirty: true }) });
-      let ok: boolean | undefined;
+      let ok: FlushResult | undefined;
       await act(async () => {
         ok = await result.current.flushAutoSave();
       });
 
-      expect(ok).toBe(false);
+      expect(ok).toEqual({ status: "failed", reason: "save-failed" });
       expect(writeMock).not.toHaveBeenCalled();
       expect(saveNoteMetadataMock).not.toHaveBeenCalled();
     } finally {
@@ -1204,12 +1205,12 @@ describe("useAutoSave — cancelDocSave", () => {
         state: makeState({ isDirty: true }),
       });
 
-      let ok: boolean | undefined;
+      let ok: FlushResult | undefined;
       await act(async () => {
         ok = await result.current.flushAutoSave();
       });
 
-      expect(ok).toBe(false);
+      expect(ok).toEqual({ status: "failed", reason: "provision-failed" });
       expect(provisionMock).not.toHaveBeenCalled();
       const update = setDocs.mock.calls[0]?.[0] as (docs: NoteDoc[]) => NoteDoc[];
       expect(update([initial])[0]).toMatchObject({
@@ -1232,12 +1233,12 @@ describe("useAutoSave — writeTextFile failure logs SAVE_FAILED", () => {
     const setIsDirty = vi.fn();
     const { result } = renderAutoSave({ state: makeState({ isDirty: true, setIsDirty }) });
 
-    let ok: boolean | undefined;
+    let ok: FlushResult | undefined;
     await act(async () => {
       ok = await result.current.flushAutoSave();
     });
 
-    expect(ok).toBe(false);
+    expect(ok).toEqual({ status: "failed", reason: "save-failed" });
     expect(writeMock).toHaveBeenCalledTimes(1);
     expect(saveNoteMetadataMock).not.toHaveBeenCalled();
     expect(setIsDirty).not.toHaveBeenCalled();
@@ -1253,29 +1254,29 @@ describe("useAutoSave — writeTextFile failure logs SAVE_FAILED", () => {
 });
 
 describe("useAutoSave — metadata failure remains retryable", () => {
-  it("returns false and leaves the editor dirty so a later flush retries note metadata", async () => {
+  it("reports failure and leaves the editor dirty so a later flush retries note metadata", async () => {
     saveNoteMetadataMock.mockRejectedValueOnce(new Error("EPERM: meta sidecar locked"));
     const setIsDirty = vi.fn();
     const { result } = renderAutoSave({
       state: makeState({ isDirty: true, setIsDirty }),
     });
 
-    let first: boolean | undefined;
+    let first: FlushResult | undefined;
     await act(async () => {
       first = await result.current.flushAutoSave();
     });
 
-    expect(first).toBe(false);
+    expect(first).toMatchObject({ status: "failed" });
     expect(writeMock).toHaveBeenCalledTimes(1);
     expect(saveNoteMetadataMock).toHaveBeenCalledTimes(1);
     expect(setIsDirty).not.toHaveBeenCalledWith(false);
 
-    let second: boolean | undefined;
+    let second: FlushResult | undefined;
     await act(async () => {
       second = await result.current.flushAutoSave();
     });
 
-    expect(second).toBe(true);
+    expect(second).toEqual({ status: "saved" });
     expect(writeMock).toHaveBeenCalledTimes(2);
     expect(saveNoteMetadataMock).toHaveBeenCalledTimes(2);
     expect(setIsDirty).toHaveBeenCalledWith(false);

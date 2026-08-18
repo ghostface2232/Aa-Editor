@@ -69,6 +69,7 @@ import {
 } from "./useMigrationSync";
 import { emit, listen } from "@tauri-apps/api/event";
 import * as loaderModule from "./useNotesLoader";
+import type { FlushResult } from "./useAutoSave";
 
 const setNotesDirMock = loaderModule.setNotesDir as ReturnType<typeof vi.fn>;
 const resetNotesDirMock = loaderModule.resetNotesDir as ReturnType<typeof vi.fn>;
@@ -79,10 +80,10 @@ function renderMigrationSync() {
   const setCurrentNotesDir = vi.fn((dir: string) => { refs.callLog.push(`currentDir:${dir}`); });
   const applyExternalSettingsChange = vi.fn();
   const params = {
-    flushAutoSaveRef: { current: vi.fn(async () => {
+    flushAutoSaveRef: { current: vi.fn(async (): Promise<FlushResult> => {
       refs.callLog.push("flushAutoSave");
       await refs.drainGate;
-      return true;
+      return { status: "saved" };
     }) },
     hasUnsavedChangesRef: { current: vi.fn(() => refs.hasUnsaved) },
     flushManifestRef: { current: vi.fn(async () => {

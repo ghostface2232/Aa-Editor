@@ -23,6 +23,28 @@ const DEBOUNCE_MS = 1000;
 // this often — a dead notes dir would otherwise log SAVE_FAILED per keystroke.
 const PROVISION_RETRY_MS = 5000;
 
+/**
+ * Outcome of a flushAutoSave call. Explicit because "did the flush leave the
+ * caller's docs snapshot safe to mark clean" and "is the content on disk" are
+ * different questions, and a single boolean could only answer one of them:
+ * a provision writes the body but also changes the doc's filePath, which the
+ * caller's pre-flush snapshot does not have.
+ */
+export type FlushResult =
+  /** A pending/dirty snapshot was written. */
+  | { status: "saved" }
+  /** The active doc had no filePath; it was provisioned and its body written. */
+  | { status: "provisioned"; filePath: string }
+  /** Nothing was pending and the editor was not dirty. */
+  | { status: "clean" }
+  /** Nothing reached disk; the doc stays dirty and will retry. */
+  | { status: "failed"; reason: "save-failed" | "provision-failed" | "unavailable" };
+
+/** True when the caller's pre-flush docs snapshot may be marked clean. */
+export function flushLeftDocClean(result: FlushResult): boolean {
+  return result.status === "saved" || result.status === "clean";
+}
+
 interface SaveSnapshot {
   docId: string;
   filePath: string;
@@ -93,8 +115,10 @@ export function useAutoSave(
   // set so callers (window close, notes-dir migration) never quit before a
   // background save lands. Without this the new fire-and-forget switch path
   // could drop a save if the user closed mid-write.
-  const inFlightSavesRef = useRef(new Set<Promise<boolean>>());
-  const inFlightSavesByDocRef = useRef(new Map<string, Set<Promise<boolean>>>());
+  // Only ever awaited for settlement, never for a value: body saves resolve to
+  // a boolean and provisions to the adopted path.
+  const inFlightSavesRef = useRef(new Set<Promise<unknown>>());
+  const inFlightSavesByDocRef = useRef(new Map<string, Set<Promise<unknown>>>());
   const inFlightSnapshotsByDocRef = useRef(new Map<string, Set<SaveSnapshot>>());
   // A remote delete tombstones the id: no later editor update or stale callback
   // may create another write for it. Lifted only when the id comes back as a
@@ -583,17 +607,19 @@ export function useAutoSave(
   // `<notesDir>/<id>.md` and adopts the path, after which the normal save
   // machinery applies. Retried on later edits (throttled) because the usual
   // cause — an unreadable notes dir at launch — can recover mid-session.
-  // Single-flight per doc; concurrent callers share the same attempt.
-  const provisioningDocsRef = useRef(new Map<string, Promise<boolean>>());
+  // Single-flight per doc; concurrent callers share the same attempt. Resolves
+  // to the adopted path so callers report the real one rather than re-reading
+  // activeDocRef, which may already point at another doc by then.
+  const provisioningDocsRef = useRef(new Map<string, Promise<string | null>>());
   const provisionAttemptAtRef = useRef(new Map<string, number>());
-  const provisionPathlessActiveDoc = useCallback((opts?: { force?: boolean }): Promise<boolean> => {
+  const provisionPathlessActiveDoc = useCallback((opts?: { force?: boolean }): Promise<string | null> => {
     // Same gate as doSave: never write into a directory that a migration may
     // be about to clear (getNotesDir still resolves to the OLD dir until the
     // migrating window commits the new one).
-    if (migrationInProgress) return Promise.resolve(false);
+    if (migrationInProgress) return Promise.resolve(null);
     const target = activeDocRef.current;
-    if (!target || target.filePath) return Promise.resolve(false);
-    if (remoteDeletedDocsRef.current.has(target.id)) return Promise.resolve(false);
+    if (!target || target.filePath) return Promise.resolve(null);
+    if (remoteDeletedDocsRef.current.has(target.id)) return Promise.resolve(null);
     if (isNoteLifecycleBlocked(target.id)) {
       // The editor can switch away while a delete transaction is awaiting I/O.
       // Preserve a pathless target's live text in canonical memory so a failed
@@ -606,14 +632,14 @@ export function useAutoSave(
           ? { ...doc, content, isDirty: true }
           : doc
       )));
-      return Promise.resolve(false);
+      return Promise.resolve(null);
     }
 
     const inFlight = provisioningDocsRef.current.get(target.id);
     if (inFlight) return inFlight;
     const lastAttemptAt = provisionAttemptAtRef.current.get(target.id) ?? 0;
     if (!opts?.force && Date.now() - lastAttemptAt < PROVISION_RETRY_MS) {
-      return Promise.resolve(false);
+      return Promise.resolve(null);
     }
     provisionAttemptAtRef.current.set(target.id, Date.now());
 
@@ -634,7 +660,7 @@ export function useAutoSave(
           latestSetDocs((prev) => prev.map((doc) =>
             doc.id === target.id && !doc.filePath && doc.content !== content ? { ...doc, content } : doc,
           ));
-          return false;
+          return null;
         }
         // Re-check the tombstone after the awaits: a remote deletion that
         // arrived while the provision was in flight must win — leaving this
@@ -643,7 +669,7 @@ export function useAutoSave(
         if (remoteDeletedDocsRef.current.has(target.id) || isNoteLifecycleBlocked(target.id)) {
           markOwnWrite(filePath);
           await tauriFileSystem.remove(filePath).catch(() => {});
-          return false;
+          return null;
         }
         // Adopt the path in the synchronous ref first so the very next edit
         // (or a flush retry in the same task) arms a normal pending save
@@ -655,7 +681,7 @@ export function useAutoSave(
         latestSetDocs((prev) => prev.map((doc) =>
           doc.id === target.id && !doc.filePath ? { ...doc, filePath, content } : doc,
         ));
-        return true;
+        return filePath;
       } finally {
         provisioningDocsRef.current.delete(target.id);
       }
@@ -683,35 +709,37 @@ export function useAutoSave(
     return attempt;
   }, []);
 
-  const flushAutoSave = useCallback(async (): Promise<boolean> => {
+  const flushAutoSave = useCallback(async (): Promise<FlushResult> => {
     for (const timer of timersRef.current.values()) {
       clearTimeout(timer);
     }
     timersRef.current.clear();
 
     if (!hasPendingChangesRef.current && !stateRef.current.state.isDirty) {
-      return true;
+      return { status: "clean" };
     }
 
     const freshSnapshot = createSnapshot();
     if (!freshSnapshot) {
       // A pathless active doc cannot snapshot. Provisioning writes the live
       // content itself; on success re-snapshot so edits that landed while the
-      // provision was in flight are saved too. Still report `false` even when
-      // everything was written: callers that took a docs snapshot BEFORE this
-      // flush (leaveCurrentDoc &c.) mark the doc clean on `true`, and their
-      // stale entry still has filePath "" — committing a clean-but-pathless
-      // doc that orphans the provisioned file and blinds hasUnsaveableChanges.
-      // The conservative signal keeps the doc dirty; the next edit saves
-      // normally through the adopted path.
-      if (await provisionPathlessActiveDoc({ force: true })) {
-        const retry = createSnapshot();
-        if (retry) await startBackgroundSave(retry);
+      // provision was in flight are saved too. This reports "provisioned", not
+      // "saved", because the doc IDENTITY changed underneath the caller: a
+      // caller holding a docs snapshot taken before the flush still has an
+      // entry with filePath "", and marking that clean would orphan the
+      // provisioned file and blind hasUnsaveableChanges.
+      const provisionedPath = await provisionPathlessActiveDoc({ force: true });
+      if (!provisionedPath) return { status: "failed", reason: "provision-failed" };
+      const retry = createSnapshot();
+      if (retry && !await startBackgroundSave(retry)) {
+        return { status: "failed", reason: "save-failed" };
       }
-      return false;
+      return { status: "provisioned", filePath: provisionedPath };
     }
 
-    return startBackgroundSave(freshSnapshot);
+    return await startBackgroundSave(freshSnapshot)
+      ? { status: "saved" }
+      : { status: "failed", reason: "save-failed" };
   }, [createSnapshot, provisionPathlessActiveDoc, startBackgroundSave]);
 
   // Synchronous "is anything still unsaved" probe for close/migration drain

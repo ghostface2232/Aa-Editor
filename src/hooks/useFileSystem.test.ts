@@ -196,6 +196,7 @@ import * as metadataIOModule from "../utils/metadataIO";
 import * as conflictBackupModule from "../utils/conflictBackup";
 import * as notesLoaderModule from "./useNotesLoader";
 import * as windowSyncModule from "./useWindowSync";
+import type { FlushResult } from "./useAutoSave";
 
 const writeMock = fsPlugin.writeTextFile as ReturnType<typeof vi.fn>;
 const readMock = fsPlugin.readTextFile as ReturnType<typeof vi.fn>;
@@ -283,7 +284,11 @@ function renderFs(opts: RenderOpts = {}) {
     setActiveIndex(committed.activeNoteId ? Math.max(committed.docs.findIndex((doc) => doc.id === committed.activeNoteId), 0) : 0);
     return committed;
   });
-  const flushAutoSave = vi.fn(async () => !state.isDirty);
+  // Mirrors the real contract: a dirty editor that nothing here saved reports
+  // failure, an already-clean one reports "clean".
+  const flushAutoSave = vi.fn(async (): Promise<FlushResult> => (
+    state.isDirty ? { status: "failed", reason: "save-failed" } : { status: "clean" }
+  ));
   const flushAutoSaveRef = { current: flushAutoSave };
   const notifyActiveDoc = vi.fn();
   const notifyActiveDocRef = { current: notifyActiveDoc };
@@ -609,20 +614,21 @@ describe("useFileSystem — deleteNote trash-copy guard", () => {
 });
 
 describe("useFileSystem — active-target flush verdicts", () => {
-  // flushAutoSave reports `false` structurally after provisioning a pathless
-  // active doc even when the body landed; a genuine write failure also reports
-  // false. Delete must tell them apart via the store; restore must not care.
-  it("still deletes an active doc that flushAutoSave provisioned but reported false for", async () => {
+  // A provisioning flush writes the body but changes the doc's filePath, so it
+  // reports "provisioned" rather than "saved": destructive callers may proceed,
+  // snapshot-holding callers must not mark their stale entry clean. Only
+  // "failed" means nothing reached disk.
+  it("still deletes an active doc that flushAutoSave provisioned", async () => {
     const pathless = makeDoc("a", { filePath: "", content: "typed", isDirty: true });
     const state = makeState({ isDirty: true });
     const { result, flushAutoSave, flushDocSave } = renderFs({ docs: [pathless, makeDoc("b")], activeIndex: 0, state });
     flushAutoSave.mockImplementation(async () => {
-      // Provisioning adopts the path in the store synchronously, then reports false.
+      // Provisioning adopts the path in the store synchronously.
       libraryStore.commit((current) => ({
         docs: current.docs.map((doc) => (doc.id === "a" ? { ...doc, filePath: "/notes/a.md" } : doc)),
       }), "local");
       refs.librarySnapshot = libraryStore.getSnapshot();
-      return false;
+      return { status: "provisioned", filePath: "/notes/a.md" };
     });
 
     let deleted: string[] = [];
@@ -638,19 +644,19 @@ describe("useFileSystem — active-target flush verdicts", () => {
   it("skips a provisioned active doc whose post-provision save is still failing", async () => {
     const pathless = makeDoc("a", { filePath: "", content: "typed", isDirty: true });
     const state = makeState({ isDirty: true });
-    const flushDocSave = vi.fn(async (docId: string) => docId !== "a");
     const { result, flushAutoSave } = renderFs({
       docs: [pathless, makeDoc("b")],
       activeIndex: 0,
       state,
-      flushDocSave,
     });
+    // The path was adopted but the body write that followed it failed, so the
+    // flush reports failure — the doc is not safe to trash.
     flushAutoSave.mockImplementation(async () => {
       libraryStore.commit((current) => ({
         docs: current.docs.map((doc) => (doc.id === "a" ? { ...doc, filePath: "/notes/a.md" } : doc)),
       }), "local");
       refs.librarySnapshot = libraryStore.getSnapshot();
-      return false;
+      return { status: "failed", reason: "save-failed" };
     });
 
     let deleted: string[] = [];
@@ -671,7 +677,7 @@ describe("useFileSystem — active-target flush verdicts", () => {
       state,
       flushDocSave,
     });
-    flushAutoSave.mockResolvedValue(false);
+    flushAutoSave.mockResolvedValue({ status: "failed", reason: "save-failed" });
 
     let deleted: string[] = [];
     await act(async () => {
@@ -682,7 +688,7 @@ describe("useFileSystem — active-target flush verdicts", () => {
     expect(copyFileMock).not.toHaveBeenCalled();
   });
 
-  it("restores even when flushing the leaving doc reports false", async () => {
+  it("restores even when flushing the leaving doc reports failure", async () => {
     const trashed: TrashedNote = {
       id: "t1",
       fileName: "Trashed",
@@ -700,7 +706,7 @@ describe("useFileSystem — active-target flush verdicts", () => {
       state,
       trashedNotes: [trashed],
     });
-    flushAutoSave.mockResolvedValue(false);
+    flushAutoSave.mockResolvedValue({ status: "failed", reason: "save-failed" });
 
     await act(async () => {
       await result.current.restoreNote("t1");

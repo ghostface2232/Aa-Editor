@@ -36,6 +36,7 @@ import { NotenError } from "../utils/notenError";
 import { t } from "../i18n";
 import { libraryStore, type LibrarySnapshot, type LibraryUpdater } from "../utils/libraryStore";
 import { blockNoteLifecycle } from "./noteLifecycleGate";
+import { flushLeftDocClean, type FlushResult } from "./useAutoSave";
 
 export type { NoteDoc } from "./useNotesLoader";
 
@@ -238,7 +239,7 @@ export function useFileSystem(
   _getGroupForNote?: (noteId: string) => NoteGroup | null,
   trashedNotes?: TrashedNote[],
   setTrashedNotes?: (updater: TrashedNote[] | ((prev: TrashedNote[]) => TrashedNote[])) => void,
-  flushAutoSaveRef?: React.RefObject<(() => Promise<boolean>) | null>,
+  flushAutoSaveRef?: React.RefObject<(() => Promise<FlushResult>) | null>,
   notifyActiveDocRef?: React.RefObject<((id: string, filePath: string) => void) | null>,
   cancelDocSaveRef?: React.RefObject<((docId: string) => void) | null>,
   captureAndQueueSaveRef?: React.RefObject<(() => void) | null>,
@@ -258,24 +259,12 @@ export function useFileSystem(
   activeIndexRef.current = activeIndex;
   const newNoteInFlightRef = useRef(false);
 
-  const leaveCurrentDoc = useCallback(async () => {
-    if (!flushAutoSaveRef?.current) return !state.isDirty;
+  const leaveCurrentDoc = useCallback(async (): Promise<FlushResult> => {
+    if (!flushAutoSaveRef?.current) {
+      return state.isDirty ? { status: "failed", reason: "unavailable" } : { status: "clean" };
+    }
     return flushAutoSaveRef.current();
   }, [flushAutoSaveRef, state.isDirty]);
-
-  // flushAutoSave reports `false` structurally after provisioning a pathless
-  // active doc even when everything was written (its docs-snapshot callers
-  // must not mark a stale pathless entry clean). A destructive caller that
-  // would otherwise skip the doc can re-verify against the store: the doc was
-  // pathless before the flush, has a path now, and its save queue drains. A
-  // doc that already had a path (a genuine write failure), stayed pathless,
-  // or whose post-provision retry is still pending reads as not drained.
-  const provisionedByFlush = useCallback(async (docId: string, filePathBeforeFlush: string) => {
-    if (filePathBeforeFlush) return false;
-    const now = libraryStore.getSnapshot().docs.find((doc) => doc.id === docId);
-    if (!now?.filePath) return false;
-    return (await flushDocSaveRef?.current?.(docId)) !== false;
-  }, [flushDocSaveRef]);
 
   const getLiveDocsSnapshot = useCallback((baseDocs: NoteDoc[] = docsRef.current) => {
     const currentActiveIndex = activeIndexRef.current;
@@ -455,7 +444,7 @@ export function useFileSystem(
     if (sourcePaths.length === 0) return;
 
     const { docs: liveDocs, activeDocId } = getLiveDocsSnapshot();
-    const didPersistCurrentDoc = await leaveCurrentDoc();
+    const didPersistCurrentDoc = flushLeftDocClean(await leaveCurrentDoc());
     const baseDocs = didPersistCurrentDoc ? markDocClean(liveDocs, activeDocId) : liveDocs;
 
     const existingNames = new Set(baseDocs.map((d) => d.fileName));
@@ -771,7 +760,7 @@ export function useFileSystem(
     // render — but the optional chain keeps this resilient to future refactors).
     let baseDocs: NoteDoc[];
     if (isPruneCandidate || !captureAndQueueSaveRef?.current) {
-      const didPersistCurrentDoc = await leaveCurrentDoc();
+      const didPersistCurrentDoc = flushLeftDocClean(await leaveCurrentDoc());
       baseDocs = didPersistCurrentDoc ? markDocClean(liveDocs, activeDocId) : liveDocs;
     } else {
       captureAndQueueSaveRef.current();
@@ -837,7 +826,11 @@ export function useFileSystem(
       const beforeActive = docsRef.current[activeIndexRef.current];
       const beforeActiveId = beforeActive?.id ?? null;
       if (beforeActive && beforeActiveId && targetIds.includes(beforeActiveId)) {
-        if (!(await leaveCurrentDoc()) && !(await provisionedByFlush(beforeActiveId, beforeActive.filePath))) {
+        // Only a flush that put nothing on disk disqualifies the target. A
+        // "provisioned" flush wrote the body under a freshly adopted path —
+        // the doc is saveable and deletable, it just cannot be marked clean
+        // in a docs snapshot that predates the path.
+        if ((await leaveCurrentDoc()).status === "failed") {
           targetIds = targetIds.filter((id) => id !== beforeActiveId);
         }
       }
@@ -1120,7 +1113,7 @@ export function useFileSystem(
         if (!committedDeletedIds.has(id)) await flushDocSaveRef?.current?.(id);
       }
     }
-  }, [provisionedByFlush, cancelDocSaveRef, commitLibraryForGeneration, flushDocSaveRef, getLiveDocsSnapshot, leaveCurrentDoc, locale, notesSortOrder, state, tiptapRef]);
+  }, [cancelDocSaveRef, commitLibraryForGeneration, flushDocSaveRef, getLiveDocsSnapshot, leaveCurrentDoc, locale, notesSortOrder, state, tiptapRef]);
 
   const deleteNote = useCallback(async (index: number): Promise<string[]> => {
     const doc = docsRef.current[index];
@@ -1133,7 +1126,7 @@ export function useFileSystem(
     const doc = liveDocs[index];
     if (!doc) return;
 
-    const didPersistCurrentDoc = await leaveCurrentDoc();
+    const didPersistCurrentDoc = flushLeftDocClean(await leaveCurrentDoc());
     const baseDocs = didPersistCurrentDoc ? markDocClean(liveDocs, activeDocId) : liveDocs;
     const sourceDoc = baseDocs[index];
     if (!sourceDoc) return;

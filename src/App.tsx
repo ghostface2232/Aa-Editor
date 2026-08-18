@@ -22,7 +22,7 @@ import { getCurrentWindow, Effect, LogicalSize } from "@tauri-apps/api/window";
 import { useMarkdownState } from "./hooks/useMarkdownState";
 import { getCurrentMarkdown, useFileSystem } from "./hooks/useFileSystem";
 import { saveManifest, flushPersistence, sortNotes, useNotesLoader, getNotesDir, getDefaultNotesDir, setNotesDir, restoreNotesDir, resetNotesDir, setMigrationInProgress } from "./hooks/useNotesLoader";
-import { useAutoSave } from "./hooks/useAutoSave";
+import { useAutoSave, type FlushResult } from "./hooks/useAutoSave";
 import { useNoteGroups } from "./hooks/useNoteGroups";
 import { useSettings, type ParagraphSpacing } from "./hooks/useSettings";
 
@@ -429,7 +429,7 @@ function App() {
     }
   }, [isLoading, docs, activeIndex]);
 
-  const flushAutoSaveRef = useRef<(() => Promise<boolean>) | null>(null);
+  const flushAutoSaveRef = useRef<(() => Promise<FlushResult>) | null>(null);
   const hasUnsavedChangesRef = useRef<(() => boolean) | null>(null);
   const hasUnsaveableChangesRef = useRef<(() => boolean) | null>(null);
   const flushManifestRef = useRef<(() => Promise<boolean>) | null>(null);

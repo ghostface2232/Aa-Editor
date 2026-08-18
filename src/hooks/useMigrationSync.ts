@@ -5,6 +5,7 @@ import { getAllWebviewWindows } from "@tauri-apps/api/webviewWindow";
 import { getNotesDir, setNotesDir, resetNotesDir, setMigrationInProgress } from "./useNotesLoader";
 import type { ReconcileState } from "../utils/reconcileFolder";
 import type { Settings } from "./useSettings";
+import type { FlushResult } from "./useAutoSave";
 
 // Cross-window coordination for notes-dir migrations. `migrationInProgress`
 // is per-webview module state, so without these events a second window keeps
@@ -184,7 +185,7 @@ export function broadcastMigrationFinished(
 }
 
 export interface MigrationSyncParams {
-  flushAutoSaveRef: React.RefObject<(() => Promise<boolean>) | null>;
+  flushAutoSaveRef: React.RefObject<(() => Promise<FlushResult>) | null>;
   hasUnsavedChangesRef: React.RefObject<(() => boolean) | null>;
   flushManifestRef: React.RefObject<(() => Promise<boolean>) | null>;
   awaitInFlightSavesRef: React.RefObject<(() => Promise<void>) | null>;
