@@ -128,7 +128,7 @@ vi.mock("../utils/reconcileFolder", async (importOriginal) => {
 });
 
 // Loader is imported AFTER all mocks. Tests then drive it with renderHook.
-import { useNotesLoader, resetNotesDir, restoreNotesDir, setNotesDir, saveManifest, saveNoteMetadata, flushPersistence, runPersistenceTransaction, markGroupAsDeleted, markGroupMembershipChanged, markNotesPinnedChanged, purgeExpiredTrash } from "./useNotesLoader";
+import { useNotesLoader, resetNotesDir, restoreNotesDir, setNotesDir, getDefaultNotesDir, saveManifest, saveNoteMetadata, flushPersistence, runPersistenceTransaction, markGroupAsDeleted, markGroupMembershipChanged, markNotesPinnedChanged, purgeExpiredTrash } from "./useNotesLoader";
 import * as reconcileFolderModule from "../utils/reconcileFolder";
 import * as decomposedStateModule from "../utils/decomposedState";
 import * as crashLogModule from "../utils/crashLog";
@@ -568,6 +568,38 @@ describe("useNotesLoader — canonical library store adapter", () => {
     act(() => result.current.setDocs((prev) => [...prev, makeDoc("b")]));
     expect(result.current.docs.map((doc) => doc.id)).toEqual(["a", "b"]);
     expect(libraryStore.getSnapshot().docs.map((doc) => doc.id)).toEqual(["a", "b"]);
+  });
+
+  it("does not clear a library restored under the default directory when the setting reverts to ''", async () => {
+    const a = makeDoc("a");
+    refs.fs!.seedTextFile(a.filePath, "body-a");
+    refs.decomposedDocs = [a];
+    const reconcileState = createReconcileState();
+    const { result } = renderHook(() => useNotesLoader("en", "updated-desc", true, 0, reconcileState));
+    await waitFor(() => expect(result.current.isLoading).toBe(false), { timeout: 2000 });
+    const preserved = libraryStore.getSnapshot();
+    // The loader resolved the default dir at startup, so the default-dir cache
+    // is primed exactly as it is when a use-selected-only migration reverts.
+    const defaultDir = await getDefaultNotesDir();
+    expect(preserved.notesDirectory?.replace(/\/+$/, "")).toBe(defaultDir.replace(/\/+$/, ""));
+
+    // Persisting the new custom dir ran the settings effect once (store cleared),
+    // then the failed clear reverts by re-seeding under the old default dir and
+    // persisting "" — which runs the effect's resetNotesDir branch.
+    act(() => setNotesDir("/elsewhere/notes", reconcileState));
+    act(() => restoreNotesDir(defaultDir, preserved, reconcileState));
+    const restoredGeneration = libraryStore.getSnapshot().directoryGeneration;
+    act(() => resetNotesDir(reconcileState));
+
+    expect(libraryStore.getSnapshot().directoryGeneration).toBe(restoredGeneration);
+    expect(libraryStore.getSnapshot().notesDirectory).toBe(defaultDir);
+    expect(libraryStore.getSnapshot().docs.map((doc) => doc.id)).toEqual(["a"]);
+
+    // A genuine reset (cache on a custom dir) still clears.
+    act(() => setNotesDir("/elsewhere/notes", reconcileState));
+    act(() => resetNotesDir(reconcileState));
+    expect(libraryStore.getSnapshot().notesDirectory).toBeNull();
+    expect(libraryStore.getSnapshot().docs).toEqual([]);
   });
 });
 

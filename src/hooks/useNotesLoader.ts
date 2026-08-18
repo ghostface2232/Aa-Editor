@@ -284,11 +284,19 @@ export function mergeHydratedLibrary(
   };
 }
 
+let defaultNotesDirCache: string | null = null;
+
 /** The app-data fallback directory, without touching the active-dir cache. */
 export async function getDefaultNotesDir(): Promise<string> {
   const base = await appDataDir();
   const sep = base.endsWith("/") || base.endsWith("\\") ? "" : "/";
-  return `${base}${sep}notes`;
+  defaultNotesDirCache = `${base}${sep}notes`;
+  return defaultNotesDirCache;
+}
+
+function isSameNotesDir(a: string, b: string): boolean {
+  const norm = (dir: string) => normalizeSep(dir).replace(/\\/g, "/").toLocaleLowerCase();
+  return norm(a) === norm(b);
 }
 
 export async function getNotesDir(): Promise<string> {
@@ -303,9 +311,7 @@ export async function getNotesDir(): Promise<string> {
  * caches. Callers that omit it accept that the observations will carry over.
  */
 export function setNotesDir(dir: string, reconcileState?: ReconcileState) {
-  const sameDirectory = notesDirCache != null
-    && normalizeSep(notesDirCache).replace(/\\/g, "/").toLocaleLowerCase()
-      === normalizeSep(dir).replace(/\\/g, "/").toLocaleLowerCase();
+  const sameDirectory = notesDirCache != null && isSameNotesDir(notesDirCache, dir);
   if (sameDirectory) {
     notesDirCache = dir;
     return;
@@ -335,6 +341,18 @@ export function restoreNotesDir(
 }
 
 export function resetNotesDir(reconcileState?: ReconcileState) {
+  // Idempotent when the cache already points at the default directory, like
+  // setNotesDir for a same-path directory: a use-selected-only revert seeds the
+  // preserved library back under the default dir and then persists "" — the
+  // settings effect that follows must not clear the store it just restored.
+  const bound = libraryStore.getSnapshot().notesDirectory;
+  if (
+    notesDirCache != null
+    && defaultNotesDirCache != null
+    && bound != null
+    && isSameNotesDir(notesDirCache, defaultNotesDirCache)
+    && isSameNotesDir(bound, defaultNotesDirCache)
+  ) return;
   libraryStore.clearDirectory("hydrate");
   notesDirCache = null;
   imageAssetMigrationV1CompletedAtCache = null;
