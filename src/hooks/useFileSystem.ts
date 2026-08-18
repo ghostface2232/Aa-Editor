@@ -922,10 +922,15 @@ export function useFileSystem(
             } catch (copyError) {
               let rolledBack = false;
               try {
-                if (previousMeta) await writeNoteMeta(previousMeta);
+                // A peer may have trashed this note itself meanwhile (its
+                // trash-updated already landed here); rewriting the live
+                // sidecar would resurrect a note it just deleted.
+                const peerTrashed = libraryStore.getSnapshot().trashedNotes.some((note) => note.id === doc.id);
+                if (peerTrashed) { /* keep the tombstone; deletion wins */ }
+                else if (previousMeta) await writeNoteMeta(previousMeta);
                 else if (previousMetaUnreadable) await writeNoteMeta(mergedMeta);
                 else await removeNoteMeta(doc.id);
-                rolledBack = true;
+                rolledBack = !peerTrashed;
               } catch (rollbackError) {
                 void logNotenError(new NotenError(
                   "PERSIST_FAILED",
@@ -1480,6 +1485,10 @@ export function useFileSystem(
           await writeNoteMeta(restoredMeta);
 
           const rollbackMeta = async () => {
+            // A peer may have restored this note itself while we were mid-way
+            // (its doc-created already landed here); rewriting our tombstone
+            // would clobber the sidecar it just made live and re-trash it.
+            if (libraryStore.getSnapshot().docs.some((doc) => doc.id === trashed.id)) return;
             try {
               if (previousMeta) await writeNoteMeta(previousMeta);
               else if (previousMetaUnreadable) await writeNoteMeta(mergedMeta);
@@ -1497,10 +1506,17 @@ export function useFileSystem(
           markOwnWrite(restoredPath);
           try {
             assertCurrent();
+            // Re-check by value, not identity: a peer's trash-updated event
+            // rebuilds every trash entry object, and that must not read as
+            // "the entry changed". Only a vanished entry (permanent delete /
+            // empty trash), a re-trash with a newer trashedAt, or a doc that
+            // already became live means the transition no longer applies.
             const beforeCopy = libraryStore.getSnapshot();
+            const trashNow = beforeCopy.trashedNotes.find((note) => note.id === trashedNoteId);
             if (
               beforeCopy.docs.some((doc) => doc.id === trashedNoteId)
-              || beforeCopy.trashedNotes.find((note) => note.id === trashedNoteId) !== trashed
+              || !trashNow
+              || trashNow.trashedAt !== trashed.trashedAt
             ) {
               await rollbackMeta();
               return failed;

@@ -1378,6 +1378,59 @@ describe("useFileSystem — restoreNote meta-first ordering", () => {
     expect(refs.librarySnapshot?.trashedNotes).toEqual([]);
   });
 
+  it("still restores when a peer window rebuilt the trash entry objects mid-transaction", async () => {
+    const trashed: TrashedNote = {
+      id: "t1",
+      fileName: "Trashed",
+      originalFilePath: "/notes/t1.md",
+      trashFilePath: "/notes/.trash/t1.md",
+      trashedAt: 2000,
+      groupId: null,
+      createdAt: 1000,
+      updatedAt: 1500,
+      pinned: false,
+    };
+    const writeMetaMock = metadataIOModule.writeMeta as ReturnType<typeof vi.fn>;
+    // The live-sidecar write is the first await inside the transaction; a
+    // trash-updated event from another window lands during it and commits a
+    // fresh copy of the same entry (new identity, same id/trashedAt).
+    writeMetaMock.mockImplementationOnce(async () => {
+      libraryStore.commit((current) => ({
+        trashedNotes: current.trashedNotes.map((note) => ({ ...note })),
+      }), "remote");
+      refs.librarySnapshot = libraryStore.getSnapshot();
+      return "";
+    });
+    const { result } = renderFs({ docs: [makeDoc("a")], trashedNotes: [trashed] });
+
+    await act(async () => {
+      await result.current.restoreNote("t1");
+    });
+
+    expect(copyFileMock).toHaveBeenCalledWith("/notes/.trash/t1.md", "/notes/t1.md");
+    expect(refs.librarySnapshot?.docs.some((doc) => doc.id === "t1")).toBe(true);
+    expect(refs.librarySnapshot?.trashedNotes).toEqual([]);
+
+    // A re-trash with a newer trashedAt still aborts before the copy.
+    copyFileMock.mockClear();
+    writeMetaMock.mockImplementationOnce(async () => {
+      libraryStore.commit((current) => ({
+        trashedNotes: current.trashedNotes.map((note) => (note.id === "t2" ? { ...note, trashedAt: 9000 } : note)),
+      }), "remote");
+      refs.librarySnapshot = libraryStore.getSnapshot();
+      return "";
+    });
+    const second = renderFs({
+      docs: [makeDoc("a")],
+      trashedNotes: [{ ...trashed, id: "t2", originalFilePath: "/notes/t2.md", trashFilePath: "/notes/.trash/t2.md" }],
+    });
+    await act(async () => {
+      await second.result.current.restoreNote("t2");
+    });
+    expect(copyFileMock).not.toHaveBeenCalled();
+    expect(refs.librarySnapshot?.trashedNotes.map((note) => note.id)).toEqual(["t2"]);
+  });
+
   it("restores a note whose sidecar cannot be read, rebuilding it from the trash entry", async () => {
     const trashed: TrashedNote = {
       id: "t1",
