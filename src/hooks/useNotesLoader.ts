@@ -96,6 +96,23 @@ export function setMigrationInProgress(v: boolean) { migrationInProgress = v; }
 // migration deliberately enqueues its persistence barrier BEFORE raising that
 // guard and still expects the barrier to write.
 let hydrationInProgress = false;
+let hydrationSettled: Promise<void> = Promise.resolve();
+let resolveHydrationSettled: (() => void) | null = null;
+function setHydrationInProgress(value: boolean) {
+  if (value === hydrationInProgress) return;
+  hydrationInProgress = value;
+  if (value) {
+    hydrationSettled = new Promise<void>((resolve) => { resolveHydrationSettled = resolve; });
+  } else {
+    resolveHydrationSettled?.();
+    resolveHydrationSettled = null;
+  }
+}
+// Loops so a reload that starts right as the previous load settles is
+// awaited too; callers re-check the migration guard afterwards.
+async function awaitHydrationSettled(): Promise<void> {
+  while (hydrationInProgress) await hydrationSettled;
+}
 
 // Single bundle of diff caches and pending writes. External helpers below
 // (markGroupAsDeleted etc.) mutate this bundle so callers in useFileSystem,
@@ -974,13 +991,19 @@ export function runPersistenceTransaction<T>(
   publish: (result: T, directoryGeneration: number) => LibrarySnapshot | null | Promise<LibrarySnapshot | null>,
   afterCommit?: (result: T, committed: LibrarySnapshot) => undefined,
 ): Promise<PersistenceTransactionResult<T>> {
-  if (migrationInProgress) return Promise.resolve({ status: "invalidated" });
+  // A real migration invalidates outright. Hydration also raises the
+  // migration guard, but a lifecycle action taken while cached notes are
+  // already visible must land rather than silently vanish: park it on the
+  // chain until the load settles, then run against the hydrated snapshot.
+  if (migrationInProgress && !hydrationInProgress) return Promise.resolve({ status: "invalidated" });
   const requested = libraryStore.getSnapshot();
   if (requested.notesDirectory == null) return Promise.resolve({ status: "invalidated" });
 
   const job = persistChain
     .catch(() => undefined)
     .then(async () => {
+      await awaitHydrationSettled();
+      if (migrationInProgress) return { status: "invalidated" } as const;
       const latest = libraryStore.getSnapshot();
       if (
         latest.directoryGeneration !== requested.directoryGeneration
@@ -1443,7 +1466,7 @@ export function useNotesLoader(
     (async () => {
       // Keep autosave out while load/reload paths touch multiple disk files.
       setMigrationInProgress(true);
-      hydrationInProgress = true;
+      setHydrationInProgress(true);
       // Snapshot of the best valid state we've reached so far. If a later
       // step throws, the outer catch falls back to this instead of nuking
       // the user's visible notes down to a single blank stub. On reload,
@@ -1693,16 +1716,16 @@ export function useNotesLoader(
         finished = true;
         // A torn-down load must not drop the flags a newer load has raised.
         if (effectActive) {
-          hydrationInProgress = false;
           setMigrationInProgress(false);
+          setHydrationInProgress(false);
           setIsLoading(false);
         }
       }
     })();
     return () => {
       effectActive = false;
-      hydrationInProgress = false;
       setMigrationInProgress(false);
+      setHydrationInProgress(false);
       // A load torn down mid-flight (unmount, StrictMode replay) must be
       // restartable by the next effect run; a finished one stays initialized.
       if (!finished) initialized.current = false;

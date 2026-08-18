@@ -518,6 +518,38 @@ describe("useNotesLoader — canonical library store adapter", () => {
     expect(persistMock.mock.calls.length).toBeGreaterThan(persistCallsBefore);
   });
 
+  it("parks a lifecycle transaction requested mid-hydration until the load settles", async () => {
+    let releaseReconcile!: () => void;
+    refs.reconcileGate = new Promise<void>((resolve) => { releaseReconcile = resolve; });
+    const a = makeDoc("a");
+    refs.fs!.seedTextFile(a.filePath, "body-a");
+    refs.decomposedDocs = [a];
+    const { result } = renderHook(() => useNotesLoader("en", "updated-desc"));
+    await waitFor(() => expect(reconcileFolderModule.reconcileFolder).toHaveBeenCalledTimes(1));
+
+    // The sidebar already shows cached notes here; a delete/restore must not
+    // be dropped as "invalidated" just because the loader holds the guard.
+    let executedAgainst: string[] | null = null;
+    const transaction = runPersistenceTransaction("mid-load", ["a"], async ({ snapshot }) => {
+      executedAgainst = snapshot.docs.map((doc) => `${doc.id}:${doc.content}`);
+      return true;
+    }, () => libraryStore.getSnapshot());
+    // Drain the microtask queue and a macrotask: the chain job has had every
+    // chance to run and must still be parked behind the gated reconcile.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(executedAgainst).toBeNull();
+
+    await act(async () => {
+      releaseReconcile();
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(result.current.isLoading).toBe(false), { timeout: 2000 });
+    const outcome = await transaction;
+    expect(outcome.status).toBe("committed");
+    // It ran against the hydrated library, not the pre-load projection.
+    expect(executedAgainst).toEqual(["a:body-a"]);
+  });
+
   it("restarts a load torn down mid-flight instead of leaving isLoading stuck", async () => {
     let releaseReconcile!: () => void;
     refs.reconcileGate = new Promise<void>((resolve) => { releaseReconcile = resolve; });
