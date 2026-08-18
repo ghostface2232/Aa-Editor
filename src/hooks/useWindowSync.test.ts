@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useState } from "react";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { NoteDoc } from "../utils/noteTypes";
+import type { NoteDoc, TrashedNote } from "../utils/noteTypes";
 import type { TiptapEditorHandle } from "../components/TiptapEditor";
 import { createLibraryStore, type LibrarySnapshot, type LibraryUpdater } from "../utils/libraryStore";
 
@@ -42,9 +42,23 @@ function makeDoc(id: string): NoteDoc {
   };
 }
 
+function makeTrashed(id: string, trashedAt: number): TrashedNote {
+  return {
+    id,
+    fileName: `Note ${id}`,
+    originalFilePath: `/notes/${id}.md`,
+    trashFilePath: `/notes/.trash/${id}.md`,
+    trashedAt,
+    groupId: null,
+    createdAt: 1,
+    updatedAt: 1,
+  };
+}
+
 function renderWindowSync(
   settleRemoteDeletedDoc: (docId: string) => Promise<boolean>,
   initialDocs: NoteDoc[] = [makeDoc("a"), makeDoc("b")],
+  initialTrashed: TrashedNote[] = [],
 ) {
   const openDocument = vi.fn();
   const onActiveDocChanged = vi.fn();
@@ -60,6 +74,7 @@ function renderWindowSync(
     // hook must express every remote change as one store updater.
     const store = useMemo(() => createLibraryStore({
       docs: initialDocs,
+      trashedNotes: initialTrashed,
       activeNoteId: initialDocs[0]?.id ?? null,
       notesDirectory: "/notes",
     }), []);
@@ -284,5 +299,78 @@ describe("useWindowSync — last-note replacement", () => {
       markdown: replacement.content,
       reason: "window-sync",
     });
+  });
+});
+
+describe("useWindowSync — trash changes", () => {
+  it("keeps an entry this window trashed while a peer emptied the trash it could see", async () => {
+    // The peer purged a and b; this window trashed c in the meantime, and c's
+    // file is in .trash on disk. A whole-array broadcast used to drop it here.
+    const { result } = renderWindowSync(
+      async () => true,
+      [makeDoc("a")],
+      [makeTrashed("a", 100), makeTrashed("b", 200), makeTrashed("c", 300)],
+    );
+    await waitFor(() => expect(refs.handlers.has("trash-updated")).toBe(true));
+
+    act(() => {
+      refs.handlers.get("trash-updated")?.({
+        payload: { sourceWindow: "window-b", added: [], removedIds: ["a", "b"] },
+      });
+    });
+
+    expect(result.current.snapshot.trashedNotes.map((note) => note.id)).toEqual(["c"]);
+  });
+
+  it("appends a peer's newly trashed entries without touching the local ones", async () => {
+    const { result } = renderWindowSync(
+      async () => true,
+      [makeDoc("a")],
+      [makeTrashed("local", 100)],
+    );
+    await waitFor(() => expect(refs.handlers.has("trash-updated")).toBe(true));
+
+    act(() => {
+      refs.handlers.get("trash-updated")?.({
+        payload: { sourceWindow: "window-b", added: [makeTrashed("peer", 200)], removedIds: [] },
+      });
+    });
+
+    expect(result.current.snapshot.trashedNotes.map((note) => note.id)).toEqual(["local", "peer"]);
+  });
+
+  it("takes the newer trashedAt when a peer re-trashed an entry this window already holds", async () => {
+    const { result } = renderWindowSync(
+      async () => true,
+      [makeDoc("a")],
+      [makeTrashed("x", 100)],
+    );
+    await waitFor(() => expect(refs.handlers.has("trash-updated")).toBe(true));
+
+    act(() => {
+      refs.handlers.get("trash-updated")?.({
+        payload: { sourceWindow: "window-b", added: [makeTrashed("x", 500)], removedIds: [] },
+      });
+    });
+
+    expect(result.current.snapshot.trashedNotes).toMatchObject([{ id: "x", trashedAt: 500 }]);
+  });
+
+  it("ignores a change that would not move anything", async () => {
+    const { result } = renderWindowSync(
+      async () => true,
+      [makeDoc("a")],
+      [makeTrashed("x", 100)],
+    );
+    await waitFor(() => expect(refs.handlers.has("trash-updated")).toBe(true));
+    const before = result.current.snapshot;
+
+    act(() => {
+      refs.handlers.get("trash-updated")?.({
+        payload: { sourceWindow: "window-b", added: [makeTrashed("x", 50)], removedIds: ["gone"] },
+      });
+    });
+
+    expect(result.current.snapshot).toBe(before);
   });
 });

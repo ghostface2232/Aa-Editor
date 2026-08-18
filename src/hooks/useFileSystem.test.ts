@@ -206,6 +206,7 @@ const markOwnWriteMock = ownWriteModule.markOwnWrite as ReturnType<typeof vi.fn>
 const markGroupAsDeletedMock = notesLoaderModule.markGroupAsDeleted as ReturnType<typeof vi.fn>;
 const saveManifestMock = notesLoaderModule.saveManifest as ReturnType<typeof vi.fn>;
 const emitDocCreatedMock = windowSyncModule.emitDocCreated as ReturnType<typeof vi.fn>;
+const emitTrashUpdatedMock = windowSyncModule.emitTrashUpdated as ReturnType<typeof vi.fn>;
 
 function makeDoc(id: string, overrides: Partial<NoteDoc> = {}): NoteDoc {
   return {
@@ -2066,5 +2067,71 @@ describe("useFileSystem — markOwnWrite happens before writeTextFile", () => {
     expect(markIdx).toBeGreaterThanOrEqual(0);
     expect(writeIdx).toBeGreaterThanOrEqual(0);
     expect(markIdx).toBeLessThan(writeIdx);
+  });
+});
+
+// trash-updated carries the CHANGE this window made, never its whole trash
+// array: a snapshot broadcast makes every receiver adopt the sender's view and
+// silently undoes a trash/restore/purge the receiving window did concurrently.
+describe("useFileSystem — trash-updated broadcasts a delta", () => {
+  const trashed = (id: string): TrashedNote => ({
+    id,
+    fileName: `Note ${id}`,
+    originalFilePath: `/notes/${id}.md`,
+    trashFilePath: `/notes/.trash/${id}.md`,
+    trashedAt: 2000,
+    groupId: null,
+    createdAt: 1000,
+    updatedAt: 1500,
+    pinned: false,
+  });
+
+  it("deleteNote announces only the entry it moved into trash", async () => {
+    const { result } = renderFs({
+      docs: [makeDoc("a"), makeDoc("b")],
+      activeIndex: 1,
+      trashedNotes: [trashed("old")],
+    });
+
+    await act(async () => { await result.current.deleteNote(0); });
+
+    expect(emitTrashUpdatedMock).toHaveBeenCalledWith({
+      added: [expect.objectContaining({ id: "a" })],
+    });
+  });
+
+  it("emptyTrash announces the ids it purged, not an empty list", async () => {
+    const { result } = renderFs({
+      docs: [makeDoc("a")],
+      trashedNotes: [trashed("t1"), trashed("t2")],
+    });
+
+    await act(async () => { await result.current.emptyTrash(); });
+
+    // A note another window trashed mid-purge is still on disk in .trash, so
+    // announcing "the trash is now empty" would wrongly drop it there.
+    expect(emitTrashUpdatedMock).toHaveBeenCalledWith({ removedIds: ["t1", "t2"] });
+  });
+
+  it("permanentlyDeleteNote announces just that id", async () => {
+    const { result } = renderFs({
+      docs: [makeDoc("a")],
+      trashedNotes: [trashed("t1"), trashed("t2")],
+    });
+
+    await act(async () => { await result.current.permanentlyDeleteNote("t2"); });
+
+    expect(emitTrashUpdatedMock).toHaveBeenCalledWith({ removedIds: ["t2"] });
+  });
+
+  it("restoreNote announces just the id it took out of trash", async () => {
+    const { result } = renderFs({
+      docs: [makeDoc("a")],
+      trashedNotes: [trashed("t1"), trashed("t2")],
+    });
+
+    await act(async () => { await result.current.restoreNote("t1"); });
+
+    expect(emitTrashUpdatedMock).toHaveBeenCalledWith({ removedIds: ["t1"] });
   });
 });

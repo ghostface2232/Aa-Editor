@@ -50,9 +50,20 @@ interface GroupsUpdatedPayload {
   groups: NoteGroup[];
 }
 
+/**
+ * A trash CHANGE, not a trash snapshot. Broadcasting the sender's whole array
+ * made every receiver adopt that window's view of the trash wholesale, so a
+ * concurrent trash/restore/purge in the receiving window was silently undone
+ * (and an out-of-order event resurrected entries whose files were already
+ * gone). Describing only what the sender moved keeps disjoint operations
+ * commutative: each window applies the delta to its own list.
+ */
 interface TrashUpdatedPayload {
   sourceWindow: string;
-  trashedNotes: TrashedNote[];
+  /** Entries the sender moved INTO trash. */
+  added: TrashedNote[];
+  /** Ids the sender took OUT of trash, by restore or by permanent delete. */
+  removedIds: string[];
 }
 
 const WINDOW_LABEL = getCurrentWindow().label;
@@ -138,9 +149,12 @@ export function emitGroupsUpdated(groups: NoteGroup[]) {
   } satisfies GroupsUpdatedPayload).catch(() => {});
 }
 
-export function emitTrashUpdated(trashedNotes: TrashedNote[]) {
+export function emitTrashUpdated(change: { added?: TrashedNote[]; removedIds?: string[] }) {
+  const added = change.added ?? [];
+  const removedIds = change.removedIds ?? [];
+  if (added.length === 0 && removedIds.length === 0) return;
   emit("trash-updated", {
-    sourceWindow: WINDOW_LABEL, trashedNotes,
+    sourceWindow: WINDOW_LABEL, added, removedIds,
   } satisfies TrashUpdatedPayload).catch(() => {});
 }
 
@@ -323,9 +337,36 @@ export function useWindowSync(
       }),
 
       listen<TrashUpdatedPayload>("trash-updated", (event) => {
-        const { sourceWindow, trashedNotes } = event.payload;
+        const { sourceWindow, added, removedIds } = event.payload;
         if (sourceWindow === WINDOW_LABEL) return;
-        commitRemote(() => ({ trashedNotes }));
+
+        commitRemote((current) => {
+          const removed = new Set(removedIds);
+          const incoming = new Map(added.map((note) => [note.id, note]));
+          let changed = false;
+          // Re-trashing an entry this window already holds keeps the newer
+          // trashedAt, mirroring the local publish rule in deleteNotes.
+          const kept: TrashedNote[] = [];
+          for (const note of current.trashedNotes) {
+            if (removed.has(note.id)) { changed = true; continue; }
+            const update = incoming.get(note.id);
+            incoming.delete(note.id);
+            if (update && update.trashedAt > note.trashedAt) {
+              kept.push(update);
+              changed = true;
+            } else {
+              kept.push(note);
+            }
+          }
+          // Entries this window has not seen trashed yet go on the end, where
+          // a local trash would have put them.
+          for (const note of added) {
+            if (!incoming.has(note.id)) continue;
+            kept.push(note);
+            changed = true;
+          }
+          return changed ? { trashedNotes: kept } : null;
+        });
       }),
     ]).then((fns) => {
       if (!mounted) { fns.forEach((fn) => fn()); return; }

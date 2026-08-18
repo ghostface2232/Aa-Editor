@@ -11,7 +11,6 @@ import {
   deriveTitle,
   sortNotes,
   getFileBaseName,
-  getTrashedNotesCache,
   markGroupAsDeleted,
   markNoteTitleChanged,
   markNotesPinnedChanged,
@@ -1099,7 +1098,9 @@ export function useFileSystem(
         ...group,
         noteIds: [...group.noteIds],
       })));
-      emitTrashUpdated([...latest.trashedNotes]);
+      emitTrashUpdated({
+        added: latest.trashedNotes.filter((note) => deletedSet.has(note.id)).map((note) => ({ ...note })),
+      });
       if (replacement && replacement.writeOk && latest.docs.some((doc) => doc.id === replacement.doc.id)) {
         emitDocCreated(replacement.doc);
       }
@@ -1639,7 +1640,7 @@ export function useFileSystem(
       if (latest.directoryGeneration !== committedGeneration) return;
       const restoredDoc = latest.docs.find((doc) => doc.id === trashedNoteId);
       if (!restoredDoc) return;
-      emitTrashUpdated([...latest.trashedNotes]);
+      emitTrashUpdated({ removedIds: [trashedNoteId] });
       emitGroupsUpdated(latest.groups.map((group) => ({ ...group, noteIds: [...group.noteIds] })));
       if (published.created) emitDocCreated(restoredDoc);
     } catch {
@@ -1670,7 +1671,7 @@ export function useFileSystem(
 
     if (setTrashedNotes) {
       setTrashedNotes((prev) => prev.filter((n) => n.id !== trashedNoteId));
-      emitTrashUpdated(getTrashedNotesCache());
+      emitTrashUpdated({ removedIds: [trashedNoteId] });
     }
     tiptapRef.current?.invalidateDocumentSession?.(trashed.id, trashed.originalFilePath);
 
@@ -1691,7 +1692,10 @@ export function useFileSystem(
 
     if (setTrashedNotes) {
       setTrashedNotes([]);
-      emitTrashUpdated([]);
+      // Only the entries this window actually purged. A note another window
+      // trashed while we were deleting files is still in .trash on disk, so
+      // broadcasting an empty list would wrongly drop it there.
+      emitTrashUpdated({ removedIds: trashedSnapshot.map((note) => note.id) });
     }
 
     void saveManifest(docsRef.current, docsRef.current[activeIndexRef.current]?.id ?? null, groupsRef.current).catch(() => {});
