@@ -7,6 +7,7 @@ import {
   getNotesDir,
   saveManifest,
   runPersistenceTransaction,
+  type PersistenceTransactionContext,
   deriveTitle,
   sortNotes,
   getFileBaseName,
@@ -46,6 +47,31 @@ function getFileName(path: string): string {
 
 function escapeRegexForRename(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// A sidecar that exists but cannot be read or parsed (cloud placeholder, AV
+// lock, truncated peer write) must not block a lifecycle transition; the
+// transition rebuilds it from canonical state, as the pre-transaction code
+// did. `unreadable` lets a rollback repair such a sidecar from canonical
+// state instead of removing it as if it had never existed.
+async function readPreviousMeta(
+  context: Pick<PersistenceTransactionContext, "readNoteMeta" | "assertCurrent">,
+  noteId: string,
+  stage: string,
+): Promise<{ meta: NoteMeta | null; unreadable: boolean }> {
+  try {
+    return { meta: await context.readNoteMeta(noteId), unreadable: false };
+  } catch (error) {
+    // A generation change surfaces as a throw too; let that one propagate.
+    context.assertCurrent();
+    void logNotenError(new NotenError(
+      "META_READ_FAILED",
+      "recoverable",
+      error instanceof Error ? error.message : String(error),
+      { context: { stage, noteId }, cause: error },
+    ));
+    return { meta: null, unreadable: true };
+  }
 }
 
 function sortAndPersistDocs(
@@ -861,7 +887,11 @@ export function useFileSystem(
           const trashPath = `${trashDir}/${getFileBaseName(doc.filePath)}`;
           const trashedAt = Date.now();
           try {
-            const previousMeta = await readNoteMeta(doc.id);
+            const { meta: previousMeta, unreadable: previousMetaUnreadable } = await readPreviousMeta(
+              { readNoteMeta, assertCurrent },
+              doc.id,
+              "deleteNotes",
+            );
             const mergedMeta = mergeNoteMeta(doc.id, {
               version: 2,
               id: doc.id,
@@ -893,6 +923,7 @@ export function useFileSystem(
               let rolledBack = false;
               try {
                 if (previousMeta) await writeNoteMeta(previousMeta);
+                else if (previousMetaUnreadable) await writeNoteMeta(mergedMeta);
                 else await removeNoteMeta(doc.id);
                 rolledBack = true;
               } catch (rollbackError) {
@@ -1418,7 +1449,11 @@ export function useFileSystem(
 
           const trashPath = `${notesDirectory}/.trash/${trashed.id}.md`;
           const restoredPath = `${notesDirectory}/${trashed.id}.md`;
-          const previousMeta = await readNoteMeta(trashed.id);
+          const { meta: previousMeta, unreadable: previousMetaUnreadable } = await readPreviousMeta(
+            { readNoteMeta, assertCurrent },
+            trashed.id,
+            "restoreNote",
+          );
           const groupId = trashed.groupId && snapshot.groups.some((group) => group.id === trashed.groupId)
             ? trashed.groupId
             : null;
@@ -1447,6 +1482,7 @@ export function useFileSystem(
           const rollbackMeta = async () => {
             try {
               if (previousMeta) await writeNoteMeta(previousMeta);
+              else if (previousMetaUnreadable) await writeNoteMeta(mergedMeta);
               else await removeNoteMeta(trashed.id);
             } catch (error) {
               void logNotenError(new NotenError(

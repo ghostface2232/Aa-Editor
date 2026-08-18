@@ -668,6 +668,44 @@ describe("useFileSystem — deleteNotes meta-first ordering", () => {
     warnSpy.mockRestore();
   });
 
+  it("still trashes a note whose sidecar exists but cannot be read, rebuilding it from the doc", async () => {
+    readMetaMock.mockRejectedValueOnce(new SyntaxError("Unexpected end of JSON input"));
+
+    const { result, setDocs } = renderFs({ docs: [makeDoc("a", { fileName: "Kept title" }), makeDoc("b")], activeIndex: 1 });
+
+    let deleted: string[] = [];
+    await act(async () => {
+      deleted = await result.current.deleteNote(0);
+    });
+
+    expect(deleted).toEqual(["a"]);
+    expect(copyFileMock).toHaveBeenCalledWith("/notes/a.md", "/notes/.trash/a.md");
+    const written = writeMetaMock.mock.calls[0][2] as { fileName: string; trashedAt: number | null };
+    expect(written).toMatchObject({ fileName: "Kept title" });
+    expect(written.trashedAt).not.toBeNull();
+    expect(setDocs).toHaveBeenCalledWith([expect.objectContaining({ id: "b" })]);
+    expect(logMock).toHaveBeenCalledWith(expect.objectContaining({ code: "META_READ_FAILED" }));
+  });
+
+  it("repairs an unreadable sidecar from canonical state on rollback instead of removing it", async () => {
+    refs.copyFileShouldThrow = new Error("EACCES");
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    readMetaMock.mockRejectedValueOnce(new Error("EBUSY: cloud placeholder"));
+
+    const { result } = renderFs({ docs: [makeDoc("a", { fileName: "Kept title" }), makeDoc("b")], activeIndex: 1 });
+
+    await act(async () => {
+      await result.current.deleteNote(0);
+    });
+
+    expect(removeMetaMock).not.toHaveBeenCalled();
+    const metas = writeMetaMock.mock.calls.map((c) => c[2] as { fileName: string; trashedAt: number | null });
+    expect(metas).toHaveLength(2);
+    expect(metas[0].trashedAt).not.toBeNull();
+    expect(metas[1]).toMatchObject({ fileName: "Kept title", trashedAt: null });
+    warnSpy.mockRestore();
+  });
+
   it("keeps the root body and commits deletion-wins when meta rollback fails", async () => {
     refs.copyFileShouldThrow = new Error("EACCES");
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -1338,6 +1376,34 @@ describe("useFileSystem — restoreNote meta-first ordering", () => {
     });
     expect(refs.librarySnapshot?.groups[0]?.noteIds).toEqual(["t1"]);
     expect(refs.librarySnapshot?.trashedNotes).toEqual([]);
+  });
+
+  it("restores a note whose sidecar cannot be read, rebuilding it from the trash entry", async () => {
+    const trashed: TrashedNote = {
+      id: "t1",
+      fileName: "Trashed",
+      originalFilePath: "/notes/t1.md",
+      trashFilePath: "/notes/.trash/t1.md",
+      trashedAt: 2000,
+      groupId: null,
+      createdAt: 1000,
+      updatedAt: 1500,
+      customName: true,
+      pinned: false,
+    };
+    const readMetaMock = metadataIOModule.readMeta as ReturnType<typeof vi.fn>;
+    const writeMetaMock = metadataIOModule.writeMeta as ReturnType<typeof vi.fn>;
+    readMetaMock.mockRejectedValueOnce(new SyntaxError("Unexpected token"));
+    const { result } = renderFs({ docs: [makeDoc("a")], trashedNotes: [trashed] });
+
+    await act(async () => {
+      await result.current.restoreNote("t1");
+    });
+
+    expect(writeMetaMock.mock.calls[0]?.[2]).toMatchObject({ fileName: "Trashed", customName: true, trashedAt: null });
+    expect(refs.librarySnapshot?.docs.some((doc) => doc.id === "t1")).toBe(true);
+    expect(refs.librarySnapshot?.trashedNotes).toEqual([]);
+    expect(logMock).toHaveBeenCalledWith(expect.objectContaining({ code: "META_READ_FAILED" }));
   });
 
   it("removes the trash copy only after the restored body read back", async () => {
