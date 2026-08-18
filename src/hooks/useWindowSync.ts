@@ -62,8 +62,19 @@ interface TrashUpdatedPayload {
   sourceWindow: string;
   /** Entries the sender moved INTO trash. */
   added: TrashedNote[];
-  /** Ids the sender took OUT of trash, by restore or by permanent delete. */
-  removedIds: string[];
+  /**
+   * Entries the sender took OUT of trash, by restore or by permanent delete.
+   * Carries `trashedAt` because the id alone names the note, not the trash
+   * incarnation: the same note can be restored and trashed again, and a
+   * removal that reaches a window after the newer re-trash must not delete it.
+   */
+  removed: TrashRemoval[];
+}
+
+export interface TrashRemoval {
+  id: string;
+  /** `trashedAt` of the entry the sender removed. */
+  trashedAt: number;
 }
 
 const WINDOW_LABEL = getCurrentWindow().label;
@@ -149,12 +160,12 @@ export function emitGroupsUpdated(groups: NoteGroup[]) {
   } satisfies GroupsUpdatedPayload).catch(() => {});
 }
 
-export function emitTrashUpdated(change: { added?: TrashedNote[]; removedIds?: string[] }) {
+export function emitTrashUpdated(change: { added?: TrashedNote[]; removed?: TrashRemoval[] }) {
   const added = change.added ?? [];
-  const removedIds = change.removedIds ?? [];
-  if (added.length === 0 && removedIds.length === 0) return;
+  const removed = change.removed ?? [];
+  if (added.length === 0 && removed.length === 0) return;
   emit("trash-updated", {
-    sourceWindow: WINDOW_LABEL, added, removedIds,
+    sourceWindow: WINDOW_LABEL, added, removed,
   } satisfies TrashUpdatedPayload).catch(() => {});
 }
 
@@ -337,18 +348,22 @@ export function useWindowSync(
       }),
 
       listen<TrashUpdatedPayload>("trash-updated", (event) => {
-        const { sourceWindow, added, removedIds } = event.payload;
+        const { sourceWindow, added, removed } = event.payload;
         if (sourceWindow === WINDOW_LABEL) return;
 
         commitRemote((current) => {
-          const removed = new Set(removedIds);
+          const removedAt = new Map(removed.map((entry) => [entry.id, entry.trashedAt]));
           const incoming = new Map(added.map((note) => [note.id, note]));
           let changed = false;
           // Re-trashing an entry this window already holds keeps the newer
           // trashedAt, mirroring the local publish rule in deleteNotes.
           const kept: TrashedNote[] = [];
           for (const note of current.trashedNotes) {
-            if (removed.has(note.id)) { changed = true; continue; }
+            // A removal only retires the incarnation it named. A note restored
+            // and trashed again is a NEWER entry, and the late removal of the
+            // older one must leave it alone.
+            const retiredAt = removedAt.get(note.id);
+            if (retiredAt != null && note.trashedAt <= retiredAt) { changed = true; continue; }
             const update = incoming.get(note.id);
             incoming.delete(note.id);
             if (update && update.trashedAt > note.trashedAt) {

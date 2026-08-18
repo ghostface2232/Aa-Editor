@@ -1411,7 +1411,16 @@ export function useFileSystem(
       applied: boolean;
       created: boolean;
       emptiedGroupIds: string[];
-    } = { activeBeforePublish: null, applied: false, created: false, emptiedGroupIds: [] };
+      // trashedAt of the entry this restore retired, so the broadcast names the
+      // incarnation it removed rather than the note id alone.
+      restoredTrashedAt: number | null;
+    } = {
+      activeBeforePublish: null,
+      applied: false,
+      created: false,
+      emptiedGroupIds: [],
+      restoredTrashedAt: null,
+    };
     let committedGeneration: number | null = null;
     try {
       const didDrain = await flushDocSaveRef?.current?.(trashedNoteId);
@@ -1432,6 +1441,7 @@ export function useFileSystem(
           const failed = { baseSnapshot: snapshot, restored: null, prunedId: null } as const;
           const trashed = snapshot.trashedNotes.find((note) => note.id === trashedNoteId);
           if (!trashed) return failed;
+          published.restoredTrashedAt = trashed.trashedAt;
 
           const pruneLeavingDoc = async (): Promise<string | null> => {
             if (!pruneCandidateId || snapshot.activeNoteId !== pruneCandidateId) return null;
@@ -1640,7 +1650,11 @@ export function useFileSystem(
       if (latest.directoryGeneration !== committedGeneration) return;
       const restoredDoc = latest.docs.find((doc) => doc.id === trashedNoteId);
       if (!restoredDoc) return;
-      emitTrashUpdated({ removedIds: [trashedNoteId] });
+      if (published.restoredTrashedAt != null) {
+        emitTrashUpdated({
+          removed: [{ id: trashedNoteId, trashedAt: published.restoredTrashedAt }],
+        });
+      }
       emitGroupsUpdated(latest.groups.map((group) => ({ ...group, noteIds: [...group.noteIds] })));
       if (published.created) emitDocCreated(restoredDoc);
     } catch {
@@ -1671,7 +1685,7 @@ export function useFileSystem(
 
     if (setTrashedNotes) {
       setTrashedNotes((prev) => prev.filter((n) => n.id !== trashedNoteId));
-      emitTrashUpdated({ removedIds: [trashedNoteId] });
+      emitTrashUpdated({ removed: [{ id: trashedNoteId, trashedAt: trashed.trashedAt }] });
     }
     tiptapRef.current?.invalidateDocumentSession?.(trashed.id, trashed.originalFilePath);
 
@@ -1695,7 +1709,9 @@ export function useFileSystem(
       // Only the entries this window actually purged. A note another window
       // trashed while we were deleting files is still in .trash on disk, so
       // broadcasting an empty list would wrongly drop it there.
-      emitTrashUpdated({ removedIds: trashedSnapshot.map((note) => note.id) });
+      emitTrashUpdated({
+        removed: trashedSnapshot.map((note) => ({ id: note.id, trashedAt: note.trashedAt })),
+      });
     }
 
     void saveManifest(docsRef.current, docsRef.current[activeIndexRef.current]?.id ?? null, groupsRef.current).catch(() => {});

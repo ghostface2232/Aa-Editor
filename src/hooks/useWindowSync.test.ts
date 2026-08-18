@@ -315,7 +315,7 @@ describe("useWindowSync — trash changes", () => {
 
     act(() => {
       refs.handlers.get("trash-updated")?.({
-        payload: { sourceWindow: "window-b", added: [], removedIds: ["a", "b"] },
+        payload: { sourceWindow: "window-b", added: [], removed: [{ id: "a", trashedAt: 100 }, { id: "b", trashedAt: 200 }] },
       });
     });
 
@@ -332,7 +332,7 @@ describe("useWindowSync — trash changes", () => {
 
     act(() => {
       refs.handlers.get("trash-updated")?.({
-        payload: { sourceWindow: "window-b", added: [makeTrashed("peer", 200)], removedIds: [] },
+        payload: { sourceWindow: "window-b", added: [makeTrashed("peer", 200)], removed: [] },
       });
     });
 
@@ -349,7 +349,7 @@ describe("useWindowSync — trash changes", () => {
 
     act(() => {
       refs.handlers.get("trash-updated")?.({
-        payload: { sourceWindow: "window-b", added: [makeTrashed("x", 500)], removedIds: [] },
+        payload: { sourceWindow: "window-b", added: [makeTrashed("x", 500)], removed: [] },
       });
     });
 
@@ -367,10 +367,44 @@ describe("useWindowSync — trash changes", () => {
 
     act(() => {
       refs.handlers.get("trash-updated")?.({
-        payload: { sourceWindow: "window-b", added: [makeTrashed("x", 50)], removedIds: ["gone"] },
+        payload: { sourceWindow: "window-b", added: [makeTrashed("x", 50)], removed: [{ id: "gone", trashedAt: 1 }] },
       });
     });
 
     expect(result.current.snapshot).toBe(before);
+  });
+
+  it("keeps a re-trashed entry when the restore that preceded it arrives late", async () => {
+    // A restored x@100 and trashed it again as x@200. The re-trash reaches this
+    // window first; the late restore names the OLD incarnation and must not
+    // delete the newer one.
+    const { result } = renderWindowSync(async () => true, [makeDoc("a")], []);
+    await waitFor(() => expect(refs.handlers.has("trash-updated")).toBe(true));
+
+    act(() => {
+      refs.handlers.get("trash-updated")?.({
+        payload: { sourceWindow: "window-b", added: [makeTrashed("x", 200)], removed: [] },
+      });
+    });
+    act(() => {
+      refs.handlers.get("trash-updated")?.({
+        payload: { sourceWindow: "window-b", added: [], removed: [{ id: "x", trashedAt: 100 }] },
+      });
+    });
+
+    expect(result.current.snapshot.trashedNotes).toMatchObject([{ id: "x", trashedAt: 200 }]);
+  });
+
+  it("removes the entry when the removal names the incarnation this window holds", async () => {
+    const { result } = renderWindowSync(async () => true, [makeDoc("a")], [makeTrashed("x", 200)]);
+    await waitFor(() => expect(refs.handlers.has("trash-updated")).toBe(true));
+
+    act(() => {
+      refs.handlers.get("trash-updated")?.({
+        payload: { sourceWindow: "window-b", added: [], removed: [{ id: "x", trashedAt: 200 }] },
+      });
+    });
+
+    expect(result.current.snapshot.trashedNotes).toEqual([]);
   });
 });

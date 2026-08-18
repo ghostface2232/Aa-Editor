@@ -2110,7 +2110,9 @@ describe("useFileSystem — trash-updated broadcasts a delta", () => {
 
     // A note another window trashed mid-purge is still on disk in .trash, so
     // announcing "the trash is now empty" would wrongly drop it there.
-    expect(emitTrashUpdatedMock).toHaveBeenCalledWith({ removedIds: ["t1", "t2"] });
+    expect(emitTrashUpdatedMock).toHaveBeenCalledWith({
+      removed: [{ id: "t1", trashedAt: 2000 }, { id: "t2", trashedAt: 2000 }],
+    });
   });
 
   it("permanentlyDeleteNote announces just that id", async () => {
@@ -2121,7 +2123,7 @@ describe("useFileSystem — trash-updated broadcasts a delta", () => {
 
     await act(async () => { await result.current.permanentlyDeleteNote("t2"); });
 
-    expect(emitTrashUpdatedMock).toHaveBeenCalledWith({ removedIds: ["t2"] });
+    expect(emitTrashUpdatedMock).toHaveBeenCalledWith({ removed: [{ id: "t2", trashedAt: 2000 }] });
   });
 
   it("restoreNote announces just the id it took out of trash", async () => {
@@ -2132,6 +2134,6 @@ describe("useFileSystem — trash-updated broadcasts a delta", () => {
 
     await act(async () => { await result.current.restoreNote("t1"); });
 
-    expect(emitTrashUpdatedMock).toHaveBeenCalledWith({ removedIds: ["t1"] });
+    expect(emitTrashUpdatedMock).toHaveBeenCalledWith({ removed: [{ id: "t1", trashedAt: 2000 }] });
   });
 });
