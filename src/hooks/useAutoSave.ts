@@ -99,7 +99,6 @@ export function useAutoSave(
   docs: NoteDoc[],
   setDocs: React.Dispatch<React.SetStateAction<NoteDoc[]>>,
   activeIndex: number,
-  setActiveIndex: React.Dispatch<React.SetStateAction<number>>,
   locale: Locale,
   notesSortOrder: NotesSortOrder,
   groups: NoteGroup[],
@@ -143,7 +142,6 @@ export function useAutoSave(
     locale,
     notesSortOrder,
     setDocs,
-    setActiveIndex,
     groups,
   });
   stateRef.current = {
@@ -154,7 +152,6 @@ export function useAutoSave(
     locale,
     notesSortOrder,
     setDocs,
-    setActiveIndex,
     groups,
   };
 
@@ -261,7 +258,6 @@ export function useAutoSave(
       locale: latestLocale,
       notesSortOrder: latestSortOrder,
       setDocs: latestSetDocs,
-      setActiveIndex: latestSetActiveIndex,
     } = stateRef.current;
 
     try {
@@ -357,7 +353,7 @@ export function useAutoSave(
       // notifyActiveDoc but React hasn't committed the corresponding setDocs/
       // setActiveIndex yet, stateRef still reflects the leaving doc. Using the
       // stale id would let a post-switch background save flip isDirty on the
-      // wrong doc and resort/reselect the leaving doc as active.
+      // wrong doc.
       const currentActiveId = activeDocRef.current?.id
         ?? live.docs[live.activeIndex]?.id
         ?? null;
@@ -512,22 +508,15 @@ export function useAutoSave(
       // deleted entry (a ghost row whose file already moved to .trash). If the
       // saved doc itself vanished from `prev`, leave `prev` untouched.
       //
-      // The active index must come from the SAME committed array: an index
-      // computed against the stale base can point at a different note once a
-      // concurrent delete shrank the list, and the next render would repoint
-      // activeDocRef (and thus future saves) at it. Dispatching
-      // setActiveIndex from inside the updater mirrors useWindowSync's
-      // doc-deleted/note-pinned handlers; it is idempotent under StrictMode
-      // re-invocation.
-      latestSetDocs((prev) => {
-        const committed = buildCommit(prev);
-        if (!committed) return prev;
-        const nextIndex = commitActiveId
-          ? Math.max(committed.findIndex((docEntry) => docEntry.id === commitActiveId), 0)
-          : 0;
-        latestSetActiveIndex(nextIndex);
-        return committed;
-      });
+      // Do NOT touch the active index here. Active identity is an id in
+      // libraryStore, so it survives the re-sort on its own and the store
+      // adapter re-derives React's activeIndex from the committed array. A
+      // nested setActiveIndex would resolve its index against the PRE-commit
+      // docs (the store commits only after this updater returns), so an index
+      // computed on the re-sorted array pointed at whichever note previously
+      // occupied that slot — repointing activeDocRef and every following
+      // keystroke at the wrong file.
+      latestSetDocs((prev) => buildCommit(prev) ?? prev);
       emitDocUpdated(snapshot.docId, snapshot.content, persisted.updatedAt);
 
       if (editorStillMatches) {

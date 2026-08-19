@@ -468,7 +468,6 @@ function App() {
     docs,
     setDocs,
     activeIndex,
-    setActiveIndex,
     locale,
     settings.notesSortOrder,
     groups,

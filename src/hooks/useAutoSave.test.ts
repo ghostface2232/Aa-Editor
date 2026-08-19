@@ -199,7 +199,6 @@ function renderAutoSave(opts: {
 }) {
   const docs = opts.docs ?? [makeDoc("a")];
   const setDocs = vi.fn();
-  const setActiveIndex = vi.fn();
   const state = opts.state ?? makeState({ isDirty: true });
   const tiptapRef = makeTiptapRef();
   const groups: NoteGroup[] = [];
@@ -214,7 +213,6 @@ function renderAutoSave(opts: {
         next.docs,
         setDocs,
         next.activeIndex,
-        setActiveIndex,
         "en",
         "updated-desc",
         groups,
@@ -227,7 +225,7 @@ function renderAutoSave(opts: {
     props = { ...props, ...patch };
     rerender(props);
   };
-  return { result, rerenderWith, setDocs, setActiveIndex, state, tiptapRef, docs };
+  return { result, rerenderWith, setDocs, state, tiptapRef, docs };
 }
 
 beforeEach(() => {
@@ -633,7 +631,6 @@ describe("useAutoSave — doSave golden path", () => {
       [initial],
       setDocs,
       0,
-      vi.fn(),
       "en",
       "updated-desc",
       [],
@@ -929,7 +926,7 @@ describe("useAutoSave — pathless fallback doc (loader failure stub)", () => {
 
 describe("useAutoSave — doSave functional commit", () => {
   it("recomputes against prev so a concurrently deleted doc is not resurrected", async () => {
-    const { result, setDocs, setActiveIndex } = renderAutoSave({
+    const { result, setDocs } = renderAutoSave({
       docs: [makeDoc("a", { isDirty: true }), makeDoc("b")],
     });
 
@@ -946,9 +943,6 @@ describe("useAutoSave — doSave functional commit", () => {
     const next = updater([makeDoc("a", { isDirty: true })]);
     expect(next.some((d) => d.id === "b")).toBe(false);
     expect(next.find((d) => d.id === "a")?.content).toBe("hello world");
-    // The active index is derived from the SAME committed array, not the
-    // stale pre-delete base.
-    expect(setActiveIndex).toHaveBeenLastCalledWith(next.findIndex((d) => d.id === "a"));
 
     // The saved doc itself was concurrently deleted: prev stays untouched.
     const prevWithoutSaved = [makeDoc("b")];
@@ -1104,7 +1098,6 @@ describe("useAutoSave — flushAutoSave behavior", () => {
     vi.useFakeTimers();
     const docs = [makeDoc("a"), makeDoc("b")];
     const setDocs = vi.fn();
-    const setActiveIndex = vi.fn();
     const tiptapRef = makeTiptapRef();
     const groups: NoteGroup[] = [];
 
@@ -1116,7 +1109,6 @@ describe("useAutoSave — flushAutoSave behavior", () => {
           docs,
           setDocs,
           activeIndex,
-          setActiveIndex,
           "en" as Locale,
           "updated-desc" as NotesSortOrder,
           groups,
@@ -1300,7 +1292,6 @@ describe("useAutoSave — savedDocStillExists race", () => {
     );
 
     const setDocs = vi.fn();
-    const setActiveIndex = vi.fn();
     const state = makeState({ isDirty: true });
     const tiptapRef = makeTiptapRef();
     const groups: NoteGroup[] = [];
@@ -1313,7 +1304,6 @@ describe("useAutoSave — savedDocStillExists race", () => {
           docs,
           setDocs,
           0,
-          setActiveIndex,
           "en" as Locale,
           "updated-desc" as NotesSortOrder,
           groups,
@@ -1374,7 +1364,6 @@ describe("useAutoSave — captureAndQueueSave (doc-switch fast path)", () => {
     refs.writeShouldThrow = new Error("EBUSY");
     const docs = [makeDoc("a"), makeDoc("b")];
     const setDocs = vi.fn();
-    const setActiveIndex = vi.fn();
     const tiptapRef = makeTiptapRef();
     const groups: NoteGroup[] = [];
 
@@ -1386,7 +1375,6 @@ describe("useAutoSave — captureAndQueueSave (doc-switch fast path)", () => {
           docs,
           setDocs,
           activeIndex,
-          setActiveIndex,
           "en" as Locale,
           "updated-desc" as NotesSortOrder,
           groups,
@@ -1562,23 +1550,21 @@ describe("useAutoSave — flushPendingSnapshots (orphaned-failure retry)", () =>
 });
 
 describe("useAutoSave — post-switch save uses activeDocRef (stale stateRef guard)", () => {
-  // codex review noted that doSave reads stateRef.current AFTER its await.
-  // If a fast-path switchDocument has already called notifyActiveDoc("b", ...)
-  // but the corresponding setDocs/setActiveIndex render hasn't committed yet,
-  // stateRef still reports "a" as active. Using that stale id would let the
-  // background save's setActiveIndex pin the leaving doc as active again.
-  // Fix: derive currentActiveId from activeDocRef.current (sync) first.
+  // doSave reads stateRef.current AFTER its await. If a fast-path
+  // switchDocument has already called notifyActiveDoc("b", ...) but the
+  // corresponding render hasn't committed yet, stateRef still reports "a" as
+  // active. currentActiveId therefore comes from activeDocRef.current (sync)
+  // first, and the post-save commit must never re-pin the leaving doc.
   it("does not re-pin the leaving doc as active when the switch hasn't committed yet", async () => {
     refs.editorContent = "leaving content";
     const docs = [makeDoc("a"), makeDoc("b")];
     const setDocs = vi.fn();
-    const setActiveIndex = vi.fn();
     const tiptapRef = makeTiptapRef();
     const groups: NoteGroup[] = [];
     const state = makeState({ isDirty: true });
 
     const { result } = renderHook(() =>
-      useAutoSave(state, tiptapRef, docs, setDocs, 0, setActiveIndex,
+      useAutoSave(state, tiptapRef, docs, setDocs, 0,
         "en" as Locale, "updated-desc" as NotesSortOrder, groups),
     );
 
@@ -1591,13 +1577,17 @@ describe("useAutoSave — post-switch save uses activeDocRef (stale stateRef gua
     await act(async () => { await result.current.awaitInFlightSaves(); });
 
     // Body for the LEAVING doc still gets written (snapshot was captured
-    // before the switch), but the post-save setActiveIndex must NOT reselect
-    // the leaving doc — that would yank focus back from B to A.
+    // before the switch), and the post-save commit must NOT reselect the
+    // leaving doc — that would yank focus back from B to A. doSave no longer
+    // touches active identity at all: its commit is a docs-only functional
+    // updater, and the store keeps activeNoteId as an id across it.
     expect(writeMock).toHaveBeenCalledWith("/notes/a.md", "leaving content");
-    // setActiveIndex may be called with B's position (1) or skipped, but never
-    // with A's position (0) in a way that would override the switch.
-    const calls = setActiveIndex.mock.calls.map((c) => c[0]);
-    expect(calls).not.toContain(0);
+    const lastArg = setDocs.mock.calls[setDocs.mock.calls.length - 1][0];
+    expect(typeof lastArg).toBe("function");
+    const updater = lastArg as (prev: NoteDoc[]) => NoteDoc[];
+    const next = updater(docs);
+    expect(next.find((d) => d.id === "a")?.content).toBe("leaving content");
+    expect(next.map((d) => d.id)).toEqual(["a", "b"]);
   });
 });
 

@@ -55,6 +55,16 @@ vi.mock("@tauri-apps/plugin-fs", () => {
   };
 });
 
+// useAutoSave (rendered alongside the loader in the re-sort regression below)
+// pulls in useWindowSync's cross-window event plumbing; stub the Tauri side.
+vi.mock("@tauri-apps/api/event", () => ({
+  emit: vi.fn(async () => {}),
+  listen: vi.fn(async () => () => {}),
+}));
+vi.mock("@tauri-apps/api/window", () => ({
+  getCurrentWindow: () => ({ label: "main" }),
+}));
+
 vi.mock("../utils/machineId", () => ({
   getMachineId: vi.fn(async () => "test-machine"),
   getMachineIdCached: vi.fn(() => "test-machine"),
@@ -134,6 +144,9 @@ import * as decomposedStateModule from "../utils/decomposedState";
 import * as crashLogModule from "../utils/crashLog";
 import { readMeta, writeMeta, type NoteMeta } from "../utils/metadataIO";
 import { libraryStore } from "../utils/libraryStore";
+import { useAutoSave } from "./useAutoSave";
+import type { MarkdownState } from "./useMarkdownState";
+import type { TiptapEditorHandle } from "../components/TiptapEditor";
 
 const clearReconcileSpy = reconcileFolderModule.clearReconcileState as unknown as ReturnType<typeof vi.fn>;
 const persistMock = decomposedStateModule.persistDecomposedState as ReturnType<typeof vi.fn>;
@@ -2098,5 +2111,98 @@ describe("purgeExpiredTrash — unsafe id defense-in-depth", () => {
     const kept = await purgeExpiredTrash([safe]);
     expect(kept).toHaveLength(0);
     expect(await refs.fs!.exists("/test-appdata/notes/.trash/safe.md")).toBe(false);
+  });
+});
+
+describe("useNotesLoader + useAutoSave — autosave re-sort keeps active identity", () => {
+  // Regression for the nested `setActiveIndex(nextIndex)` that doSave used to
+  // dispatch from inside its setDocs updater. The index was computed against the
+  // re-sorted array, but commitActiveIndexUpdate resolved it against the
+  // PRE-commit store docs, so saving a non-top note under updated-desc pinned
+  // activeNoteId to whichever note previously sat at the saved note's new slot
+  // — and the next keystroke was written into that other note's file.
+  function makeSortedDoc(id: string, updatedAt: number): NoteDoc {
+    return {
+      id,
+      filePath: `/test-appdata/notes/${id}.md`,
+      fileName: `Note ${id}`,
+      isDirty: false,
+      content: `body-${id}`,
+      createdAt: 1000,
+      updatedAt,
+    };
+  }
+
+  function makeEditorStubs() {
+    const editor = { content: "" };
+    const cached = { md: "" };
+    const state = {
+      isDirty: true,
+      setIsDirty: vi.fn(),
+      primeMarkdown: vi.fn((md: string) => { cached.md = md; }),
+      getCachedMarkdown: () => cached.md,
+      setFilePath: vi.fn(),
+    } as unknown as MarkdownState;
+    const tiptapRef = {
+      current: {
+        getEditor: () => ({ getMarkdown: () => editor.content }),
+      } as unknown as TiptapEditorHandle,
+    };
+    return { editor, state, tiptapRef };
+  }
+
+  it("saving a non-top note under updated-desc keeps activeNoteId on it and routes the next edit to its own file", async () => {
+    const seeded = [makeSortedDoc("a", 3000), makeSortedDoc("b", 2000), makeSortedDoc("c", 1000)];
+    for (const doc of seeded) refs.fs!.seedTextFile(doc.filePath, doc.content);
+    refs.decomposedDocs = seeded;
+
+    const { editor, state, tiptapRef } = makeEditorStubs();
+    const { result } = renderHook(() => {
+      const loader = useNotesLoader("en", "updated-desc");
+      const autoSave = useAutoSave(
+        state,
+        tiptapRef,
+        loader.docs,
+        loader.setDocs,
+        loader.activeIndex,
+        "en",
+        "updated-desc",
+        loader.groups,
+      );
+      return { loader, autoSave };
+    });
+    await waitFor(() => expect(result.current.loader.isLoading).toBe(false), { timeout: 3000 });
+    expect(result.current.loader.docs.map((d) => d.id)).toEqual(["a", "b", "c"]);
+
+    // Switch to b (index 1) the way switchDocument does.
+    editor.content = "body-b";
+    act(() => {
+      result.current.loader.setActiveIndex(1);
+      result.current.autoSave.notifyActiveDoc("b", "/test-appdata/notes/b.md");
+    });
+    expect(libraryStore.getSnapshot().activeNoteId).toBe("b");
+
+    // Type into b and save: the save bumps b's updatedAt, so it re-sorts to the top.
+    editor.content = "body-b edited";
+    await act(async () => {
+      result.current.autoSave.scheduleAutoSave();
+      expect(await result.current.autoSave.flushAutoSave()).toEqual({ status: "saved" });
+    });
+
+    const afterFirstSave = libraryStore.getSnapshot();
+    expect(afterFirstSave.docs.map((d) => d.id)).toEqual(["b", "a", "c"]);
+    expect(afterFirstSave.activeNoteId).toBe("b");
+    expect(result.current.loader.activeIndex).toBe(0);
+    expect(result.current.loader.docs[result.current.loader.activeIndex]?.id).toBe("b");
+
+    // The next keystroke (editor still shows b) must land in b.md, not a.md.
+    editor.content = "body-b edited again";
+    await act(async () => {
+      result.current.autoSave.scheduleAutoSave();
+      expect(await result.current.autoSave.flushAutoSave()).toEqual({ status: "saved" });
+    });
+    expect(await refs.fs!.readTextFile("/test-appdata/notes/b.md")).toBe("body-b edited again");
+    expect(await refs.fs!.readTextFile("/test-appdata/notes/a.md")).toBe("body-a");
+    expect(libraryStore.getSnapshot().activeNoteId).toBe("b");
   });
 });
