@@ -599,8 +599,18 @@ export function useAutoSave(
   // Single-flight per doc; concurrent callers share the same attempt. Resolves
   // to the adopted path so callers report the real one rather than re-reading
   // activeDocRef, which may already point at another doc by then.
+  //
+  // A caller that joins an in-flight attempt still captures the editor: the
+  // attempt wrote the text as it was when it STARTED, and the joining call is
+  // typically the doc-switch capture (captureAndQueueSave), i.e. the last look
+  // at the editor before it is repointed. Without that capture the text typed
+  // during the provision would exist nowhere once the attempt lands its older
+  // content into the store, and the doc — now dirty but with a filePath —
+  // would pass every close gate. The newest capture is what the attempt
+  // commits and, if it differs from what it wrote, what it saves next.
   const provisioningDocsRef = useRef(new Map<string, Promise<string | null>>());
   const provisionAttemptAtRef = useRef(new Map<string, number>());
+  const latestPathlessCaptureRef = useRef(new Map<string, string>());
   const provisionPathlessActiveDoc = useCallback((opts?: { force?: boolean }): Promise<string | null> => {
     // Same gate as doSave: never write into a directory that a migration may
     // be about to clear (getNotesDir still resolves to the OLD dir until the
@@ -625,7 +635,13 @@ export function useAutoSave(
     }
 
     const inFlight = provisioningDocsRef.current.get(target.id);
-    if (inFlight) return inFlight;
+    if (inFlight) {
+      const { state: latestState, tiptapRef: latestEditorRef } = stateRef.current;
+      const content = getCurrentMarkdown(latestEditorRef);
+      latestState.primeMarkdown(content);
+      latestPathlessCaptureRef.current.set(target.id, content);
+      return inFlight;
+    }
     const lastAttemptAt = provisionAttemptAtRef.current.get(target.id) ?? 0;
     if (!opts?.force && Date.now() - lastAttemptAt < PROVISION_RETRY_MS) {
       return Promise.resolve(null);
@@ -638,16 +654,25 @@ export function useAutoSave(
     const content = getCurrentMarkdown(latestEditorRef);
     latestState.primeMarkdown(content);
 
+    latestPathlessCaptureRef.current.delete(target.id);
     const attempt = (async () => {
       try {
         const { filePath, ok } = await provisionNoteFile(target.id, content, "autosave-provision-pathless");
+        // Text captured by callers that joined this attempt while it was in
+        // flight — newer than `content`, and possibly no longer in the editor.
+        const takeLatestCapture = () => {
+          const latest = latestPathlessCaptureRef.current.get(target.id);
+          latestPathlessCaptureRef.current.delete(target.id);
+          return latest ?? content;
+        };
         if (!ok) {
           // Keep the captured text in React state: the caller may be about to
           // repoint the editor (doc switch), and without this the edits would
           // exist nowhere. The doc stays dirty+pathless, so switching back
           // reloads this content and the next edit retries provisioning.
+          const stash = takeLatestCapture();
           latestSetDocs((prev) => prev.map((doc) =>
-            doc.id === target.id && !doc.filePath && doc.content !== content ? { ...doc, content } : doc,
+            doc.id === target.id && !doc.filePath && doc.content !== stash ? { ...doc, content: stash } : doc,
           ));
           return null;
         }
@@ -656,6 +681,7 @@ export function useAutoSave(
         // write on disk would let the watcher reconcile resurrect the deleted
         // note. Mirrors the re-check doSave does inside its write section.
         if (remoteDeletedDocsRef.current.has(target.id) || isNoteLifecycleBlocked(target.id)) {
+          latestPathlessCaptureRef.current.delete(target.id);
           markOwnWrite(filePath);
           await tauriFileSystem.remove(filePath).catch(() => {});
           return null;
@@ -667,12 +693,26 @@ export function useAutoSave(
           activeDocRef.current = { id: target.id, filePath };
           latestState.setFilePath(filePath);
         }
+        const newest = takeLatestCapture();
         latestSetDocs((prev) => prev.map((doc) =>
-          doc.id === target.id && !doc.filePath ? { ...doc, filePath, content } : doc,
+          doc.id === target.id && !doc.filePath ? { ...doc, filePath, content: newest } : doc,
         ));
+        if (newest !== content) {
+          // The file holds the older text. Save the newer capture through the
+          // normal pipeline before resolving, so a `provisioned` result means
+          // the newest text is on disk or, if that write failed, tracked as a
+          // pending snapshot the close-time drain retries. createSnapshot
+          // cannot be used here because the doc may no longer be active.
+          const editSerial = (latestEditSerialByDocRef.current.get(target.id) ?? 0) + 1;
+          latestEditSerialByDocRef.current.set(target.id, editSerial);
+          const revision = (latestRevisionByDocRef.current.get(target.id) ?? 0) + 1;
+          latestRevisionByDocRef.current.set(target.id, revision);
+          await startBackgroundSave({ docId: target.id, filePath, content: newest, editSerial, revision });
+        }
         return filePath;
       } finally {
         provisioningDocsRef.current.delete(target.id);
+        latestPathlessCaptureRef.current.delete(target.id);
       }
     })();
     provisioningDocsRef.current.set(target.id, attempt);
@@ -696,7 +736,7 @@ export function useAutoSave(
     };
     void attempt.then(cleanup, cleanup);
     return attempt;
-  }, []);
+  }, [startBackgroundSave]);
 
   const flushAutoSave = useCallback(async (): Promise<FlushResult> => {
     for (const timer of timersRef.current.values()) {

@@ -922,6 +922,91 @@ describe("useAutoSave — pathless fallback doc (loader failure stub)", () => {
     expect(next[0].content).toBe("typed into the stub");
     expect(next[0].filePath).toBe("");
   });
+
+  it("a doc switch that joins an in-flight provision still captures the newer text and saves it", async () => {
+    let release!: (value: { filePath: string; ok: boolean }) => void;
+    provisionMock.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    refs.editorContent = "E1";
+    const { result, setDocs } = renderAutoSave({
+      docs: [makeDoc("stub", { filePath: "", isDirty: true }), makeDoc("other")],
+    });
+
+    // First edit starts the provision with E1 and awaits real I/O.
+    act(() => result.current.scheduleAutoSave());
+    expect(provisionMock).toHaveBeenCalledWith("stub", "E1", "autosave-provision-pathless");
+
+    // More typing, then a fast-path doc switch: the capture joins the in-flight
+    // attempt (no second provision) and the editor is repointed at another doc.
+    refs.editorContent = "E2";
+    act(() => result.current.captureAndQueueSave());
+    act(() => result.current.notifyActiveDoc("other", "/notes/other.md"));
+    refs.editorContent = "other body";
+    expect(provisionMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      refs.files.set("/notes/stub.md", "E1");
+      release({ filePath: "/notes/stub.md", ok: true });
+      await result.current.awaitInFlightSaves();
+    });
+
+    // The newer text is what reaches disk and the store — not the E1 the
+    // attempt started with, and never the other doc's body.
+    expect(writeMock).toHaveBeenCalledWith("/notes/stub.md", "E2");
+    expect(writeMock).not.toHaveBeenCalledWith("/notes/stub.md", "other body");
+    const adopt = setDocs.mock.calls
+      .map((call) => call[0] as (prev: NoteDoc[]) => NoteDoc[])
+      .map((updater) => updater([makeDoc("stub", { filePath: "", isDirty: true }), makeDoc("other")]))
+      .find((next) => next[0].filePath === "/notes/stub.md");
+    expect(adopt?.[0].content).toBe("E2");
+    expect(result.current.hasUnsavedChanges()).toBe(false);
+  });
+
+  it("keystrokes that join an in-flight provision are saved once it lands, with the doc still active", async () => {
+    let release!: (value: { filePath: string; ok: boolean }) => void;
+    provisionMock.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    refs.editorContent = "E1";
+    const { result } = renderAutoSave({
+      docs: [makeDoc("stub", { filePath: "", isDirty: true })],
+    });
+
+    act(() => result.current.scheduleAutoSave());
+    refs.editorContent = "E2";
+    act(() => result.current.scheduleAutoSave());
+    expect(provisionMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      refs.files.set("/notes/stub.md", "E1");
+      release({ filePath: "/notes/stub.md", ok: true });
+      await result.current.awaitInFlightSaves();
+    });
+
+    expect(writeMock).toHaveBeenCalledWith("/notes/stub.md", "E2");
+    expect(result.current.hasUnsavedChanges()).toBe(false);
+    expect(result.current.hasUnsaveableChanges()).toBe(false);
+  });
+
+  it("a failed provision stashes the newest joined capture, not the text it started with", async () => {
+    let release!: (value: { filePath: string; ok: boolean }) => void;
+    provisionMock.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    refs.editorContent = "E1";
+    const { result, setDocs } = renderAutoSave({
+      docs: [makeDoc("stub", { filePath: "", isDirty: true })],
+    });
+
+    act(() => result.current.scheduleAutoSave());
+    refs.editorContent = "E2";
+    act(() => result.current.captureAndQueueSave());
+
+    await act(async () => {
+      release({ filePath: "", ok: false });
+      await result.current.awaitInFlightSaves();
+    });
+
+    const updater = setDocs.mock.calls[setDocs.mock.calls.length - 1][0] as (prev: NoteDoc[]) => NoteDoc[];
+    const next = updater([makeDoc("stub", { filePath: "", isDirty: true })]);
+    expect(next[0].content).toBe("E2");
+    expect(next[0].filePath).toBe("");
+  });
 });
 
 describe("useAutoSave — doSave functional commit", () => {
