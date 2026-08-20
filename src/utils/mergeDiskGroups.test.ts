@@ -134,6 +134,17 @@ describe("mergeDiskGroups", () => {
     expect(out).toBe(prev);
   });
 
+  it("a remote trash outranks a pending move (same precedence as the other sites)", () => {
+    const prev = [group("g1"), group("g2", { noteIds: ["n1"] })];
+    const out = mergeDiskGroups(prev, input({
+      entries: { g1: entry("g1"), g2: entry("g2") },
+      metaById: new Map([["n1", meta("n1", { groupId: "g1", trashedAt: 9000 })]]),
+      pendingMembership: new Map([["n1", { groupId: "g2", updatedAt: 5000 }]]),
+      liveDocIds: new Set(["n1"]),
+    }));
+    expect(out.every((g) => g.noteIds.length === 0)).toBe(true);
+  });
+
   it("adopts disk membership when there is no pending intent", () => {
     const prev = [group("g1", { noteIds: ["n1"] }), group("g2")];
     const out = mergeDiskGroups(prev, input({

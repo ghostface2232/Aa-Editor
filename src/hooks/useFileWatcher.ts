@@ -12,6 +12,7 @@ import {
   syncGroupsSnapshotFromDisk,
   readDiskGroupsSnapshot,
   getPendingGroupSyncSnapshot,
+  getPendingGroupMembership,
   type NoteDoc,
   type NoteGroup,
 } from "./useNotesLoader";
@@ -176,9 +177,24 @@ export function useFileWatcher(
       return next;
     });
 
-    const targetGroupId = meta.trashedAt != null ? null : (meta.groupId ?? null);
+    // An unwritten local move outranks the sidecar, unconditionally — the same
+    // rule resolveGroupSnapshot (persist) and mergeDiskGroups (reload) apply,
+    // so all three settle on the same target. A peer rewriting this sidecar
+    // for an unrelated reason (rename/pin/color) carries the note's OLD
+    // groupId, since its own persist reads groupId from disk rather than from
+    // the delta it just received; adopting it here yanked the note back to its
+    // pre-move group until the next periodic reconcile. Remote trash still
+    // ungroups: that branch is decided before the pending map is consulted.
+    const pendingMove = getPendingGroupMembership().get(id);
+    const targetGroupId = meta.trashedAt != null
+      ? null
+      : (pendingMove ? pendingMove.groupId : (meta.groupId ?? null));
 
-    // Meta can arrive before the referenced remote-created group.
+    // Meta can arrive before the referenced remote-created group. The target
+    // may now be a pending one: if it isn't in the (render-lagging) groupsRef
+    // yet, the reload runs and applies the same pending intent through
+    // mergeDiskGroups, so the outcome matches — only the cheap membership
+    // updater is traded for one folder read.
     if (
       targetGroupId !== null
       && !groupsRef.current.some((g) => g.id === targetGroupId)
@@ -260,6 +276,7 @@ export function useFileWatcher(
         docsBaseline,
         groupsBaseline,
         localeRef.current,
+        getPendingGroupMembership(),
       );
       reconciledDocs = result.docs;
       reconciledGroups = result.groups;

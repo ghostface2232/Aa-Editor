@@ -132,9 +132,10 @@ export function mergeDiskGroups(
   // landed yet — dropping them was the create-loss half of the old bug.
 
   // 3. Membership — resolve one target group per note. Resolution order
-  //    mirrors the persist layer (decomposedState's group snapshot): a pending
-  //    local intent wins over disk; otherwise the sidecar decides (trashed →
-  //    ungrouped); a live doc with no sidecar yet keeps its in-memory spot.
+  //    mirrors the persist layer (decomposedState's group snapshot), with the
+  //    remote-trash check hoisted ahead of it: a trashed sidecar ungroups,
+  //    then a pending local intent wins over disk, then the sidecar decides;
+  //    a live doc with no sidecar yet keeps its in-memory spot.
   const prevGroupByNote = new Map<string, string>();
   for (const g of groups) {
     for (const id of g.noteIds) {
@@ -148,14 +149,21 @@ export function mergeDiskGroups(
   }
   for (const id of input.pendingMembership.keys()) universe.add(id);
   for (const noteId of universe) {
+    const meta = input.metaById.get(noteId);
+    // A remote trash ungroups ahead of any pending intent — the same
+    // precedence applyMetaChange and hydrateGroupMembershipFromMeta apply, so
+    // a meta event and a .groups.json event can't disagree about the note.
+    if (meta?.trashedAt != null) {
+      targetByNote.set(noteId, null);
+      continue;
+    }
     const pending = input.pendingMembership.get(noteId);
     if (pending) {
       targetByNote.set(noteId, pending.groupId);
       continue;
     }
-    const meta = input.metaById.get(noteId);
     if (meta) {
-      targetByNote.set(noteId, meta.trashedAt != null ? null : (meta.groupId ?? null));
+      targetByNote.set(noteId, meta.groupId ?? null);
       continue;
     }
     targetByNote.set(

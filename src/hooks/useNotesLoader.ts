@@ -586,6 +586,17 @@ export async function readDiskGroupsSnapshot(dir: string): Promise<{
   };
 }
 
+/** The LIVE pending-membership map, for consumers that must observe intents
+ *  added after they started (reconcileFolder resolves membership at the end of
+ *  a multi-second pass; it pairs this with its own copy taken at the sidecar
+ *  read). Read-only by contract: only the persist layer may mutate it. */
+export function getPendingGroupMembership(): ReadonlyMap<
+  string,
+  { groupId: string | null; updatedAt: number }
+> {
+  return persistState.pendingGroupMembership;
+}
+
 /** Snapshot of the not-yet-persisted local group intents (delete tombstones
  *  and membership moves). The watcher's disk merge must respect both, or a
  *  reload racing an unwritten local intent would revert it in-store — and,
@@ -1759,7 +1770,7 @@ export function useNotesLoader(
         let reconciledGroups: NoteGroup[];
         let reconcileChanged: boolean;
         try {
-          const result = await reconcileFolder(tauriFileSystem, reconcileStateRef.current, dir, docsLoaded, state.groups, locale);
+          const result = await reconcileFolder(tauriFileSystem, reconcileStateRef.current, dir, docsLoaded, state.groups, locale, persistState.pendingGroupMembership);
           reconciled = result.docs;
           reconciledGroups = result.groups;
           reconcileChanged = result.changed;

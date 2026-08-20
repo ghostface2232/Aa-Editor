@@ -647,3 +647,125 @@ describe("reconcileFolder", () => {
     expect(result.groups[0].noteIds).not.toContain(goneId);
   });
 });
+
+describe("reconcileFolder — unwritten local membership moves", () => {
+  const noteId = "77777777-7777-7777-7777-777777777777";
+
+  function groups(): NoteGroup[] {
+    return [
+      { id: "g1", name: "G1", collapsed: false, noteIds: [], createdAt: 1000 },
+      { id: "g2", name: "G2", collapsed: false, noteIds: [noteId], createdAt: 1000 },
+    ];
+  }
+
+  // The membership rebuild reads sidecars, which lag an in-flight saveManifest
+  // by a full disk pass. Without the pending map a reconcile fired by the very
+  // event that revealed the stale sidecar re-confirms the pre-move group, so
+  // the note visibly jumps back until the next periodic pass.
+  it("keeps a pending move that the sidecar has not caught up with", async () => {
+    fs.seedTextFile(`${DIR}/${noteId}.md`, "body");
+    await seedMeta(fs, makeMeta(noteId, { groupId: "g1" }));
+    const docs = [makeDoc(noteId, { filePath: `${DIR}/${noteId}.md` })];
+
+    const result = await reconcileFolder(
+      fs, state, DIR, docs, groups(), LOCALE,
+      new Map([[noteId, { groupId: "g2", updatedAt: 5000 }]]),
+    );
+
+    expect(result.groups.find((g) => g.id === "g2")!.noteIds).toEqual([noteId]);
+    expect(result.groups.find((g) => g.id === "g1")!.noteIds).toEqual([]);
+    // The store already matches the intent, so the pass must not report a
+    // change — the old code reverted the move and returned true on EVERY pass,
+    // driving a commit + saveManifest each time.
+    expect(result.groups).toEqual(groups());
+    expect(result.changed).toBe(false);
+
+    // Idempotent: a second pass over the first result changes nothing either.
+    const again = await reconcileFolder(
+      fs, state, DIR, result.docs, result.groups, LOCALE,
+      new Map([[noteId, { groupId: "g2", updatedAt: 5000 }]]),
+    );
+    expect(again.groups.find((g) => g.id === "g2")!.noteIds).toEqual([noteId]);
+  });
+
+  // The persistence chain can write the sidecar and clear the intent while the
+  // pass is still running. The sidecars this pass read are older than that
+  // write, so consulting only the LIVE map would revert the move — and with no
+  // store commit involved, performReconcile's drift guard would not catch it.
+  it("keeps a move whose intent the persist chain consumed mid-pass", async () => {
+    fs.seedTextFile(`${DIR}/${noteId}.md`, "body");
+    await seedMeta(fs, makeMeta(noteId, { groupId: "g1" }));
+    // An extra body the pass must read AFTER readAllMeta; its read stands in
+    // for the persistence chain landing the sidecar and clearing the intent.
+    const otherId = "88888888-8888-8888-8888-888888888888";
+    fs.seedTextFile(`${DIR}/${otherId}.md`, "other");
+    const docs = [makeDoc(noteId, { filePath: `${DIR}/${noteId}.md` })];
+
+    const live = new Map([[noteId, { groupId: "g2", updatedAt: 5000 }]]);
+    const racingFs = {
+      ...fs,
+      readTextFile: async (path: string) => {
+        if (path.endsWith(`${otherId}.md`)) live.delete(noteId);
+        return fs.readTextFile(path);
+      },
+    } as typeof fs;
+
+    const result = await reconcileFolder(racingFs, state, DIR, docs, groups(), LOCALE, live);
+
+    expect(live.has(noteId)).toBe(false);   // the intent really was consumed
+    expect(result.groups.find((g) => g.id === "g2")!.noteIds).toEqual([noteId]);
+    expect(result.groups.find((g) => g.id === "g1")!.noteIds).toEqual([]);
+  });
+
+  // Divergence worth pinning: applyMetaChange reloads groups from disk when the
+  // target is unknown, while reconcile has no such escape and simply leaves the
+  // note ungrouped until persist clears the intent.
+  it("leaves the note ungrouped when the pending target is not in the groups array", async () => {
+    fs.seedTextFile(`${DIR}/${noteId}.md`, "body");
+    await seedMeta(fs, makeMeta(noteId, { groupId: "g1" }));
+    const docs = [makeDoc(noteId, { filePath: `${DIR}/${noteId}.md` })];
+
+    const result = await reconcileFolder(
+      fs, state, DIR, docs, groups(), LOCALE,
+      new Map([[noteId, { groupId: "g-unknown", updatedAt: 5000 }]]),
+    );
+
+    expect(result.groups.every((g) => g.noteIds.length === 0)).toBe(true);
+  });
+
+  it("a pending move to ungrouped is not overridden by the sidecar's group", async () => {
+    fs.seedTextFile(`${DIR}/${noteId}.md`, "body");
+    await seedMeta(fs, makeMeta(noteId, { groupId: "g1" }));
+    const docs = [makeDoc(noteId, { filePath: `${DIR}/${noteId}.md` })];
+
+    const result = await reconcileFolder(
+      fs, state, DIR, docs, groups(), LOCALE,
+      new Map([[noteId, { groupId: null, updatedAt: 5000 }]]),
+    );
+
+    expect(result.groups.every((g) => g.noteIds.length === 0)).toBe(true);
+  });
+
+  it("adopts the sidecar group when no intent is pending (default arg)", async () => {
+    fs.seedTextFile(`${DIR}/${noteId}.md`, "body");
+    await seedMeta(fs, makeMeta(noteId, { groupId: "g1" }));
+    const docs = [makeDoc(noteId, { filePath: `${DIR}/${noteId}.md` })];
+
+    const result = await reconcileFolder(fs, state, DIR, docs, groups(), LOCALE);
+
+    expect(result.groups.find((g) => g.id === "g1")!.noteIds).toEqual([noteId]);
+    expect(result.groups.find((g) => g.id === "g2")!.noteIds).toEqual([]);
+  });
+
+  it("places a pending move for a note whose sidecar has not been written yet", async () => {
+    fs.seedTextFile(`${DIR}/${noteId}.md`, "body");
+    const docs = [makeDoc(noteId, { filePath: `${DIR}/${noteId}.md` })];
+
+    const result = await reconcileFolder(
+      fs, state, DIR, docs, groups(), LOCALE,
+      new Map([[noteId, { groupId: "g2", updatedAt: 5000 }]]),
+    );
+
+    expect(result.groups.find((g) => g.id === "g2")!.noteIds).toEqual([noteId]);
+  });
+});

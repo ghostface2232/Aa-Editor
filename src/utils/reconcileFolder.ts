@@ -41,6 +41,15 @@ async function readFileContent(fs: FileSystem, path: string): Promise<string | n
   }
 }
 
+/** Unwritten local membership moves (`persistState.pendingGroupMembership`).
+ *  Passed live so a multi-second pass sees intents added after it started; the
+ *  pass also keeps its own copy taken with the sidecar read, so an intent the
+ *  persistence chain consumes mid-pass is not lost either. */
+export type PendingMembership = ReadonlyMap<
+  string,
+  { groupId: string | null; updatedAt: number }
+>;
+
 function sameNoteIds(a: string[], b: string[]): boolean {
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i += 1) {
@@ -53,14 +62,50 @@ function hydrateGroupMembershipFromMeta(
   groups: NoteGroup[],
   allMeta: Map<string, NoteMeta>,
   liveDocIds: Set<string>,
+  pendingMembership: PendingMembership,
+  pendingAtRead: PendingMembership,
 ): { groups: NoteGroup[]; changed: boolean } {
+  // A local move whose sidecar write hasn't landed yet outranks the sidecar,
+  // unconditionally — the same rule the persist layer (resolveGroupSnapshot)
+  // and the watcher's disk merge (mergeDiskGroups) apply. Without it a
+  // reconcile triggered by any sidecar event re-confirms the pre-move group
+  // and the user watches the note jump back until the next pass. A remote
+  // trash still ungroups: that branch is decided before this map is consulted.
+  // The live map and the map as of the sidecar read are BOTH consulted. Live
+  // alone loses an intent the persistence chain consumed mid-pass: the sidecar
+  // it wrote is newer than the `allMeta` this pass read, so the stale sidecar
+  // would revert the move with no store commit to trip the drift guard. The
+  // at-read copy holds exactly the value persist just wrote, so filling from
+  // it is safe; live wins on conflict (a newer intent supersedes).
+  const pendingEntry = (id: string) => pendingMembership.get(id) ?? pendingAtRead.get(id);
+  const pendingTarget = (id: string): string | null | undefined => {
+    const pending = pendingEntry(id);
+    return pending ? pending.groupId : undefined;
+  };
+
   const idsByGroup = new Map<string, string[]>();
   for (const meta of allMeta.values()) {
     if (meta.trashedAt != null) continue;
-    if (!meta.groupId || !liveDocIds.has(meta.id)) continue;
-    const ids = idsByGroup.get(meta.groupId) ?? [];
+    if (!liveDocIds.has(meta.id)) continue;
+    // `undefined` = no pending intent; `null` = a pending move to ungrouped,
+    // which must NOT fall back to the sidecar's group.
+    const pending = pendingTarget(meta.id);
+    const target = pending !== undefined ? pending : meta.groupId;
+    if (!target) continue;
+    const ids = idsByGroup.get(target) ?? [];
     ids.push(meta.id);
-    idsByGroup.set(meta.groupId, ids);
+    idsByGroup.set(target, ids);
+  }
+  // A pending move for a note with no sidecar on disk yet still has to place
+  // the note, or the mid-creation grace below would drop it from its group.
+  for (const [noteId] of [...pendingAtRead, ...pendingMembership]) {
+    const pending = pendingEntry(noteId);
+    if (!pending) continue;
+    if (!liveDocIds.has(noteId) || allMeta.has(noteId)) continue;
+    if (!pending.groupId) continue;
+    const ids = idsByGroup.get(pending.groupId) ?? [];
+    if (!ids.includes(noteId)) ids.push(noteId);
+    idsByGroup.set(pending.groupId, ids);
   }
 
   // A reconcile pass can race a still-in-flight saveManifest: a freshly
@@ -82,7 +127,8 @@ function hydrateGroupMembershipFromMeta(
     const metaIdSet = new Set(metaIds);
     const noteIds = [
       ...group.noteIds.filter((id) => {
-        if (metaIdSet.has(id)) return true;          // disk confirms membership
+        if (metaIdSet.has(id)) return true;          // disk (or a pending move) confirms membership
+        if (pendingEntry(id)) return false;          // a pending move names another target → drop
         if (docHasMeta.has(id)) return false;        // disk says different group → drop
         return liveDocIds.has(id);                   // mid-creation, trust in-memory
       }),
@@ -144,6 +190,7 @@ export async function reconcileFolder(
   docs: NoteDoc[],
   groups: NoteGroup[],
   locale: Locale,
+  pendingMembership: PendingMembership = new Map(),
 ): Promise<{ docs: NoteDoc[]; groups: NoteGroup[]; changed: boolean }> {
   let entries: { name?: string; isFile?: boolean; isDirectory?: boolean }[];
   try {
@@ -159,6 +206,9 @@ export async function reconcileFolder(
   const mdEntries = entries.filter((e) => e.name?.endsWith(".md") && e.isFile);
   const folderFileNames = new Set(mdEntries.map((e) => e.name!));
   const allMeta = await readAllMeta(fs, dir);
+  // Membership resolves at the END of this pass but against THESE sidecars, so
+  // it needs the intents as of this moment too — see hydrateGroupMembershipFromMeta.
+  const pendingAtRead: PendingMembership = new Map(pendingMembership);
   const trashedIds = new Set(
     Array.from(allMeta.values()).filter((m) => m.trashedAt != null).map((m) => m.id),
   );
@@ -491,7 +541,9 @@ export async function reconcileFolder(
   // instead of paying a second readAllMeta — saves one O(N) disk pass on
   // every reconcile (was the second-largest cost after the initial read).
   const liveDocIds = new Set(nextDocs.map((d) => d.id));
-  const hydratedGroups = hydrateGroupMembershipFromMeta(nextGroups, allMeta, liveDocIds);
+  const hydratedGroups = hydrateGroupMembershipFromMeta(
+    nextGroups, allMeta, liveDocIds, pendingMembership, pendingAtRead,
+  );
   if (hydratedGroups.changed) {
     nextGroups = hydratedGroups.groups;
     changed = true;

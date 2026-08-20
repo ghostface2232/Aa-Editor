@@ -22,6 +22,8 @@ const refs = vi.hoisted(() => ({
   metaById: new Map<string, NoteMeta>(),
   // Capture for assertions.
   reconcileCalls: 0,
+  // Unwritten local membership intents (persistState.pendingGroupMembership).
+  pendingMembership: new Map<string, { groupId: string | null; updatedAt: number }>(),
   // What readDiskGroupsSnapshot returns for the watcher's group reload merge.
   diskGroupsSnapshot: {
     entries: {} as Record<string, unknown>,
@@ -56,8 +58,9 @@ vi.mock("./useNotesLoader", () => ({
   readDiskGroupsSnapshot: vi.fn(async () => refs.diskGroupsSnapshot),
   getPendingGroupSyncSnapshot: vi.fn(() => ({
     tombstoneIds: new Set<string>(),
-    membership: new Map<string, { groupId: string | null; updatedAt: number }>(),
+    membership: refs.pendingMembership,
   })),
+  getPendingGroupMembership: vi.fn(() => refs.pendingMembership),
 }));
 
 // Plain factory (no importOriginal): the real module calls getCurrentWindow()
@@ -220,6 +223,7 @@ beforeEach(() => {
   refs.metaById = new Map();
   refs.reconcileCalls = 0;
   refs.diskGroupsSnapshot = { entries: {}, metaById: new Map(), collapsedByGroup: {} };
+  refs.pendingMembership = new Map();
 });
 
 afterEach(() => {
@@ -471,6 +475,90 @@ describe("useFileWatcher — meta trashed propagates to group removal", () => {
     const g1 = after.find((g) => g.id === "g1");
     expect(g1).toBeDefined();
     expect(g1!.noteIds).toEqual(["b"]);
+  });
+});
+
+describe("useFileWatcher — applyMetaChange respects unwritten local moves", () => {
+  const metaEvent = (path: string) => ({
+    type: { modify: { kind: "data", mode: "any" } },
+    paths: [path],
+    attrs: {},
+  } as unknown as WatchEvent);
+
+  // Regression: a peer rewriting this note's sidecar for an unrelated reason
+  // (rename/pin/color) carries the note's OLD groupId — its own persist reads
+  // groupId from disk, not from the membership delta it just received. The
+  // watcher adopted it and yanked the note back to its pre-move group until
+  // the next periodic reconcile (up to 60s). An unwritten local intent wins.
+  it("keeps a pending local move when a peer sidecar carries the stale groupId", async () => {
+    refs.metaById.set("a", makeMeta("a", { groupId: "g1" }));
+    refs.pendingMembership.set("a", { groupId: "g2", updatedAt: 5000 });
+    const { setGroups } = renderWatcher({
+      docs: [makeDoc("a")],
+      groups: [makeGroup("g1", []), makeGroup("g2", ["a"])],
+    });
+    await waitForMetaHandler();
+
+    await act(async () => {
+      await refs.metaHandler!(metaEvent("/notes/.meta/a.json"));
+    });
+
+    const updaters = setGroups.mock.calls
+      .map((c) => c[0])
+      .filter((u): u is (prev: NoteGroup[]) => NoteGroup[] => typeof u === "function");
+    // The membership branch must actually have run: the seed below equals the
+    // expected result, so without this the test would also pass on an early
+    // return or a throw before setGroups.
+    expect(updaters.length).toBeGreaterThan(0);
+    const after = updaters.reduce<NoteGroup[]>(
+      (acc, u) => u(acc),
+      [makeGroup("g1", []), makeGroup("g2", ["a"])],
+    );
+    expect(after.find((g) => g.id === "g2")!.noteIds).toEqual(["a"]);
+    expect(after.find((g) => g.id === "g1")!.noteIds).toEqual([]);
+  });
+
+  it("still adopts the sidecar group when there is no pending local move", async () => {
+    refs.metaById.set("a", makeMeta("a", { groupId: "g1" }));
+    const { setGroups } = renderWatcher({
+      docs: [makeDoc("a")],
+      groups: [makeGroup("g1", []), makeGroup("g2", ["a"])],
+    });
+    await waitForMetaHandler();
+
+    await act(async () => {
+      await refs.metaHandler!(metaEvent("/notes/.meta/a.json"));
+    });
+
+    const updaters = setGroups.mock.calls
+      .map((c) => c[0])
+      .filter((u): u is (prev: NoteGroup[]) => NoteGroup[] => typeof u === "function");
+    const after = updaters.reduce<NoteGroup[]>(
+      (acc, u) => u(acc),
+      [makeGroup("g1", []), makeGroup("g2", ["a"])],
+    );
+    expect(after.find((g) => g.id === "g1")!.noteIds).toEqual(["a"]);
+    expect(after.find((g) => g.id === "g2")!.noteIds).toEqual([]);
+  });
+
+  it("a remote trash still ungroups the note, outranking the pending move", async () => {
+    refs.metaById.set("a", makeMeta("a", { groupId: "g1", trashedAt: 9000 }));
+    refs.pendingMembership.set("a", { groupId: "g2", updatedAt: 5000 });
+    const { setGroups } = renderWatcher({
+      docs: [makeDoc("a")],
+      groups: [makeGroup("g2", ["a"])],
+    });
+    await waitForMetaHandler();
+
+    await act(async () => {
+      await refs.metaHandler!(metaEvent("/notes/.meta/a.json"));
+    });
+
+    const updaters = setGroups.mock.calls
+      .map((c) => c[0])
+      .filter((u): u is (prev: NoteGroup[]) => NoteGroup[] => typeof u === "function");
+    const after = updaters.reduce<NoteGroup[]>((acc, u) => u(acc), [makeGroup("g2", ["a"])]);
+    expect(after.find((g) => g.id === "g2")!.noteIds).toEqual([]);
   });
 });
 
