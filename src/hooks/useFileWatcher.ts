@@ -10,12 +10,15 @@ import {
   metaDirFor,
   groupsPathFor,
   syncGroupsSnapshotFromDisk,
-  loadGroupsFromDisk,
+  readDiskGroupsSnapshot,
+  getPendingGroupSyncSnapshot,
   type NoteDoc,
   type NoteGroup,
 } from "./useNotesLoader";
 import { reconcileFolder, type ReconcileState } from "../utils/reconcileFolder";
 import { libraryStore } from "../utils/libraryStore";
+import { mergeDiskGroups } from "../utils/mergeDiskGroups";
+import { getRetiredGroupIds } from "./useWindowSync";
 import { tauriFileSystem } from "../utils/fs";
 import type { TiptapEditorHandle } from "../components/TiptapEditor";
 import { isOwnWrite, isOwnWriteContentMatch, pruneOwnWrites, pathKey } from "./ownWriteTracker";
@@ -91,8 +94,33 @@ export function useFileWatcher(
     const dir = await getNotesDir();
     try {
       await syncGroupsSnapshotFromDisk(dir);
-      const next = await loadGroupsFromDisk(dir);
-      setGroups(next);
+      const disk = await readDiskGroupsSnapshot(dir);
+      // Disk state is MERGED into the live groups with the same per-field
+      // clocks the `groups-updated` receiver and mergeGroupEntries use —
+      // never committed absolutely. The reads above take seconds on a cloud
+      // placeholder, and a local persist or a peer delta committing to the
+      // store in that window must survive this reload; an absolute commit
+      // erased it, and (because syncGroupsSnapshotFromDisk had just reset the
+      // write snapshot to disk state) the reverted store then looked
+      // snapshot-equal at persist time, so the change was never written —
+      // silent, durable loss. The functional updater runs synchronously
+      // against the store's prev at commit time, so there is no drift window
+      // and no retry machinery needed. Pending local intents (unwritten
+      // tombstones, membership moves) are read AFTER the awaits, in the same
+      // tick as the commit.
+      const pending = getPendingGroupSyncSnapshot();
+      const liveDocIds = new Set(libraryStore.getSnapshot().docs.map((d) => d.id));
+      setGroups((prev) => mergeDiskGroups(prev, {
+        entries: disk.entries,
+        metaById: disk.metaById,
+        collapsedByGroup: disk.collapsedByGroup,
+        // Local unwritten deletes AND session-retired ids (a peer's delete
+        // arrives as a delta before its tombstone reaches .groups.json; the
+        // still-alive disk entry must not resurrect it here either).
+        pendingTombstoneIds: new Set([...pending.tombstoneIds, ...getRetiredGroupIds()]),
+        pendingMembership: pending.membership,
+        liveDocIds,
+      }));
     } catch (err) {
       void logNotenError(new NotenError(
         "RECONCILE_FAILED",

@@ -19,7 +19,6 @@ import {
   syncGroupsSnapshotFromDisk as syncGroupsSnapshotFromDiskImpl,
   readLocalCache as readLocalCacheImpl,
   writeLocalCache as writeLocalCacheImpl,
-  buildGroupsFromShared,
   type MetaSnapshot,
   type LocalCache,
   type DecomposedState,
@@ -568,22 +567,37 @@ async function readFileContent(path: string): Promise<string | null> {
   }
 }
 
-/** Load groups from disk; membership is derived from per-note `groupId`. */
-export async function loadGroupsFromDisk(dir: string): Promise<NoteGroup[]> {
+/** Raw on-disk group state for a clock-based merge (mergeDiskGroups). Keeps
+ *  tombstoned entries and the full sidecar map — the tombstoned / absent
+ *  distinction and the membership clocks are what let the watcher merge disk
+ *  into the live store instead of overwriting it. */
+export async function readDiskGroupsSnapshot(dir: string): Promise<{
+  entries: Record<string, SharedGroupEntry>;
+  metaById: Map<string, NoteMeta>;
+  collapsedByGroup: Record<string, boolean>;
+}> {
   await loadUiState();
   const file = await readGroupsFile(tauriFileSystem, dir);
-  const allMeta = await readAllMeta(tauriFileSystem, dir);
-  const collapsedMap = getUiStateCached().groupCollapsed;
-  const metaByGroup = new Map<string, string[]>();
-  for (const m of allMeta.values()) {
-    if (m.trashedAt != null) continue;
-    if (m.groupId) {
-      const arr = metaByGroup.get(m.groupId) ?? [];
-      arr.push(m.id);
-      metaByGroup.set(m.groupId, arr);
-    }
-  }
-  return buildGroupsFromShared(file.groups, metaByGroup, collapsedMap);
+  const metaById = await readAllMeta(tauriFileSystem, dir);
+  return {
+    entries: file.groups,
+    metaById,
+    collapsedByGroup: getUiStateCached().groupCollapsed,
+  };
+}
+
+/** Snapshot of the not-yet-persisted local group intents (delete tombstones
+ *  and membership moves). The watcher's disk merge must respect both, or a
+ *  reload racing an unwritten local intent would revert it in-store — and,
+ *  for deletes, the resurrection would cancel the pending tombstone. */
+export function getPendingGroupSyncSnapshot(): {
+  tombstoneIds: Set<string>;
+  membership: Map<string, { groupId: string | null; updatedAt: number }>;
+} {
+  return {
+    tombstoneIds: new Set(persistState.pendingTombstones.keys()),
+    membership: new Map(persistState.pendingGroupMembership),
+  };
 }
 
 async function loadDecomposedState(dir: string): Promise<DecomposedState> {

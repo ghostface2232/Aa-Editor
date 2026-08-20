@@ -22,6 +22,12 @@ const refs = vi.hoisted(() => ({
   metaById: new Map<string, NoteMeta>(),
   // Capture for assertions.
   reconcileCalls: 0,
+  // What readDiskGroupsSnapshot returns for the watcher's group reload merge.
+  diskGroupsSnapshot: {
+    entries: {} as Record<string, unknown>,
+    metaById: new Map<string, unknown>(),
+    collapsedByGroup: {} as Record<string, boolean>,
+  },
 }));
 
 vi.mock("@tauri-apps/plugin-fs", () => ({
@@ -47,7 +53,17 @@ vi.mock("./useNotesLoader", () => ({
   metaDirFor: (dir: string) => `${dir}/.meta`,
   groupsPathFor: (dir: string) => `${dir}/.groups.json`,
   syncGroupsSnapshotFromDisk: vi.fn(async () => {}),
-  loadGroupsFromDisk: vi.fn(async () => [] as NoteGroup[]),
+  readDiskGroupsSnapshot: vi.fn(async () => refs.diskGroupsSnapshot),
+  getPendingGroupSyncSnapshot: vi.fn(() => ({
+    tombstoneIds: new Set<string>(),
+    membership: new Map<string, { groupId: string | null; updatedAt: number }>(),
+  })),
+}));
+
+// Plain factory (no importOriginal): the real module calls getCurrentWindow()
+// at module scope, which throws outside Tauri.
+vi.mock("./useWindowSync", () => ({
+  getRetiredGroupIds: vi.fn(() => new Set<string>()),
 }));
 
 vi.mock("../utils/reconcileFolder", () => ({
@@ -203,6 +219,7 @@ beforeEach(() => {
   refs.ownWriteMatch = false;
   refs.metaById = new Map();
   refs.reconcileCalls = 0;
+  refs.diskGroupsSnapshot = { entries: {}, metaById: new Map(), collapsedByGroup: {} };
 });
 
 afterEach(() => {
@@ -454,6 +471,56 @@ describe("useFileWatcher — meta trashed propagates to group removal", () => {
     const g1 = after.find((g) => g.id === "g1");
     expect(g1).toBeDefined();
     expect(g1!.noteIds).toEqual(["b"]);
+  });
+});
+
+describe("useFileWatcher — group reload merges instead of overwriting", () => {
+  const GROUPS_EVENT = {
+    type: { modify: { kind: "data", mode: "any" } },
+    paths: ["/notes/.groups.json"],
+    attrs: {},
+  } as unknown as WatchEvent;
+
+  // Regression: reloadGroupsFromDisk used to call setGroups(next) with the
+  // absolute disk-derived array. Its reads take seconds on a cloud folder;
+  // a local persist or peer groups-updated delta committing to the store in
+  // that window was erased — and because syncGroupsSnapshotFromDisk had just
+  // reset the write snapshot to disk state, the reverted store looked
+  // snapshot-equal at persist time and the change was never written (silent,
+  // durable loss). The reload must commit a functional clock merge instead.
+  it("commits the disk reload as a functional clock merge, not an absolute array", async () => {
+    refs.diskGroupsSnapshot = {
+      entries: {
+        g1: { id: "g1", name: "Stale disk", orderKey: "a", orderUpdatedAt: 1000, updatedAt: 1000, createdAt: 1000, deletedAt: null },
+        "g-disk": { id: "g-disk", name: "From peer", orderKey: "b", orderUpdatedAt: 1000, updatedAt: 1000, createdAt: 1000, deletedAt: null },
+      },
+      metaById: new Map(),
+      collapsedByGroup: {},
+    };
+    const { setGroups } = renderWatcher({ docs: [] });
+    await waitForRootHandler();
+    await act(async () => {
+      await refs.rootHandler!(GROUPS_EVENT);
+    });
+
+    // The old code passed an absolute array here.
+    expect(setGroups.mock.calls.some((c) => Array.isArray(c[0]))).toBe(false);
+    const updater = setGroups.mock.calls
+      .map((c) => c[0])
+      .find((u): u is (prev: NoteGroup[]) => NoteGroup[] => typeof u === "function");
+    expect(updater).toBeDefined();
+
+    // Run the committed updater against a prev that moved during the reads:
+    // a concurrent local rename (newer clock) and a locally created group
+    // absent from disk must BOTH survive, while the disk-only group lands.
+    const prev: NoteGroup[] = [
+      { id: "g1", name: "Local newer", noteIds: [], collapsed: true, createdAt: 1000, orderKey: "a", orderUpdatedAt: 1000, updatedAt: 2000 },
+      { id: "g-local", name: "Fresh create", noteIds: [], collapsed: false, createdAt: 3000, orderKey: "z", orderUpdatedAt: 3000, updatedAt: 3000 },
+    ];
+    const merged = updater!(prev);
+    expect(merged.map((g) => g.id)).toEqual(["g1", "g-disk", "g-local"]);
+    expect(merged.find((g) => g.id === "g1")!.name).toBe("Local newer");
+    expect(merged.find((g) => g.id === "g1")!.collapsed).toBe(true);
   });
 });
 

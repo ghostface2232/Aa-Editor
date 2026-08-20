@@ -186,6 +186,15 @@ const lastMembershipAtByNote = new Map<string, number>();
 // a late out-of-order upsert from resurrecting a deleted group.
 const retiredGroupIds = new Set<string>();
 
+/** Group ids retired this session — deleted locally or via a peer delta. The
+ *  watcher's disk reload must refuse to resurrect them too: a peer's delete
+ *  reaches this window as a `groups-updated` delta before the peer's tombstone
+ *  reaches `.groups.json`, and a reload in that gap would re-insert the group
+ *  from the still-alive disk entry, bypassing the receiver's guard. */
+export function getRetiredGroupIds(): ReadonlySet<string> {
+  return retiredGroupIds;
+}
+
 /** Clears the group sync clocks. Exists so tests start from a known state. */
 export function resetGroupSyncClocks() {
   lastMembershipAtByNote.clear();
