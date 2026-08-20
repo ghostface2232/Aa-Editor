@@ -261,7 +261,18 @@ function renderFs(opts: RenderOpts = {}) {
     refs.librarySnapshot = libraryStore.commit({ docs: next }, "local");
   });
   const setActiveIndex = vi.fn();
-  const setGroups = vi.fn();
+  // Store-backed like setDocs above, mirroring the production
+  // commitGroupsUpdate adapter: clone prev, run the updater, commit unless the
+  // updater returned prev itself.
+  const setGroups = vi.fn((updater: React.SetStateAction<NoteGroup[]>) => {
+    const prev = libraryStore.getSnapshot().groups.map((group) => ({
+      ...group,
+      noteIds: [...group.noteIds],
+    }));
+    const next = typeof updater === "function" ? updater(prev) : updater;
+    if (next === prev) return;
+    refs.librarySnapshot = libraryStore.commit({ groups: next }, "local");
+  });
   const setTrashedNotes = vi.fn();
   const initialSnapshot = libraryStore.seedDirectory("/notes", {
     docs,
@@ -455,7 +466,7 @@ describe("useFileSystem — importFiles batch resilience", () => {
     });
 
     expect(setGroups).toHaveBeenCalled();
-    const nextGroups = setGroups.mock.calls[setGroups.mock.calls.length - 1][0] as NoteGroup[];
+    const nextGroups = [...libraryStore.getSnapshot().groups];
     const g1 = nextGroups.find((g) => g.id === "g1")!;
     // The active doc keeps its place; both imports join its group.
     expect(g1.noteIds).toEqual(["a", "uuid-1", "uuid-2"]);
@@ -477,7 +488,7 @@ describe("useFileSystem — importFiles batch resilience", () => {
     });
 
     expect(setGroups).toHaveBeenCalled();
-    const nextGroups = setGroups.mock.calls[setGroups.mock.calls.length - 1][0] as NoteGroup[];
+    const nextGroups = [...libraryStore.getSnapshot().groups];
     const g1 = nextGroups.find((g) => g.id === "g1");
     // The group survives the prune and the import lands in it (placeholder gone).
     expect(g1).toBeDefined();
@@ -1270,9 +1281,9 @@ describe("useFileSystem — switchDocument prunes an empty leaving doc", () => {
     });
 
     expect(setGroups).toHaveBeenCalled();
-    // The pruner now commits the post-delete array synchronously (a plain value,
-    // not a prev => ... updater) so callers can persist it consistently.
-    const next = setGroups.mock.calls[setGroups.mock.calls.length - 1][0] as NoteGroup[];
+    // The pruner commits a functional delta; the committed store array is what
+    // callers persist and broadcast.
+    const next = [...libraryStore.getSnapshot().groups];
     // g1 lost its only note and is dropped entirely; g2 is untouched.
     expect(next.map((g) => g.id)).toEqual(["g2"]);
     expect(next[0].noteIds).toEqual(["b"]);
@@ -2207,5 +2218,129 @@ describe("useFileSystem — functional commits survive concurrent store changes"
     const b = libraryStore.getSnapshot().docs.find((d) => d.id === "b");
     expect(b?.content).toBe("peer body");
     expect(openDocument).toHaveBeenCalledWith(expect.objectContaining({ noteId: "b", markdown: "peer body" }));
+  });
+});
+
+describe("useFileSystem — functional group commits survive concurrent store changes", () => {
+  // Same class as the docs deltas above: groups commits are functional deltas
+  // against the store's `prev`, and the groups-updated broadcast carries the
+  // COMMITTED array, so a peer group commit landing during the disk awaits is
+  // neither erased locally nor clobbered in the peer windows by a stale
+  // snapshot.
+  const emitGroupsUpdatedMock = windowSyncModule.emitGroupsUpdated as ReturnType<typeof vi.fn>;
+
+  const group = (id: string, noteIds: string[]): NoteGroup =>
+    ({ id, name: id.toUpperCase(), noteIds, collapsed: false, createdAt: 1000 });
+
+  it("newNote keeps a peer-created group that landed during its provision write", async () => {
+    const { result } = renderFs({
+      docs: [makeDoc("a", { content: "keep me" })],
+      groups: [group("g1", ["a"])],
+      activeIndex: 0,
+    });
+
+    writeMock.mockImplementationOnce(async () => {
+      libraryStore.commit((current) => ({
+        groups: [...current.groups, group("peer-g", ["x"])],
+      }), "remote");
+    });
+
+    await act(async () => { await result.current.newNote(); });
+
+    const ids = libraryStore.getSnapshot().groups.map((g) => g.id).sort();
+    expect(ids).toEqual(["g1", "peer-g"]);
+    // The broadcast carries the committed array including the peer group.
+    const lastEmit = emitGroupsUpdatedMock.mock.calls[emitGroupsUpdatedMock.mock.calls.length - 1]?.[0] as NoteGroup[] | undefined;
+    if (lastEmit) expect(lastEmit.some((g) => g.id === "peer-g")).toBe(true);
+  });
+
+  it("newNote keeps a peer group deletion that landed during its provision write", async () => {
+    const { result } = renderFs({
+      docs: [makeDoc("a", { content: "keep me" })],
+      groups: [group("g1", ["a"]), group("g2", ["other"])],
+      activeIndex: 0,
+    });
+
+    writeMock.mockImplementationOnce(async () => {
+      libraryStore.commit((current) => ({
+        groups: current.groups.filter((g) => g.id !== "g2"),
+      }), "remote");
+    });
+
+    await act(async () => { await result.current.newNote(); });
+
+    expect(libraryStore.getSnapshot().groups.some((g) => g.id === "g2")).toBe(false);
+  });
+
+  it("the prune keeps a peer group created during its file removals", async () => {
+    const removeMock = fsPlugin.remove as ReturnType<typeof vi.fn>;
+    const empty = makeDoc("a", { content: "" });
+    const other = makeDoc("b", { content: "real" });
+    const { result } = renderFs({
+      docs: [empty, other],
+      groups: [group("g1", ["a"])],
+      activeIndex: 0,
+    });
+
+    removeMock.mockImplementationOnce(async () => {
+      libraryStore.commit((current) => ({
+        groups: [...current.groups, group("peer-g", ["b"])],
+      }), "remote");
+    });
+
+    await act(async () => { await result.current.switchDocument(1); });
+
+    // g1 emptied and dropped (tombstoned); the peer group survives.
+    const ids = libraryStore.getSnapshot().groups.map((g) => g.id);
+    expect(ids).toEqual(["peer-g"]);
+    expect(markGroupAsDeletedMock).toHaveBeenCalledWith("g1");
+    expect(markGroupAsDeletedMock).not.toHaveBeenCalledWith("peer-g");
+  });
+
+  it("the prune keeps a peer note-move into another group during its file removals", async () => {
+    const removeMock = fsPlugin.remove as ReturnType<typeof vi.fn>;
+    const empty = makeDoc("a", { content: "" });
+    const other = makeDoc("b", { content: "real" });
+    const { result } = renderFs({
+      docs: [empty, other],
+      groups: [group("g1", ["a"]), group("g2", [])],
+      activeIndex: 0,
+    });
+
+    removeMock.mockImplementationOnce(async () => {
+      // Peer moves b into g2 while the prune removes a's files.
+      libraryStore.commit((current) => ({
+        groups: current.groups.map((g) => (g.id === "g2" ? { ...g, noteIds: ["b"] } : g)),
+      }), "remote");
+    });
+
+    await act(async () => { await result.current.switchDocument(1); });
+
+    const g2 = libraryStore.getSnapshot().groups.find((g) => g.id === "g2");
+    expect(g2?.noteIds).toEqual(["b"]);
+  });
+
+  it("importFiles adds membership on top of a peer group change during the import writes", async () => {
+    readMock.mockImplementation(async (path: string) => `body of ${path}`);
+    const active = makeDoc("a", { content: "real note" });
+    const { result } = renderFs({
+      docs: [active],
+      groups: [group("g1", ["a"])],
+      activeIndex: 0,
+    });
+
+    writeMock.mockImplementationOnce(async () => {
+      libraryStore.commit((current) => ({
+        groups: [...current.groups, group("peer-g", ["x"])],
+      }), "remote");
+    });
+
+    await act(async () => { await result.current.importFiles(["/src/b.md"]); });
+
+    const snapshot = libraryStore.getSnapshot().groups;
+    expect(snapshot.find((g) => g.id === "g1")?.noteIds).toEqual(["a", "uuid-1"]);
+    expect(snapshot.some((g) => g.id === "peer-g")).toBe(true);
+    const lastEmit = emitGroupsUpdatedMock.mock.calls[emitGroupsUpdatedMock.mock.calls.length - 1][0] as NoteGroup[];
+    expect(lastEmit.some((g) => g.id === "peer-g")).toBe(true);
   });
 });

@@ -23,11 +23,22 @@ export function useNoteGroups(
   docs: NoteDoc[],
   activeIndex: number,
 ) {
+  // Commits are functional deltas against the store's `prev`, mirroring
+  // sortAndPersistDocs: the `groups` render prop is a projection that can lag
+  // a peer commit, and committing it absolutely would erase that commit and
+  // then broadcast the erasure. The adapter runs updaters synchronously, so
+  // the committed array is captured through the closure and is what gets
+  // broadcast — never a pre-commit derivation.
   const persist = useCallback(
-    (nextGroups: NoteGroup[]) => {
-      setGroups(nextGroups);
-      void saveManifest(docs, docs[activeIndex]?.id ?? null, nextGroups).catch(() => {});
-      emitGroupsUpdated(nextGroups);
+    (update: (prev: NoteGroup[]) => NoteGroup[]) => {
+      let committed: NoteGroup[] | null = null;
+      setGroups((prev) => {
+        committed = update(prev);
+        return committed;
+      });
+      if (!committed) return;
+      void saveManifest(docs, docs[activeIndex]?.id ?? null, committed).catch(() => {});
+      emitGroupsUpdated(committed);
     },
     [docs, activeIndex, setGroups],
   );
@@ -35,36 +46,38 @@ export function useNoteGroups(
   const createGroup = useCallback(
     (name: string, initialNoteIds: string[] = []) => {
       const now = Date.now();
-      const lastKey = groups[groups.length - 1]?.orderKey;
-      const newGroup: NoteGroup = {
-        id: crypto.randomUUID(),
-        name,
-        noteIds: initialNoteIds,
-        collapsed: false,
-        createdAt: now,
-        orderKey: genOrderKeyAfter(lastKey),
-        orderUpdatedAt: now,
-        updatedAt: now,
-      };
-      const cleaned = initialNoteIds.length > 0
-        ? groups.map((g) => ({
-            ...g,
-            noteIds: g.noteIds.filter((id) => !initialNoteIds.includes(id)),
-          }))
-        : groups;
-      markGroupMembershipChanges(initialNoteIds, newGroup.id, now);
-      persist([...cleaned, newGroup]);
-      return newGroup.id;
+      const newGroupId = crypto.randomUUID();
+      markGroupMembershipChanges(initialNoteIds, newGroupId, now);
+      persist((prev) => {
+        const newGroup: NoteGroup = {
+          id: newGroupId,
+          name,
+          noteIds: initialNoteIds,
+          collapsed: false,
+          createdAt: now,
+          orderKey: genOrderKeyAfter(prev[prev.length - 1]?.orderKey),
+          orderUpdatedAt: now,
+          updatedAt: now,
+        };
+        const cleaned = initialNoteIds.length > 0
+          ? prev.map((g) => ({
+              ...g,
+              noteIds: g.noteIds.filter((id) => !initialNoteIds.includes(id)),
+            }))
+          : prev;
+        return [...cleaned, newGroup];
+      });
+      return newGroupId;
     },
-    [groups, persist],
+    [persist],
   );
 
   const renameGroup = useCallback(
     (groupId: string, name: string) => {
       const now = Date.now();
-      persist(groups.map((g) => (g.id === groupId ? { ...g, name, updatedAt: now } : g)));
+      persist((prev) => prev.map((g) => (g.id === groupId ? { ...g, name, updatedAt: now } : g)));
     },
-    [groups, persist],
+    [persist],
   );
 
   const deleteGroup = useCallback(
@@ -72,7 +85,7 @@ export function useNoteGroups(
       markGroupAsDeleted(groupId);
       const noteIds = groups.find((g) => g.id === groupId)?.noteIds ?? [];
       markGroupMembershipChanges(noteIds, null);
-      persist(groups.filter((g) => g.id !== groupId));
+      persist((prev) => prev.filter((g) => g.id !== groupId));
     },
     [groups, persist],
   );
@@ -82,7 +95,7 @@ export function useNoteGroups(
       markGroupAsDeleted(groupId);
       const noteIds = groups.find((g) => g.id === groupId)?.noteIds ?? [];
       markGroupMembershipChanges(noteIds, null);
-      persist(groups.filter((g) => g.id !== groupId));
+      persist((prev) => prev.filter((g) => g.id !== groupId));
     },
     [groups, persist],
   );
@@ -92,8 +105,8 @@ export function useNoteGroups(
       const now = Date.now();
       const currentGroupId = groups.find((g) => g.noteIds.includes(noteId))?.id ?? null;
       if (currentGroupId !== groupId) markGroupMembershipChanged(noteId, groupId, now);
-      persist(
-        groups.map((g) => {
+      persist((prev) =>
+        prev.map((g) => {
           if (g.id === groupId) {
             return g.noteIds.includes(noteId)
               ? g
@@ -112,15 +125,15 @@ export function useNoteGroups(
     (noteId: string) => {
       const now = Date.now();
       markGroupMembershipChanged(noteId, null, now);
-      persist(
-        groups.map((g) =>
+      persist((prev) =>
+        prev.map((g) =>
           g.noteIds.includes(noteId)
             ? withUpdatedAt({ ...g, noteIds: g.noteIds.filter((id) => id !== noteId) }, now, false)
             : g,
         ),
       );
     },
-    [groups, persist],
+    [persist],
   );
 
   const removeNotesFromGroups = useCallback(
@@ -130,8 +143,8 @@ export function useNoteGroups(
       const idSet = new Set(noteIds);
       const groupedNoteIds = noteIds.filter((noteId) => groups.some((g) => g.noteIds.includes(noteId)));
       markGroupMembershipChanges(groupedNoteIds, null, now);
-      persist(
-        groups.map((g) => {
+      persist((prev) =>
+        prev.map((g) => {
           const filtered = g.noteIds.filter((id) => !idSet.has(id));
           return filtered.length !== g.noteIds.length
             ? withUpdatedAt({ ...g, noteIds: filtered }, now, false)
@@ -150,8 +163,8 @@ export function useNoteGroups(
         return currentGroupId !== groupId;
       });
       markGroupMembershipChanges(movedNoteIds, groupId, now);
-      persist(
-        groups.map((g) => {
+      persist((prev) =>
+        prev.map((g) => {
           if (g.id === groupId) {
             const existing = new Set(g.noteIds);
             const toAdd = noteIds.filter((id) => !existing.has(id));
@@ -171,8 +184,8 @@ export function useNoteGroups(
 
   const reorderNoteInGroup = useCallback(
     (noteId: string, groupId: string, newIndex: number) => {
-      persist(
-        groups.map((g) => {
+      persist((prev) =>
+        prev.map((g) => {
           if (g.id !== groupId) return g;
           const cur = g.noteIds.indexOf(noteId);
           if (cur === -1 || cur === newIndex) return g;
@@ -183,7 +196,7 @@ export function useNoteGroups(
         }),
       );
     },
-    [groups, persist],
+    [persist],
   );
 
   const insertNoteInGroup = useCallback(
@@ -191,8 +204,8 @@ export function useNoteGroups(
       const now = Date.now();
       const currentGroupId = groups.find((g) => g.noteIds.includes(noteId))?.id ?? null;
       if (currentGroupId !== groupId) markGroupMembershipChanged(noteId, groupId, now);
-      persist(
-        groups.map((g) => {
+      persist((prev) =>
+        prev.map((g) => {
           if (g.id === groupId) {
             const filtered = g.noteIds.filter((id) => id !== noteId);
             filtered.splice(index, 0, noteId);
@@ -244,15 +257,32 @@ export function useNoteGroups(
       else if (!after) newKey = genOrderKeyAfter(before.orderKey);
       else newKey = genOrderKeyBetween(before.orderKey, after.orderKey);
 
-      const updated: NoteGroup = {
-        ...moved,
-        orderKey: newKey,
-        orderUpdatedAt: now,
-      };
-
-      const next = [...filtered];
-      next.splice(insertAt, 0, updated);
-      persist(next);
+      // Apply the move by id against `prev`: the moved group keeps whatever a
+      // concurrent commit did to its members, and the insertion point is
+      // resolved by neighbour id rather than by index into a stale array.
+      persist((prev) => {
+        const idx = prev.findIndex((g) => g.id === moved.id);
+        if (idx < 0) return prev;
+        const updated: NoteGroup = {
+          ...prev[idx],
+          orderKey: newKey,
+          orderUpdatedAt: now,
+        };
+        const without = prev.filter((g) => g.id !== moved.id);
+        let insertPos: number;
+        if (before) {
+          const beforeIdx = without.findIndex((g) => g.id === before.id);
+          insertPos = beforeIdx >= 0 ? beforeIdx + 1 : without.length;
+        } else if (after) {
+          const afterIdx = without.findIndex((g) => g.id === after.id);
+          insertPos = afterIdx >= 0 ? afterIdx : without.length;
+        } else {
+          insertPos = without.length;
+        }
+        const next = [...without];
+        next.splice(insertPos, 0, updated);
+        return next;
+      });
     },
     [groups, persist],
   );
@@ -270,8 +300,8 @@ export function useNoteGroups(
       if (!needsCleanup) return;
       const now = Date.now();
       markGroupMembershipChanged(noteId, null, now);
-      persist(
-        groups.map((g) =>
+      persist((prev) =>
+        prev.map((g) =>
           g.noteIds.includes(noteId)
             ? withUpdatedAt({ ...g, noteIds: g.noteIds.filter((id) => id !== noteId) }, now, false)
             : g,
