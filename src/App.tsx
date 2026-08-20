@@ -617,23 +617,25 @@ function App() {
     if (sig === lastSortSignatureRef.current) return;
     lastSortSignatureRef.current = sig;
 
-    const activeId = docs[activeIndexRef.current]?.id ?? null;
-    const sortedDocs = sortNotes(docs, settings.notesSortOrder, locale);
-    const changed = sortedDocs.some((doc, index) => doc.id !== docs[index]?.id);
-    if (!changed) return;
-
-    setDocs(sortedDocs);
-    const nextActiveIndex = activeId
-      ? Math.max(sortedDocs.findIndex((doc) => doc.id === activeId), 0)
-      : 0;
-    setActiveIndex(nextActiveIndex);
-    void saveManifest(sortedDocs, activeId, groupsRef.current).catch(() => {});
+    // Functional: this passive effect runs after the render that captured
+    // `docs`, and a store commit landing in that gap (doc created/deleted by a
+    // peer, a provision adoption) would be erased by committing the captured
+    // array. Re-derive the sort from the store's `prev`; active identity is an
+    // id, so a pure reorder needs no index bookkeeping (the adapter re-derives
+    // React's activeIndex from the committed array).
+    let sortChanged = false;
+    setDocs((prev) => {
+      const sortedDocs = sortNotes(prev, settings.notesSortOrder, locale);
+      sortChanged = sortedDocs.some((doc, index) => doc !== prev[index]);
+      return sortChanged ? sortedDocs : prev;
+    });
+    if (!sortChanged) return;
+    void saveManifest(docs, docs[activeIndexRef.current]?.id ?? null, groupsRef.current).catch(() => {});
   }, [
     docs,
     settings.notesSortOrder,
     locale,
     settingsLoaded,
-    setActiveIndex,
     setDocs,
   ]);
 

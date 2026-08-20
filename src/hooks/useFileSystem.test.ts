@@ -273,7 +273,15 @@ function renderFs(opts: RenderOpts = {}) {
     if (next === prev) return;
     refs.librarySnapshot = libraryStore.commit({ groups: next }, "local");
   });
-  const setTrashedNotes = vi.fn();
+  // Store-backed like setDocs/setGroups, mirroring commitTrashedNotesUpdate.
+  const setTrashedNotes = vi.fn((
+    updater: TrashedNote[] | ((prev: TrashedNote[]) => TrashedNote[]),
+  ) => {
+    const prev = [...libraryStore.getSnapshot().trashedNotes];
+    const next = typeof updater === "function" ? updater(prev) : updater;
+    if (next === prev) return;
+    refs.librarySnapshot = libraryStore.commit({ trashedNotes: next }, "local");
+  });
   const initialSnapshot = libraryStore.seedDirectory("/notes", {
     docs,
     groups: opts.groups ?? [],
@@ -2342,5 +2350,61 @@ describe("useFileSystem — functional group commits survive concurrent store ch
     expect(snapshot.some((g) => g.id === "peer-g")).toBe(true);
     const lastEmit = emitGroupsUpdatedMock.mock.calls[emitGroupsUpdatedMock.mock.calls.length - 1][0] as NoteGroup[];
     expect(lastEmit.some((g) => g.id === "peer-g")).toBe(true);
+  });
+});
+
+describe("useFileSystem — emptyTrash commits a functional delta", () => {
+  const trashedEntry = (id: string, trashedAt = 2000): TrashedNote => ({
+    id,
+    fileName: `Note ${id}`,
+    originalFilePath: `/notes/${id}.md`,
+    trashFilePath: `/notes/.trash/${id}.md`,
+    trashedAt,
+    groupId: null,
+    createdAt: 1000,
+    updatedAt: 1500,
+    pinned: false,
+  });
+
+  it("keeps a peer entry trashed during the file removals", async () => {
+    const removeMock = fsPlugin.remove as ReturnType<typeof vi.fn>;
+    const { result } = renderFs({
+      docs: [makeDoc("a")],
+      trashedNotes: [trashedEntry("t1"), trashedEntry("t2")],
+    });
+
+    removeMock.mockImplementationOnce(async () => {
+      // Peer window trashes "t3" while this window is deleting t1's files.
+      libraryStore.commit((current) => ({
+        trashedNotes: [...current.trashedNotes, trashedEntry("t3", 5000)],
+      }), "remote");
+    });
+
+    await act(async () => { await result.current.emptyTrash(); });
+
+    // t1/t2 purged; the peer's t3 survives in the local store.
+    expect(libraryStore.getSnapshot().trashedNotes.map((n) => n.id)).toEqual(["t3"]);
+  });
+
+  it("keeps a newer re-trash incarnation of a purged id", async () => {
+    const removeMock = fsPlugin.remove as ReturnType<typeof vi.fn>;
+    const { result } = renderFs({
+      docs: [makeDoc("a")],
+      trashedNotes: [trashedEntry("t1", 2000)],
+    });
+
+    removeMock.mockImplementationOnce(async () => {
+      // Peer restores and re-trashes t1 (newer incarnation) mid-purge.
+      libraryStore.commit((current) => ({
+        trashedNotes: current.trashedNotes.map((n) =>
+          n.id === "t1" ? { ...n, trashedAt: 9000 } : n,
+        ),
+      }), "remote");
+    });
+
+    await act(async () => { await result.current.emptyTrash(); });
+
+    const t1 = libraryStore.getSnapshot().trashedNotes.find((n) => n.id === "t1");
+    expect(t1?.trashedAt).toBe(9000);
   });
 });

@@ -1802,7 +1802,16 @@ export function useFileSystem(
     }
 
     if (setTrashedNotes) {
-      setTrashedNotes([]);
+      // Functional, filtered by the snapshot's { id, trashedAt } incarnations
+      // (the same rule the trash-updated receiver applies): a peer entry added
+      // during the file-removal awaits, or a newer re-trash of a purged id,
+      // must survive this commit — wiping to [] erased them from the local
+      // store while their files still sat in .trash.
+      const purgedAt = new Map(trashedSnapshot.map((note) => [note.id, note.trashedAt]));
+      setTrashedNotes((prev) => prev.filter((note) => {
+        const at = purgedAt.get(note.id);
+        return at === undefined || note.trashedAt > at;
+      }));
       // Only the entries this window actually purged. A note another window
       // trashed while we were deleting files is still in .trash on disk, so
       // broadcasting an empty list would wrongly drop it there.
