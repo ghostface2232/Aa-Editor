@@ -75,7 +75,7 @@ async function readPreviousMeta(
 }
 
 function sortAndPersistDocs(
-  nextDocs: NoteDoc[],
+  buildDocs: (prev: NoteDoc[]) => NoteDoc[],
   activeId: string | null,
   notesSortOrder: NotesSortOrder,
   locale: Locale,
@@ -83,18 +83,33 @@ function sortAndPersistDocs(
   setActiveIndex: React.Dispatch<React.SetStateAction<number>>,
   groups?: NoteGroup[],
 ) {
-  const sortedDocs = sortNotes(nextDocs, notesSortOrder, locale);
-  const nextActiveIndex = activeId
-    ? Math.max(sortedDocs.findIndex((doc) => doc.id === activeId), 0)
-    : 0;
-
-  setDocs(sortedDocs);
-  setActiveIndex(nextActiveIndex);
+  // The commit is a functional delta recomputed against the store's `prev`,
+  // never an absolute array captured before the caller's awaits: libraryStore
+  // is canonical, and a provision adoption, a doSave commit, or a peer window
+  // event landing during the caller's disk I/O would be erased by a stale
+  // absolute commit — a peer-deleted note resurrected as a ghost row, a
+  // just-adopted filePath reverted to "" with the provisioned body orphaned.
+  // Callers therefore express their change as a delta keyed by id.
+  let committedDocs: NoteDoc[] | null = null;
+  setDocs((prev) => {
+    committedDocs = sortNotes(buildDocs(prev), notesSortOrder, locale);
+    return committedDocs;
+  });
+  // The store adapter runs the updater synchronously, so committedDocs is set
+  // by the time setDocs returns. Active identity is an id; the index is
+  // derived from the committed array AFTER the docs commit, never nested
+  // inside the updater (AGENTS.md).
+  if (committedDocs) {
+    const nextActiveIndex = activeId
+      ? Math.max((committedDocs as NoteDoc[]).findIndex((doc) => doc.id === activeId), 0)
+      : 0;
+    setActiveIndex(nextActiveIndex);
+  }
   // Ordering + PERSIST_FAILED logging are handled inside saveManifest's
   // own persistChain; callers just enqueue and stay non-blocking. The source
   // tag travels through to the crashLog so the failure is still traceable
   // to this entry point.
-  void saveManifest(sortedDocs, activeId, groups, "sortAndPersistDocs").catch(() => {});
+  void saveManifest(committedDocs ?? [], activeId, groups, "sortAndPersistDocs").catch(() => {});
 }
 
 export interface RenameNoteResult {
@@ -374,7 +389,9 @@ export function useFileSystem(
     tiptapRef.current?.invalidateDocumentSession?.(leavingId, leaving.filePath);
 
     const pruned = baseDocs.filter((d) => d.id !== leavingDocId);
-    setDocs(pruned);
+    // Functional: a commit that landed during the removals above (provision
+    // adoption, doSave, peer event) must survive; only the pruned id goes.
+    setDocs((prev) => prev.filter((d) => d.id !== leavingDocId));
     return { docs: pruned, groups: groupsChanged ? keptGroups : currentGroups };
   }, [cancelDocSaveRef, setDocs, setGroups, tiptapRef]);
 
@@ -406,9 +423,9 @@ export function useFileSystem(
       return;
     }
 
-    const nextDocs = docs.map((entry, index) => {
-      if (index !== activeIndex) return entry;
-
+    markNoteTitleChanged(doc.id);
+    sortAndPersistDocs((prev) => prev.map((entry) => {
+      if (entry.id !== doc.id) return entry;
       const title = entry.customName
         ? entry.fileName
         : deriveTitle(markdown) || entry.fileName || getDefaultDocumentTitle(locale);
@@ -420,10 +437,7 @@ export function useFileSystem(
         updatedAt: Date.now(),
         fileName: title,
       };
-    });
-
-    markNoteTitleChanged(doc.id);
-    sortAndPersistDocs(nextDocs, doc.id, notesSortOrder, locale, setDocs, setActiveIndex, groupsRef.current);
+    }), doc.id, notesSortOrder, locale, setDocs, setActiveIndex, groupsRef.current);
     state.setIsDirty(false);
     state.primeMarkdown(markdown);
   }, [activeIndex, docs, locale, notesSortOrder, setActiveIndex, setDocs, state, tiptapRef]);
@@ -443,8 +457,15 @@ export function useFileSystem(
     if (sourcePaths.length === 0) return;
 
     const { docs: liveDocs, activeDocId } = getLiveDocsSnapshot();
-    const didPersistCurrentDoc = flushLeftDocClean(await leaveCurrentDoc());
-    const baseDocs = didPersistCurrentDoc ? markDocClean(liveDocs, activeDocId) : liveDocs;
+    const flushResult = await leaveCurrentDoc();
+    const didPersistCurrentDoc = flushLeftDocClean(flushResult);
+    // A provisioned flush adopted a real filePath for the leaving doc; fold it
+    // into the working copy so the prune below sees the file it must remove
+    // and the commit doesn't revert the adoption.
+    const withAdoption = flushResult.status === "provisioned" && activeDocId
+      ? liveDocs.map((d) => d.id === activeDocId && !d.filePath ? { ...d, filePath: flushResult.filePath } : d)
+      : liveDocs;
+    const baseDocs = didPersistCurrentDoc ? markDocClean(withAdoption, activeDocId) : withAdoption;
 
     const existingNames = new Set(baseDocs.map((d) => d.fileName));
     const importedDocs: NoteDoc[] = [];
@@ -515,7 +536,7 @@ export function useFileSystem(
     // active doc was its only (empty placeholder) member — the imports below
     // are about to join it.
     const { docs: prunedDocs, groups: prunedGroups } = await pruneEmptyCurrentDoc(baseDocs, activeDocId, inheritedGroupId);
-    const nextDocs = [...prunedDocs, ...importedDocs];
+    const prunedLeavingId = activeDocId && !prunedDocs.some((d) => d.id === activeDocId) ? activeDocId : null;
 
     // Build the persisted groups on the post-prune array pruneEmptyCurrentDoc
     // returned (activeDoc already stripped, inheritedGroupId preserved) so the
@@ -531,7 +552,13 @@ export function useFileSystem(
       emitGroupsUpdated(nextGroups);
     }
 
-    sortAndPersistDocs(nextDocs, lastImported.id, notesSortOrder, locale, setDocs, setActiveIndex, nextGroups);
+    sortAndPersistDocs((prev) => {
+      let next = didPersistCurrentDoc && activeDocId
+        ? prev.map((d) => (d.id === activeDocId ? { ...d, isDirty: false } : d))
+        : prev;
+      if (prunedLeavingId) next = next.filter((d) => d.id !== prunedLeavingId);
+      return [...next, ...importedDocs];
+    }, lastImported.id, notesSortOrder, locale, setDocs, setActiveIndex, nextGroups);
     importedDocs.forEach((doc) => emitDocCreated(doc));
 
     resetDocState(state, tiptapRef, lastImported.id, lastImported.filePath, lastImported.content);
@@ -628,7 +655,6 @@ export function useFileSystem(
         updatedAt: timestamp,
       };
 
-      const nextDocs = [...prunedDocs, newDoc];
       let nextGroups = workingGroups;
       if (inheritedGroupId && nextGroups) {
         const targetExists = nextGroups.some((g) => g.id === inheritedGroupId);
@@ -647,7 +673,11 @@ export function useFileSystem(
         setGroups?.(nextGroups ?? []);
         emitGroupsUpdated(nextGroups ?? []);
       }
-      sortAndPersistDocs(nextDocs, newDoc.id, notesSortOrder, locale, setDocs, setActiveIndex, nextGroups);
+      const replacedId = willReplace && currentDoc ? currentDoc.id : null;
+      sortAndPersistDocs((prev) => [
+        ...(replacedId ? prev.filter((d) => d.id !== replacedId) : prev),
+        newDoc,
+      ], newDoc.id, notesSortOrder, locale, setDocs, setActiveIndex, nextGroups);
       emitDocCreated(newDoc);
       resetDocState(state, tiptapRef, id, filePath, "");
       notifyActiveDocRef?.current?.(id, filePath);
@@ -705,10 +735,9 @@ export function useFileSystem(
       updatedAt: timestamp,
     };
 
-    const { docs: liveDocs, activeDocId } = getLiveDocsSnapshot();
-    const nextDocs = [...liveDocs, newDoc];
+    const { activeDocId } = getLiveDocsSnapshot();
     sortAndPersistDocs(
-      nextDocs,
+      (prev) => [...prev, newDoc],
       activeDocId,
       notesSortOrder,
       locale,
@@ -758,28 +787,59 @@ export function useFileSystem(
     // been wired yet (shouldn't happen in App.tsx — the ref is assigned every
     // render — but the optional chain keeps this resilient to future refactors).
     let baseDocs: NoteDoc[];
+    let didPersistCurrentDoc = false;
+    let markLeavingClean = false;
     if (isPruneCandidate || !captureAndQueueSaveRef?.current) {
-      const didPersistCurrentDoc = flushLeftDocClean(await leaveCurrentDoc());
-      baseDocs = didPersistCurrentDoc ? markDocClean(liveDocs, activeDocId) : liveDocs;
+      const flushResult = await leaveCurrentDoc();
+      didPersistCurrentDoc = flushLeftDocClean(flushResult);
+      markLeavingClean = didPersistCurrentDoc;
+      // A provisioned flush adopted a real filePath for the leaving doc; fold
+      // it into the working copy so pruneEmptyCurrentDoc removes the file it
+      // just wrote instead of skipping a "pathless" doc and orphaning the
+      // body for reconcile to re-ingest as a ghost note.
+      const withAdoption = flushResult.status === "provisioned" && activeDocId
+        ? liveDocs.map((d) => d.id === activeDocId && !d.filePath ? { ...d, filePath: flushResult.filePath } : d)
+        : liveDocs;
+      baseDocs = didPersistCurrentDoc ? markDocClean(withAdoption, activeDocId) : withAdoption;
     } else {
       captureAndQueueSaveRef.current();
       baseDocs = liveDocs;
     }
 
     const targetDoc = baseDocs[index];
-    const { docs: nextDocs, groups: nextGroups } = await pruneEmptyCurrentDoc(baseDocs, activeDocId);
-    let targetIndex = nextDocs.findIndex((d) => d.id === targetDoc.id);
+    const { docs: prunedDocs, groups: nextGroups } = await pruneEmptyCurrentDoc(baseDocs, activeDocId);
+    const prunedLeavingId = activeDocId && !prunedDocs.some((d) => d.id === activeDocId) ? activeDocId : null;
+
+    // Commit as a functional delta against the store's `prev` (see
+    // sortAndPersistDocs): a provision adoption or peer event landing during
+    // the flush/prune awaits above must survive this commit.
+    let committedDocs: NoteDoc[] | null = null;
+    setDocs((prev) => {
+      let next = markLeavingClean && activeDocId
+        ? prev.map((d) => (d.id === activeDocId ? { ...d, isDirty: false } : d))
+        : prev;
+      if (prunedLeavingId) next = next.filter((d) => d.id !== prunedLeavingId);
+      committedDocs = next;
+      return next;
+    });
+    const finalDocs: NoteDoc[] = committedDocs ?? prunedDocs;
+    let targetIndex = finalDocs.findIndex((d) => d.id === targetDoc.id);
     if (targetIndex < 0) targetIndex = 0;
 
-    const target = nextDocs[targetIndex];
-    setDocs(nextDocs);
+    // Resolve the target from the committed array, not the pre-await
+    // projection, so a peer body that landed mid-switch is what gets loaded.
+    // The committed array can be empty when a peer deleted the switch target
+    // during the awaits and the leaving doc was pruned — nothing to show;
+    // leave the follow-up to the peer-deletion handler instead of crashing.
+    const target = finalDocs[targetIndex];
+    if (!target) return;
     resetDocState(state, tiptapRef, target.id, target.filePath, target.content);
     notifyActiveDocRef?.current?.(target.id, target.filePath);
     setActiveIndex(targetIndex);
     // Persist the post-prune groups the pruner returned, not groupsRef.current:
     // the ref still holds the pre-delete array until the next render, which
     // would cancel the freshly recorded tombstone (P2 follow-up to P0-4).
-    void saveManifest(nextDocs, target.id, nextGroups).catch(() => {});
+    void saveManifest(finalDocs, target.id, nextGroups).catch(() => {});
   }, [captureAndQueueSaveRef, getLiveDocsSnapshot, leaveCurrentDoc, markDocClean, setActiveIndex, setDocs, state, tiptapRef, pruneEmptyCurrentDoc]);
 
   // Batch delete core. The per-note trash I/O runs sequentially, but the doc
@@ -1127,8 +1187,13 @@ export function useFileSystem(
     const doc = liveDocs[index];
     if (!doc) return;
 
-    const didPersistCurrentDoc = flushLeftDocClean(await leaveCurrentDoc());
-    const baseDocs = didPersistCurrentDoc ? markDocClean(liveDocs, activeDocId) : liveDocs;
+    const flushResult = await leaveCurrentDoc();
+    const didPersistCurrentDoc = flushLeftDocClean(flushResult);
+    // Fold a provisioned flush's adopted filePath in (see importFiles).
+    const withAdoption = flushResult.status === "provisioned" && activeDocId
+      ? liveDocs.map((d) => d.id === activeDocId && !d.filePath ? { ...d, filePath: flushResult.filePath } : d)
+      : liveDocs;
+    const baseDocs = didPersistCurrentDoc ? markDocClean(withAdoption, activeDocId) : withAdoption;
     const sourceDoc = baseDocs[index];
     if (!sourceDoc) return;
 
@@ -1155,10 +1220,16 @@ export function useFileSystem(
     };
 
     const { docs: prunedDocs, groups: prunedGroups } = await pruneEmptyCurrentDoc(baseDocs, activeDocId);
-    const nextDocs = [...prunedDocs, newDoc];
+    const prunedLeavingId = activeDocId && !prunedDocs.some((d) => d.id === activeDocId) ? activeDocId : null;
     // Persist the pruner's post-delete groups, not groupsRef.current (stale
     // until the next render), so a prune tombstone is not cancelled.
-    sortAndPersistDocs(nextDocs, newDoc.id, notesSortOrder, locale, setDocs, setActiveIndex, prunedGroups);
+    sortAndPersistDocs((prev) => {
+      let next = didPersistCurrentDoc && activeDocId
+        ? prev.map((d) => (d.id === activeDocId ? { ...d, isDirty: false } : d))
+        : prev;
+      if (prunedLeavingId) next = next.filter((d) => d.id !== prunedLeavingId);
+      return [...next, newDoc];
+    }, newDoc.id, notesSortOrder, locale, setDocs, setActiveIndex, prunedGroups);
     resetDocState(state, tiptapRef, newDoc.id, filePath, content);
     notifyActiveDocRef?.current?.(newDoc.id, filePath);
   }, [getLiveDocsSnapshot, leaveCurrentDoc, markDocClean, notesSortOrder, setActiveIndex, setDocs, state, tiptapRef, pruneEmptyCurrentDoc]);
@@ -1288,14 +1359,6 @@ export function useFileSystem(
     }
 
     const proposedById = new Map(proposed.map((rw) => [rw.docId, rw]));
-    const nextDocs = liveDocs.map((entry, i) => {
-      if (i === index) {
-        return { ...entry, fileName: trimmed, updatedAt: now, customName: true };
-      }
-      const rw = proposedById.get(entry.id);
-      if (!rw || !committed.has(entry.id)) return entry;
-      return { ...entry, content: rw.updated, updatedAt: now };
-    });
 
     // Flip the editor only if the active doc's rewrite actually landed on
     // disk. Clearing isDirty when the write failed would mask the loss; an
@@ -1313,7 +1376,18 @@ export function useFileSystem(
     }
 
     markNoteTitleChanged(doc.id);
-    sortAndPersistDocs(nextDocs, doc.id, notesSortOrder, locale, setDocs, setActiveIndex, groupsRef.current);
+    sortAndPersistDocs((prev) => prev.map((entry) => {
+      if (entry.id === doc.id) {
+        return { ...entry, fileName: trimmed, updatedAt: now, customName: true };
+      }
+      const rw = proposedById.get(entry.id);
+      if (!rw || !committed.has(entry.id)) return entry;
+      // `committed` means the rewritten body is already on disk, so adopting
+      // it here keeps memory == disk even if a peer body landed mid-rename;
+      // that conflict is resolved at the disk level (LWW + .conflicts backup),
+      // not by preferring the in-memory peer copy over what was just written.
+      return { ...entry, content: rw.updated, updatedAt: now };
+    }), doc.id, notesSortOrder, locale, setDocs, setActiveIndex, groupsRef.current);
     emitDocRenamed(doc.id, doc.filePath, doc.filePath, trimmed);
     return { renamed: true, linkRewriteSkipped: oldTitleIsAmbiguous };
   }, [captureAndQueueSaveRef, flushDocSaveRef, getLiveDocsSnapshot, notesSortOrder, setActiveIndex, setDocs, state, tiptapRef]);
@@ -1324,12 +1398,10 @@ export function useFileSystem(
 
     const activeId = docsRef.current[activeIndexRef.current]?.id ?? null;
     const nextPinned = !doc.pinned;
-    const nextDocs = docsRef.current.map((entry, i) => (
-      i === index ? { ...entry, pinned: nextPinned } : entry
-    ));
-
     markNotesPinnedChanged([doc.id]);
-    sortAndPersistDocs(nextDocs, activeId, notesSortOrder, locale, setDocs, setActiveIndex, groupsRef.current);
+    sortAndPersistDocs((prev) => prev.map((entry) => (
+      entry.id === doc.id ? { ...entry, pinned: nextPinned } : entry
+    )), activeId, notesSortOrder, locale, setDocs, setActiveIndex, groupsRef.current);
     emitNotePinnedUpdated(doc.id, nextPinned);
   }, [locale, notesSortOrder, setActiveIndex, setDocs]);
 
@@ -1338,12 +1410,10 @@ export function useFileSystem(
     if (!docsRef.current.some((d) => idSet.has(d.id) && (d.pinned === true) !== pinned)) return;
 
     const activeId = docsRef.current[activeIndexRef.current]?.id ?? null;
-    const nextDocs = docsRef.current.map((entry) => (
-      idSet.has(entry.id) ? { ...entry, pinned } : entry
-    ));
-
     markNotesPinnedChanged(Array.from(idSet));
-    sortAndPersistDocs(nextDocs, activeId, notesSortOrder, locale, setDocs, setActiveIndex, groupsRef.current);
+    sortAndPersistDocs((prev) => prev.map((entry) => (
+      idSet.has(entry.id) ? { ...entry, pinned } : entry
+    )), activeId, notesSortOrder, locale, setDocs, setActiveIndex, groupsRef.current);
     for (const id of idSet) emitNotePinnedUpdated(id, pinned);
   }, [locale, notesSortOrder, setActiveIndex, setDocs]);
 
@@ -1353,12 +1423,10 @@ export function useFileSystem(
     if (!doc || doc.color === (color ?? undefined)) return;
 
     const activeId = docsRef.current[activeIndexRef.current]?.id ?? null;
-    const nextDocs = docsRef.current.map((entry, i) => (
-      i === index ? { ...entry, color: color ?? undefined } : entry
-    ));
-
     markNotesColorChanged([doc.id]);
-    sortAndPersistDocs(nextDocs, activeId, notesSortOrder, locale, setDocs, setActiveIndex, groupsRef.current);
+    sortAndPersistDocs((prev) => prev.map((entry) => (
+      entry.id === doc.id ? { ...entry, color: color ?? undefined } : entry
+    )), activeId, notesSortOrder, locale, setDocs, setActiveIndex, groupsRef.current);
     emitNoteColorUpdated(doc.id, color);
   }, [locale, notesSortOrder, setActiveIndex, setDocs]);
 
@@ -1368,12 +1436,10 @@ export function useFileSystem(
     if (!docsRef.current.some((d) => idSet.has(d.id) && d.color !== next)) return;
 
     const activeId = docsRef.current[activeIndexRef.current]?.id ?? null;
-    const nextDocs = docsRef.current.map((entry) => (
-      idSet.has(entry.id) ? { ...entry, color: next } : entry
-    ));
-
     markNotesColorChanged(Array.from(idSet));
-    sortAndPersistDocs(nextDocs, activeId, notesSortOrder, locale, setDocs, setActiveIndex, groupsRef.current);
+    sortAndPersistDocs((prev) => prev.map((entry) => (
+      idSet.has(entry.id) ? { ...entry, color: next } : entry
+    )), activeId, notesSortOrder, locale, setDocs, setActiveIndex, groupsRef.current);
     for (const id of idSet) emitNoteColorUpdated(id, color);
   }, [locale, notesSortOrder, setActiveIndex, setDocs]);
 

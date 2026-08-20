@@ -249,7 +249,17 @@ interface RenderOpts {
 function renderFs(opts: RenderOpts = {}) {
   const docs = opts.docs ?? [makeDoc("a")];
   const state = opts.state ?? makeState();
-  const setDocs = vi.fn();
+  // Store-backed, mirroring the production commitDocsUpdate adapter: resolve a
+  // functional updater against the canonical store docs and commit the result,
+  // so tests observe what actually lands in libraryStore (the sites under test
+  // commit functional deltas, not absolute arrays).
+  const setDocs = vi.fn((updater: React.SetStateAction<NoteDoc[]>) => {
+    const prev = [...libraryStore.getSnapshot().docs];
+    const next = typeof updater === "function" ? updater(prev) : updater;
+    const unchanged = next.length === prev.length && next.every((d, i) => d === prev[i]);
+    if (unchanged) return;
+    refs.librarySnapshot = libraryStore.commit({ docs: next }, "local");
+  });
   const setActiveIndex = vi.fn();
   const setGroups = vi.fn();
   const setTrashedNotes = vi.fn();
@@ -392,7 +402,7 @@ describe("useFileSystem — importFiles batch resilience", () => {
 
     // setDocs is called by sortAndPersistDocs with the two surviving imports.
     expect(setDocs).toHaveBeenCalled();
-    const lastDocs = setDocs.mock.calls[setDocs.mock.calls.length - 1][0] as NoteDoc[];
+    const lastDocs = [...libraryStore.getSnapshot().docs];
     const importedNames = lastDocs.map((d) => d.fileName).filter((n) => n === "a" || n === "c");
     expect(importedNames.sort()).toEqual(["a", "c"]);
   });
@@ -403,7 +413,7 @@ describe("useFileSystem — importFiles batch resilience", () => {
     // deterministic in tests (uuid-1, uuid-2, ...), fail the second one.
     refs.writeFaultByPath.set("/notes/uuid-2.md", new Error("ENOSPC"));
 
-    const { result, setDocs } = renderFs();
+    const { result } = renderFs();
     await act(async () => {
       await result.current.importFiles(["/src/a.md", "/src/b.md", "/src/c.md"]);
     });
@@ -414,7 +424,7 @@ describe("useFileSystem — importFiles batch resilience", () => {
     expect(logged).toBeDefined();
     expect((logged![0] as NotenError).context).toMatchObject({ stage: "importFiles" });
 
-    const lastDocs = setDocs.mock.calls[setDocs.mock.calls.length - 1][0] as NoteDoc[];
+    const lastDocs = [...libraryStore.getSnapshot().docs];
     const imported = lastDocs.filter((d) => d.filePath.startsWith("/notes/uuid-"));
     expect(imported.length).toBe(2);
     // None of the committed docs should point at the failed-write path.
@@ -539,7 +549,7 @@ describe("useFileSystem — newNote disk-first invariant", () => {
     });
 
     expect(setDocs).toHaveBeenCalledTimes(1);
-    const nextDocs = setDocs.mock.calls[0][0] as NoteDoc[];
+    const nextDocs = [...libraryStore.getSnapshot().docs];
     expect(nextDocs).toHaveLength(1);
     expect(nextDocs[0].id).toBe("uuid-1");
     expect(nextDocs[0].fileName).toBe("Untitled");
@@ -558,7 +568,7 @@ describe("useFileSystem — newNote disk-first invariant", () => {
 
     expect(writeMock).toHaveBeenCalledTimes(1);
     expect(setDocs).toHaveBeenCalledTimes(1);
-    const nextDocs = setDocs.mock.calls[0][0] as NoteDoc[];
+    const nextDocs = [...libraryStore.getSnapshot().docs];
     expect(nextDocs).toHaveLength(1);
     expect(nextDocs[0].id).toBe("uuid-1");
   });
@@ -1107,7 +1117,7 @@ describe("useFileSystem — deleteNote last-note replacement", () => {
 
     expect(setDocs).toHaveBeenCalled();
     // The last setDocs call replaces the array with [replacement].
-    const lastDocs = setDocs.mock.calls[setDocs.mock.calls.length - 1][0] as NoteDoc[];
+    const lastDocs = [...libraryStore.getSnapshot().docs];
     expect(lastDocs).toHaveLength(1);
     // Critical invariant: write failed, so the manifest entry MUST advertise
     // the doc as dirty — autosave will then retry rather than the user
@@ -1127,13 +1137,13 @@ describe("useFileSystem — deleteNote last-note replacement", () => {
 
   it("creates a clean replacement (isDirty=false) when the body write succeeds", async () => {
     const doc = makeDoc("a", { content: "to delete" });
-    const { result, setDocs } = renderFs({ docs: [doc] });
+    const { result } = renderFs({ docs: [doc] });
 
     await act(async () => {
       await result.current.deleteNote(0);
     });
 
-    const lastDocs = setDocs.mock.calls[setDocs.mock.calls.length - 1][0] as NoteDoc[];
+    const lastDocs = [...libraryStore.getSnapshot().docs];
     expect(lastDocs).toHaveLength(1);
     expect(lastDocs[0].isDirty).toBe(false);
     expect(emitDocCreatedMock).toHaveBeenCalledOnce();
@@ -1160,7 +1170,7 @@ describe("useFileSystem — deleteNotes batch", () => {
     // Exactly one doc-list commit (sortAndPersistDocs), containing neither
     // deleted note — the ghost-row symptom was a commit still containing one.
     expect(setDocs).toHaveBeenCalledTimes(1);
-    const committed = setDocs.mock.calls[0][0] as NoteDoc[];
+    const committed = [...libraryStore.getSnapshot().docs];
     expect(committed.map((d) => d.id).sort()).toEqual(["a", "d"]);
     // Single batched trash-list update with both entries.
     expect(setTrashedNotes).toHaveBeenCalledTimes(1);
@@ -1174,7 +1184,7 @@ describe("useFileSystem — deleteNotes batch", () => {
       if (from === "/notes/b.md") throw new Error("EBUSY");
     });
     try {
-      const { result, setDocs } = renderFs({ docs, activeIndex: 0 });
+      const { result } = renderFs({ docs, activeIndex: 0 });
 
       let deleted: string[] = [];
       await act(async () => {
@@ -1183,7 +1193,7 @@ describe("useFileSystem — deleteNotes batch", () => {
 
       // b's copy failed → b stays in the list untouched; c is gone.
       expect(deleted).toEqual(["c"]);
-      const committed = setDocs.mock.calls[0][0] as NoteDoc[];
+      const committed = [...libraryStore.getSnapshot().docs];
       expect(committed.map((d) => d.id).sort()).toEqual(["a", "b"]);
     } finally {
       copyFileMock.mockImplementation(async () => {
@@ -1223,7 +1233,7 @@ describe("useFileSystem — switchDocument prunes an empty leaving doc", () => {
     removeMock.mockImplementation(async (path: string) => { callOrder.push(`remove:${path}`); });
     removeMetaMock.mockImplementation(async (_fs: unknown, _dir: string, id: string) => { callOrder.push(`removeMeta:${id}`); });
     try {
-      const { result, setDocs, notifyActiveDoc } = renderFs({ docs: [empty, other], activeIndex: 0 });
+      const { result, notifyActiveDoc } = renderFs({ docs: [empty, other], activeIndex: 0 });
 
       await act(async () => {
         await result.current.switchDocument(1);
@@ -1237,7 +1247,7 @@ describe("useFileSystem — switchDocument prunes an empty leaving doc", () => {
 
       // The pruned doc is gone from the committed list and the target doc
       // becomes active.
-      const lastDocs = setDocs.mock.calls[setDocs.mock.calls.length - 1][0] as NoteDoc[];
+      const lastDocs = [...libraryStore.getSnapshot().docs];
       expect(lastDocs.map((d) => d.id)).toEqual(["b"]);
       expect(notifyActiveDoc).toHaveBeenCalledWith("b", "/notes/b.md");
     } finally {
@@ -1300,28 +1310,28 @@ describe("useFileSystem — switchDocument prunes an empty leaving doc", () => {
   it("does not prune a non-empty leaving doc", async () => {
     const filled = makeDoc("a", { content: "has content" });
     const other = makeDoc("b", { content: "x" });
-    const { result, setDocs } = renderFs({ docs: [filled, other], activeIndex: 0 });
+    const { result } = renderFs({ docs: [filled, other], activeIndex: 0 });
 
     await act(async () => {
       await result.current.switchDocument(1);
     });
 
     expect(removeMock).not.toHaveBeenCalledWith("/notes/a.md");
-    const lastDocs = setDocs.mock.calls[setDocs.mock.calls.length - 1][0] as NoteDoc[];
+    const lastDocs = [...libraryStore.getSnapshot().docs];
     expect(lastDocs.map((d) => d.id).sort()).toEqual(["a", "b"]);
   });
 
   it("does not prune an empty doc the user explicitly named (customName)", async () => {
     const named = makeDoc("a", { content: "", customName: true });
     const other = makeDoc("b", { content: "x" });
-    const { result, setDocs } = renderFs({ docs: [named, other], activeIndex: 0 });
+    const { result } = renderFs({ docs: [named, other], activeIndex: 0 });
 
     await act(async () => {
       await result.current.switchDocument(1);
     });
 
     expect(removeMock).not.toHaveBeenCalledWith("/notes/a.md");
-    const lastDocs = setDocs.mock.calls[setDocs.mock.calls.length - 1][0] as NoteDoc[];
+    const lastDocs = [...libraryStore.getSnapshot().docs];
     expect(lastDocs.map((d) => d.id).sort()).toEqual(["a", "b"]);
   });
 
@@ -1739,7 +1749,7 @@ describe("useFileSystem — renameNote partial-failure", () => {
     });
 
     expect(setDocs).toHaveBeenCalled();
-    const lastDocs = setDocs.mock.calls[setDocs.mock.calls.length - 1][0] as NoteDoc[];
+    const lastDocs = [...libraryStore.getSnapshot().docs];
     const ok = lastDocs.find((d) => d.id === "linker-ok")!;
     const fail = lastDocs.find((d) => d.id === "linker-fail")!;
 
@@ -1798,7 +1808,7 @@ describe("useFileSystem — renameNote with a duplicated title", () => {
       path === "/notes/linker.md" ? "see [[Dup]]" : ""
     ));
 
-    const { result, setDocs } = renderFs({ docs: [target, twin, linker] });
+    const { result } = renderFs({ docs: [target, twin, linker] });
 
     let outcome: Awaited<ReturnType<typeof result.current.renameNote>> | undefined;
     await act(async () => {
@@ -1807,7 +1817,7 @@ describe("useFileSystem — renameNote with a duplicated title", () => {
 
     expect(outcome).toEqual({ renamed: true, linkRewriteSkipped: true });
 
-    const lastDocs = setDocs.mock.calls[setDocs.mock.calls.length - 1][0] as NoteDoc[];
+    const lastDocs = [...libraryStore.getSnapshot().docs];
     expect(lastDocs.find((d) => d.id === "target")!.fileName).toBe("New");
     // The link still reads [[Dup]] — it may well have meant the twin.
     expect(lastDocs.find((d) => d.id === "linker")!.content).toBe("see [[Dup]]");
@@ -1822,7 +1832,7 @@ describe("useFileSystem — renameNote with a duplicated title", () => {
       path === "/notes/linker.md" ? "see [[Unique]]" : ""
     ));
 
-    const { result, setDocs } = renderFs({ docs: [target, other, linker] });
+    const { result } = renderFs({ docs: [target, other, linker] });
 
     let outcome: Awaited<ReturnType<typeof result.current.renameNote>> | undefined;
     await act(async () => {
@@ -1830,7 +1840,7 @@ describe("useFileSystem — renameNote with a duplicated title", () => {
     });
 
     expect(outcome).toEqual({ renamed: true, linkRewriteSkipped: false });
-    const lastDocs = setDocs.mock.calls[setDocs.mock.calls.length - 1][0] as NoteDoc[];
+    const lastDocs = [...libraryStore.getSnapshot().docs];
     expect(lastDocs.find((d) => d.id === "linker")!.content).toBe("see [[New]]");
   });
 
@@ -1842,7 +1852,7 @@ describe("useFileSystem — renameNote with a duplicated title", () => {
       path === "/notes/linker.md" ? "see [[Dup]]" : ""
     ));
 
-    const { result, setDocs } = renderFs({ docs: [target, twin, linker] });
+    const { result } = renderFs({ docs: [target, twin, linker] });
 
     let outcome: Awaited<ReturnType<typeof result.current.renameNote>> | undefined;
     await act(async () => {
@@ -1850,7 +1860,7 @@ describe("useFileSystem — renameNote with a duplicated title", () => {
     });
 
     expect(outcome?.linkRewriteSkipped).toBe(true);
-    const lastDocs = setDocs.mock.calls[setDocs.mock.calls.length - 1][0] as NoteDoc[];
+    const lastDocs = [...libraryStore.getSnapshot().docs];
     expect(lastDocs.find((d) => d.id === "linker")!.content).toBe("see [[Dup]]");
   });
 });
@@ -1873,7 +1883,7 @@ describe("useFileSystem — renameNote autosave coordination", () => {
     });
 
     const flushDocSave = vi.fn(async (docId: string) => docId !== "linker-b");
-    const { result, setDocs } = renderFs({
+    const { result } = renderFs({
       docs: [target, linkerA, linkerB],
       flushDocSave,
     });
@@ -1894,7 +1904,7 @@ describe("useFileSystem — renameNote autosave coordination", () => {
     // linker-b's flush failed: its unsaved content could not land, so neither
     // its file nor its in-memory body is rewritten.
     expect(writeMock.mock.calls.some((c) => c[0] === "/notes/linker-b.md")).toBe(false);
-    const lastDocs = setDocs.mock.calls[setDocs.mock.calls.length - 1][0] as NoteDoc[];
+    const lastDocs = [...libraryStore.getSnapshot().docs];
     expect(lastDocs.find((d) => d.id === "linker-a")!.content).toBe("see [[New]]");
     expect(lastDocs.find((d) => d.id === "linker-b")!.content).toBe("ref [[Old]]");
   });
@@ -1909,7 +1919,7 @@ describe("useFileSystem — renameNote autosave coordination", () => {
       return path === "/notes/linker.md" ? "edited [[Old]] tail" : "";
     });
 
-    const { result, setDocs } = renderFs({ docs: [target, linker] });
+    const { result } = renderFs({ docs: [target, linker] });
 
     await act(async () => {
       await result.current.renameNote(0, "New");
@@ -1921,7 +1931,7 @@ describe("useFileSystem — renameNote autosave coordination", () => {
 
     // The disk-derived rewrite also refreshes the lagging in-memory copy and
     // the conflict-backup baseline.
-    const lastDocs = setDocs.mock.calls[setDocs.mock.calls.length - 1][0] as NoteDoc[];
+    const lastDocs = [...libraryStore.getSnapshot().docs];
     expect(lastDocs.find((d) => d.id === "linker")!.content).toBe("edited [[New]] tail");
     expect(conflictBackupModule.setKnownDiskContent).toHaveBeenCalledWith(
       "/notes/linker.md",
@@ -1934,7 +1944,7 @@ describe("useFileSystem — renameNote autosave coordination", () => {
     const linker = makeDoc("linker", { content: "see [[Old]]" });
     refs.readFaultByPath.set("/notes/linker.md", new Error("EBUSY: placeholder hydration"));
 
-    const { result, setDocs } = renderFs({ docs: [target, linker] });
+    const { result } = renderFs({ docs: [target, linker] });
 
     await act(async () => {
       await result.current.renameNote(0, "New");
@@ -1943,7 +1953,7 @@ describe("useFileSystem — renameNote autosave coordination", () => {
     // Rewriting from the stale in-memory copy could regress the doc's latest
     // save, so the doc must be left untouched on disk AND in memory.
     expect(writeMock.mock.calls.some((c) => c[0] === "/notes/linker.md")).toBe(false);
-    const lastDocs = setDocs.mock.calls[setDocs.mock.calls.length - 1][0] as NoteDoc[];
+    const lastDocs = [...libraryStore.getSnapshot().docs];
     expect(lastDocs.find((d) => d.id === "linker")!.content).toBe("see [[Old]]");
     // The rename itself still commits.
     expect(lastDocs.find((d) => d.id === "target")!.fileName).toBe("New");
@@ -1955,7 +1965,7 @@ describe("useFileSystem — renameNote autosave coordination", () => {
 
 describe("useFileSystem — createNoteWithTitle provisioning", () => {
   it("provisions the empty note atomically with markOwnWrite before the write", async () => {
-    const { result, setDocs } = renderFs();
+    const { result } = renderFs();
 
     let id: string | null = null;
     await act(async () => {
@@ -1972,7 +1982,7 @@ describe("useFileSystem — createNoteWithTitle provisioning", () => {
     expect(markOwnWriteMock.mock.invocationCallOrder[markIdx])
       .toBeLessThan(writeMock.mock.invocationCallOrder[writeIdx]);
 
-    const lastDocs = setDocs.mock.calls[setDocs.mock.calls.length - 1][0] as NoteDoc[];
+    const lastDocs = [...libraryStore.getSnapshot().docs];
     expect(lastDocs.find((d) => d.id === "uuid-1")!.fileName).toBe("Linked");
   });
 
@@ -2135,5 +2145,67 @@ describe("useFileSystem — trash-updated broadcasts a delta", () => {
     await act(async () => { await result.current.restoreNote("t1"); });
 
     expect(emitTrashUpdatedMock).toHaveBeenCalledWith({ removed: [{ id: "t1", trashedAt: 2000 }] });
+  });
+});
+
+describe("useFileSystem — functional commits survive concurrent store changes", () => {
+  // The sites under test express their docs commit as a functional delta
+  // against the store's `prev` (sortAndPersistDocs). An absolute array built
+  // from the pre-await projection erased whatever landed during the disk I/O:
+  // a peer-deleted note came back as a ghost row, a peer-created note
+  // vanished, and a provision-adopted filePath reverted to "".
+
+  it("newNote keeps a peer-created note that landed during its provision write", async () => {
+    const { result } = renderFs({ docs: [makeDoc("a", { content: "keep me" })] });
+
+    writeMock.mockImplementationOnce(async () => {
+      // Peer window creates a note while provisionNoteFile awaits its write.
+      libraryStore.commit((current) => ({
+        docs: [...current.docs, makeDoc("peer", { fileName: "Peer note" })],
+      }), "remote");
+    });
+
+    await act(async () => { await result.current.newNote(); });
+
+    const ids = libraryStore.getSnapshot().docs.map((d) => d.id).sort();
+    expect(ids).toEqual(["a", "peer", "uuid-1"]);
+  });
+
+  it("importFiles keeps a peer deletion that landed during the import writes", async () => {
+    const { result } = renderFs({ docs: [makeDoc("a", { content: "keep me" }), makeDoc("b")] });
+
+    writeMock.mockImplementationOnce(async () => {
+      // Peer window deleted "b" while the import body was being provisioned.
+      libraryStore.commit((current) => ({
+        docs: current.docs.filter((d) => d.id !== "b"),
+      }), "remote");
+    });
+
+    await act(async () => { await result.current.importFiles(["/src/x.md"]); });
+
+    const ids = libraryStore.getSnapshot().docs.map((d) => d.id).sort();
+    expect(ids).toEqual(["a", "uuid-1"]);
+  });
+
+  it("switchDocument loads the peer body that landed during the prune awaits", async () => {
+    const removeMock = fsPlugin.remove as ReturnType<typeof vi.fn>;
+    const openDocument = vi.fn();
+    const emptyDoc = makeDoc("a", { content: "", customName: false });
+    const target = makeDoc("b", { content: "old body" });
+    const { result } = renderFs({ docs: [emptyDoc, target], openDocument });
+
+    removeMock.mockImplementationOnce(async () => {
+      // Peer body update for the switch target lands while the prune removes
+      // the empty leaving doc's file.
+      libraryStore.commit((current) => ({
+        docs: current.docs.map((d) => (d.id === "b" ? { ...d, content: "peer body", updatedAt: 9999 } : d)),
+      }), "remote");
+    });
+
+    await act(async () => { await result.current.switchDocument(1); });
+
+    const b = libraryStore.getSnapshot().docs.find((d) => d.id === "b");
+    expect(b?.content).toBe("peer body");
+    expect(openDocument).toHaveBeenCalledWith(expect.objectContaining({ noteId: "b", markdown: "peer body" }));
   });
 });
