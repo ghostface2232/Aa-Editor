@@ -15,6 +15,7 @@ import {
   type NoteGroup,
 } from "./useNotesLoader";
 import { reconcileFolder, type ReconcileState } from "../utils/reconcileFolder";
+import { libraryStore } from "../utils/libraryStore";
 import { tauriFileSystem } from "../utils/fs";
 import type { TiptapEditorHandle } from "../components/TiptapEditor";
 import { isOwnWrite, isOwnWriteContentMatch, pruneOwnWrites, pathKey } from "./ownWriteTracker";
@@ -183,19 +184,42 @@ export function useFileWatcher(
     try { await scanAndAbsorbConflicts(tauriFileSystem, dir); } catch { /* best-effort */ }
 
     // Snapshot the exact state reconcile computes against. reconcileFolder awaits
-    // full-folder disk reads that take seconds on a cloud placeholder; if a local
-    // mutation (Ctrl+N create, delete/restore, a dirty flip, or a group edit)
-    // lands in that window, the reconciled arrays — derived from this now-stale
-    // baseline — no longer describe current state. Committing them via setDocs/
-    // setGroups would DROP the new note, RESURRECT the deleted one (and make the
-    // follow-up saveManifest write its meta as both live and trashed, racing
-    // `${path}.tmp`), or clobber the freshly dirtied doc. Every such mutation
-    // replaces the docs or groups array reference, so an identity check at commit
-    // time is a sound, cheap drift signal. On drift we re-run against the fresh
-    // baseline rather than force-replacing — reconcile is idempotent, so the
-    // retry yields a correctly merged result. (P0-5)
-    const docsBaseline = docsRef.current;
-    const groupsBaseline = groupsRef.current;
+    // full-folder disk reads that take seconds on a cloud placeholder; if a
+    // mutation (Ctrl+N create, delete/restore, a dirty flip, a group edit, or a
+    // peer-window commit) lands in that window, the reconciled arrays — derived
+    // from this now-stale baseline — no longer describe current state.
+    // Committing them via setDocs/setGroups would DROP the new note, RESURRECT
+    // the deleted one (and make the follow-up saveManifest write its meta as
+    // both live and trashed, racing `${path}.tmp`), or clobber the freshly
+    // dirtied doc. The baseline must come from the canonical store, NOT the
+    // docsRef/groupsRef projections: refs only update on render, so a store
+    // commit whose render hasn't flushed yet (peer doc-created/doc-deleted via
+    // useWindowSync, which commits synchronously from a Tauri listener) would
+    // be both invisible to a ref-identity drift check AND missing from a
+    // ref-captured baseline. The store token (revision + directoryGeneration)
+    // pins this exact state; any commit from anywhere bumps it. On drift we
+    // re-run against the fresh baseline rather than force-replacing —
+    // reconcile is idempotent, so the retry yields a correctly merged result.
+    // (P0-5)
+    const baselineToken = libraryStore.getToken();
+    const storeBaseline = libraryStore.getSnapshot();
+    // `dir` was resolved before the scanAndAbsorbConflicts await; if a
+    // directory switch fully seeded the store inside that gap, the baseline
+    // now describes a different folder than the one this pass will list.
+    // Merging the new library against the old folder's listing could strip
+    // every doc whose body lives elsewhere — bail and let the watcher or the
+    // periodic interval re-fire against a coherent pair.
+    if (
+      storeBaseline.notesDirectory !== null
+      && storeBaseline.notesDirectory !== dir
+    ) {
+      return;
+    }
+    const docsBaseline: NoteDoc[] = [...storeBaseline.docs];
+    const groupsBaseline: NoteGroup[] = storeBaseline.groups.map((group) => ({
+      ...group,
+      noteIds: [...group.noteIds],
+    }));
 
     let reconciledDocs: NoteDoc[];
     let reconciledGroups: NoteGroup[];
@@ -227,12 +251,21 @@ export function useFileWatcher(
 
     if (!changed) return;
 
-    // Local state moved under us during the reconcile await (see the baseline
-    // comment above). Abandon this stale result — committing it would clobber
-    // the concurrent mutation — and retry against the fresh baseline. The check
-    // sits immediately before the synchronous commit below, so nothing can
-    // interleave between here and setDocs.
-    if (docsRef.current !== docsBaseline || groupsRef.current !== groupsBaseline) {
+    // The canonical store moved under us during the reconcile await (see the
+    // baseline comment above). Abandon this stale result — committing it would
+    // clobber the concurrent mutation — and retry against the fresh baseline.
+    // The check sits immediately before the synchronous commit below and store
+    // commits are synchronous too, so nothing can interleave between here and
+    // setDocs. The token is deliberately coarser than the data it protects —
+    // a trashedNotes- or activeNoteId-only commit also bumps the revision and
+    // abandons this pass. That over-approximation is intentional: the token
+    // cannot cheaply attribute a bump to docs/groups, and a false abandon only
+    // costs one RECONCILE_DRIFT_RETRY_MS deferral.
+    const commitToken = libraryStore.getToken();
+    if (
+      commitToken.revision !== baselineToken.revision
+      || commitToken.directoryGeneration !== baselineToken.directoryGeneration
+    ) {
       if (reconcileRetryRef.current == null) {
         reconcileRetryRef.current = setTimeout(() => {
           reconcileRetryRef.current = null;
@@ -259,8 +292,13 @@ export function useFileWatcher(
       setActiveIndex(0);
       if (prevActiveId) tiptapRef.current?.invalidateDocumentSession?.(prevActiveId, null);
     } else {
+      // Position from the store baseline, not the docsRef projection — the ref
+      // can lag the store by a render, and the no-drift token check above
+      // guarantees the baseline equaled the store at the moment the commit was
+      // decided, which is the position set the replacement index must come
+      // from (the setDocs above has already advanced the store by now).
       const prevActiveIdx = prevActiveId
-        ? docsRef.current.findIndex((d) => d.id === prevActiveId)
+        ? docsBaseline.findIndex((d) => d.id === prevActiveId)
         : -1;
       const replacementIdx = Math.min(
         Math.max(prevActiveIdx, 0),

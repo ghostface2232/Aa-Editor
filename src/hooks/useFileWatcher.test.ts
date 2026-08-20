@@ -99,6 +99,7 @@ vi.mock("../utils/crashLog", () => ({
 
 import { useFileWatcher } from "./useFileWatcher";
 import { reconcileFolder } from "../utils/reconcileFolder";
+import { libraryStore } from "../utils/libraryStore";
 
 const reconcileFolderMock = vi.mocked(reconcileFolder);
 
@@ -192,6 +193,9 @@ async function waitForMetaHandler() {
 }
 
 beforeEach(() => {
+  // performReconcile baselines against the canonical store, not React props;
+  // give each test a fresh, empty directory state so tokens don't leak across.
+  libraryStore.clearDirectory();
   refs.rootHandler = null;
   refs.metaHandler = null;
   refs.bodyByPath = new Map();
@@ -497,6 +501,9 @@ describe("useFileWatcher — reconcile drift barrier (P0-5)", () => {
       return { docs: [makeDoc("a"), makeDoc("ghost")], groups: [], changed: true };
     });
 
+    libraryStore.seedDirectory("/notes", {
+      docs: docsA, groups: [], trashedNotes: [], activeNoteId: "a",
+    });
     const { setDocs, setGroups, rerender, unmount } = renderWatcherWithRerender(docsA);
     await waitForRootHandler();
 
@@ -513,9 +520,11 @@ describe("useFileWatcher — reconcile drift barrier (P0-5)", () => {
     });
     expect(reconcileFolderMock).toHaveBeenCalledTimes(1);
 
-    // Concurrent local mutation mid-await: the user creates "b-new" (Ctrl+N),
-    // which replaces the docs array reference the watcher captured.
+    // Concurrent local mutation mid-await: the user creates "b-new" (Ctrl+N).
+    // Every local mutation commits to the canonical store first (bumping its
+    // revision token) and only then re-renders the projections.
     await act(async () => {
+      libraryStore.commit({ docs: [makeDoc("a"), makeDoc("b-new")] }, "local");
       rerender({ docs: [makeDoc("a"), makeDoc("b-new")], groups: [], activeIndex: 1, activeDocId: "b-new" });
     });
 
@@ -536,8 +545,137 @@ describe("useFileWatcher — reconcile drift barrier (P0-5)", () => {
     unmount();
   });
 
+  // Regression for the commit-to-render gap: a peer-window commit lands in the
+  // canonical store synchronously (Tauri listener → commitLibraryFromRemote),
+  // but the docsRef projection only refreshes on the NEXT render. If the
+  // reconcile await resolves before that render, a ref-identity drift check
+  // sees nothing and the absolute setDocs(reconciledDocs) erases the peer's
+  // note from the store. The guard must watch the store token, not React refs.
+  it("abandons the stale result when the store moved but React has not re-rendered", async () => {
+    let releaseReconcile: (() => void) | null = null;
+    const gate = new Promise<void>((resolve) => { releaseReconcile = resolve; });
+    const docsA = [makeDoc("a")];
+    libraryStore.seedDirectory("/notes", {
+      docs: docsA, groups: [], trashedNotes: [], activeNoteId: "a",
+    });
+    // Full-folder view derived from the pre-peer-commit baseline: no "peer-new".
+    reconcileFolderMock.mockImplementationOnce(async () => {
+      await gate;
+      return { docs: [makeDoc("a")], groups: [], changed: true };
+    });
+
+    const { setDocs, setGroups, unmount } = renderWatcherWithRerender(docsA);
+    await waitForRootHandler();
+
+    let handlerDone: Promise<unknown> = Promise.resolve();
+    await act(async () => {
+      handlerDone = Promise.resolve(refs.rootHandler!(IDLE_EVENT));
+      for (let i = 0; i < 20 && reconcileFolderMock.mock.calls.length === 0; i++) {
+        await Promise.resolve();
+      }
+    });
+    expect(reconcileFolderMock).toHaveBeenCalledTimes(1);
+
+    // Peer-window commit mid-await: the store gains "peer-new" synchronously.
+    // Deliberately NO rerender — the render that would refresh docsRef has not
+    // flushed yet, which is exactly the window a ref-identity check misses.
+    libraryStore.commit({ docs: [makeDoc("a"), makeDoc("peer-new")] }, "remote");
+
+    await act(async () => {
+      releaseReconcile!();
+      await handlerDone;
+    });
+
+    // The stale full-array replace must be abandoned — committing it would
+    // have erased "peer-new" from the canonical store.
+    expect(setDocs.mock.calls.find((c) => Array.isArray(c[0]))).toBeUndefined();
+    expect(setGroups.mock.calls.find((c) => Array.isArray(c[0]))).toBeUndefined();
+
+    unmount();
+  });
+
+  it("abandons the stale result when a groups-only store commit races the await", async () => {
+    let releaseReconcile: (() => void) | null = null;
+    const gate = new Promise<void>((resolve) => { releaseReconcile = resolve; });
+    const docsA = [makeDoc("a")];
+    libraryStore.seedDirectory("/notes", {
+      docs: docsA, groups: [], trashedNotes: [], activeNoteId: "a",
+    });
+    reconcileFolderMock.mockImplementationOnce(async () => {
+      await gate;
+      return { docs: [makeDoc("a")], groups: [], changed: true };
+    });
+
+    const { setDocs, setGroups, unmount } = renderWatcherWithRerender(docsA);
+    await waitForRootHandler();
+
+    let handlerDone: Promise<unknown> = Promise.resolve();
+    await act(async () => {
+      handlerDone = Promise.resolve(refs.rootHandler!(IDLE_EVENT));
+      for (let i = 0; i < 20 && reconcileFolderMock.mock.calls.length === 0; i++) {
+        await Promise.resolve();
+      }
+    });
+    expect(reconcileFolderMock).toHaveBeenCalledTimes(1);
+
+    // A peer group commit also bumps the revision; the stale reconcile result
+    // (derived from a zero-group baseline) would erase it.
+    libraryStore.commit({ groups: [makeGroup("g-peer", [])] }, "remote");
+
+    await act(async () => {
+      releaseReconcile!();
+      await handlerDone;
+    });
+
+    expect(setDocs.mock.calls.find((c) => Array.isArray(c[0]))).toBeUndefined();
+    expect(setGroups.mock.calls.find((c) => Array.isArray(c[0]))).toBeUndefined();
+    unmount();
+  });
+
+  it("abandons the stale result when the directory generation moves mid-await", async () => {
+    let releaseReconcile: (() => void) | null = null;
+    const gate = new Promise<void>((resolve) => { releaseReconcile = resolve; });
+    const docsA = [makeDoc("a")];
+    libraryStore.seedDirectory("/notes", {
+      docs: docsA, groups: [], trashedNotes: [], activeNoteId: "a",
+    });
+    reconcileFolderMock.mockImplementationOnce(async () => {
+      await gate;
+      return { docs: [makeDoc("a")], groups: [], changed: true };
+    });
+
+    const { setDocs, unmount } = renderWatcherWithRerender(docsA);
+    await waitForRootHandler();
+
+    let handlerDone: Promise<unknown> = Promise.resolve();
+    await act(async () => {
+      handlerDone = Promise.resolve(refs.rootHandler!(IDLE_EVENT));
+      for (let i = 0; i < 20 && reconcileFolderMock.mock.calls.length === 0; i++) {
+        await Promise.resolve();
+      }
+    });
+    expect(reconcileFolderMock).toHaveBeenCalledTimes(1);
+
+    // Directory switch mid-await: the store now describes a different folder.
+    // The generation half of the token must abandon the pass.
+    libraryStore.seedDirectory("/other", {
+      docs: [makeDoc("z")], groups: [], trashedNotes: [], activeNoteId: "z",
+    });
+
+    await act(async () => {
+      releaseReconcile!();
+      await handlerDone;
+    });
+
+    expect(setDocs.mock.calls.find((c) => Array.isArray(c[0]))).toBeUndefined();
+    unmount();
+  });
+
   it("commits the reconcile result when no local mutation races the await", async () => {
     const docsA = [makeDoc("a")];
+    libraryStore.seedDirectory("/notes", {
+      docs: docsA, groups: [], trashedNotes: [], activeNoteId: "a",
+    });
     const reconciled = [makeDoc("a"), makeDoc("remote-new")];
     reconcileFolderMock.mockImplementationOnce(async () => ({
       docs: reconciled, groups: [], changed: true,
