@@ -7,6 +7,7 @@ import { syncGroupsSnapshotFromDisk, getNotesDir } from "./useNotesLoader";
 import type { LibrarySnapshot, LibraryUpdater } from "../utils/libraryStore";
 import type { Locale, NotesSortOrder } from "./useSettings";
 import type { NoteColorId } from "../utils/noteColors";
+import type { GroupMembershipOp, GroupUpsert, GroupsDelta } from "../utils/groupsDelta";
 
 interface DocUpdatedPayload {
   sourceWindow: string;
@@ -45,9 +46,29 @@ interface NoteColorUpdatedPayload {
   color: NoteColorId | null;
 }
 
+/**
+ * A groups CHANGE, not a groups snapshot — the same shift trash-updated made.
+ * Broadcasting the sender's whole array made every receiver adopt that
+ * window's view wholesale: a group created, renamed, or deleted concurrently
+ * in the receiving window was silently undone, an out-of-order event
+ * resurrected a deleted group, and the sender's per-machine `collapsed` state
+ * overwrote the receiver's. The delta describes only what the sender changed;
+ * receivers merge it into their own list with the same per-field clocks the
+ * on-disk mergeGroupEntries uses.
+ */
 interface GroupsUpdatedPayload {
   sourceWindow: string;
-  groups: NoteGroup[];
+  /** Shared meta of groups the sender created or changed. No collapsed (per-machine), no noteIds (carried as membership ops). */
+  upserted: GroupUpsert[];
+  /**
+   * Groups the sender deleted. Plain ids — group ids are uuids that are never
+   * reused (mergeGroupEntries never un-sets deletedAt and nothing recreates an
+   * id), so no incarnation guard is needed; a session tombstone set handles
+   * the removal-before-upsert ordering instead.
+   */
+  removedIds: string[];
+  /** Note membership moves, ordered by their `at` stamps across windows. */
+  membership: GroupMembershipOp[];
 }
 
 /**
@@ -154,9 +175,35 @@ export function emitNoteColorUpdated(docId: string, color: NoteColorId | null) {
   } satisfies NoteColorUpdatedPayload).catch(() => {});
 }
 
-export function emitGroupsUpdated(groups: NoteGroup[]) {
+// Newest membership stamp this window has seen per note — its own emitted
+// moves plus every peer op it recorded. `noteIds` carries no clock in the
+// store (membership clocks live in note sidecars), so the event channel keeps
+// its own, mirroring lastBodyAtByDoc.
+const lastMembershipAtByNote = new Map<string, number>();
+// Group ids retired this session, by a local delete or a peer removal. Group
+// ids are never reused, so membership here can never block a new group; the
+// set is the event-channel analogue of "deletedAt is never un-set" and stops
+// a late out-of-order upsert from resurrecting a deleted group.
+const retiredGroupIds = new Set<string>();
+
+/** Clears the group sync clocks. Exists so tests start from a known state. */
+export function resetGroupSyncClocks() {
+  lastMembershipAtByNote.clear();
+  retiredGroupIds.clear();
+}
+
+export function emitGroupsDelta(delta: GroupsDelta) {
+  const { upserted, removedIds, membership } = delta;
+  if (upserted.length === 0 && removedIds.length === 0 && membership.length === 0) return;
+  // Self-record like emitDocUpdated: our own change must beat a late peer
+  // event, so the clocks advance at emit time, not only on receipt.
+  for (const id of removedIds) retiredGroupIds.add(id);
+  for (const op of membership) {
+    const current = lastMembershipAtByNote.get(op.noteId) ?? 0;
+    if (op.at > current) lastMembershipAtByNote.set(op.noteId, op.at);
+  }
   emit("groups-updated", {
-    sourceWindow: WINDOW_LABEL, groups,
+    sourceWindow: WINDOW_LABEL, upserted, removedIds, membership,
   } satisfies GroupsUpdatedPayload).catch(() => {});
 }
 
@@ -338,9 +385,98 @@ export function useWindowSync(
       }),
 
       listen<GroupsUpdatedPayload>("groups-updated", (event) => {
-        const { sourceWindow, groups } = event.payload;
+        const { sourceWindow, upserted, removedIds, membership } = event.payload;
         if (sourceWindow === WINDOW_LABEL) return;
-        commitRemote(() => ({ groups }));
+
+        // Record removals and membership clocks BEFORE the commit (mirroring
+        // the doc-updated body clock): even a delta the commit declines must
+        // advance the clocks, or a duplicate delivery could apply later.
+        for (const id of removedIds) retiredGroupIds.add(id);
+        const freshOps = membership.filter((op) => (lastMembershipAtByNote.get(op.noteId) ?? 0) < op.at);
+        for (const op of freshOps) lastMembershipAtByNote.set(op.noteId, op.at);
+
+        commitRemote((current) => {
+          // No per-entry clone: every merge step below builds new objects for
+          // the entries it changes and passes the rest through by reference,
+          // so untouched groups keep their store-owned identity — the
+          // hydration epoch watcher records a peer touch per entry, and a
+          // clone-all base would mark EVERY group touched and make the
+          // hydration rebase keep stale projections for all of them.
+          let groups: NoteGroup[] = [...current.groups] as NoteGroup[];
+          let changed = false;
+          let orderDirty = false;
+
+          // 1. Removals — delete wins over everything, matching the disk rule
+          //    that deletedAt is never un-set.
+          if (removedIds.length > 0 && groups.some((g) => removedIds.includes(g.id))) {
+            groups = groups.filter((g) => !removedIds.includes(g.id));
+            changed = true;
+          }
+
+          // 2. Upserts — per-field clocks, exactly mergeGroupEntries' rules.
+          //    `collapsed` is per-machine ui-state and never crosses windows.
+          for (const u of upserted) {
+            if (retiredGroupIds.has(u.id)) continue;
+            const idx = groups.findIndex((g) => g.id === u.id);
+            if (idx < 0) {
+              groups = [...groups, { ...u, noteIds: [], collapsed: false }];
+              changed = true;
+              orderDirty = true;
+              continue;
+            }
+            const local = groups[idx];
+            let next = local;
+            if ((u.updatedAt ?? 0) > (local.updatedAt ?? 0)) {
+              next = { ...next, name: u.name, updatedAt: u.updatedAt };
+            }
+            if ((u.orderUpdatedAt ?? 0) > (local.orderUpdatedAt ?? 0)) {
+              next = { ...next, orderKey: u.orderKey, orderUpdatedAt: u.orderUpdatedAt };
+              orderDirty = true;
+            }
+            if (u.createdAt < next.createdAt) {
+              next = { ...next, createdAt: u.createdAt };
+              // createdAt is the comparator's tiebreaker, so adopting it can
+              // change the group's position too.
+              orderDirty = true;
+            }
+            if (next !== local) {
+              groups = groups.map((g, i) => (i === idx ? next : g));
+              changed = true;
+            }
+          }
+
+          // 3. Membership — set semantics: remove everywhere, add-if-absent to
+          //    the target. An op whose target group the receiver lacks (deleted
+          //    concurrently) degrades to remove-everywhere, matching disk.
+          for (const op of freshOps) {
+            const applied = groups.map((g) => {
+              if (g.id === op.groupId) {
+                return g.noteIds.includes(op.noteId) ? g : { ...g, noteIds: [...g.noteIds, op.noteId] };
+              }
+              return g.noteIds.includes(op.noteId)
+                ? { ...g, noteIds: g.noteIds.filter((id) => id !== op.noteId) }
+                : g;
+            });
+            if (applied.some((g, i) => g !== groups[i])) {
+              groups = applied;
+              changed = true;
+            }
+          }
+
+          if (!changed) return null;
+          // Array order IS the render order (the sidebar iterates the array),
+          // so an insert or an adopted orderKey re-sorts with the same
+          // comparator buildGroupsFromShared uses on load.
+          if (orderDirty) {
+            groups = [...groups].sort((a, b) => {
+              const ak = a.orderKey ?? "";
+              const bk = b.orderKey ?? "";
+              if (ak === bk) return a.createdAt - b.createdAt;
+              return ak < bk ? -1 : 1;
+            });
+          }
+          return { groups };
+        });
         // Keep saveManifest's deletion-detection snapshot aligned with what
         // the other window just observed on disk; otherwise deleting a group
         // here would silently fail to emit a tombstone.

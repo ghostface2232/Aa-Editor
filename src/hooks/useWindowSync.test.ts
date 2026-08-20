@@ -28,7 +28,8 @@ vi.mock("./useNotesLoader", () => ({
   getNotesDir: vi.fn(async () => "/notes"),
 }));
 
-import { useWindowSync, emitDocUpdated, resetDocBodyClocks } from "./useWindowSync";
+import { useWindowSync, emitDocUpdated, resetDocBodyClocks, resetGroupSyncClocks, emitGroupsDelta } from "./useWindowSync";
+import type { NoteGroup } from "../utils/noteTypes";
 
 function makeDoc(id: string): NoteDoc {
   return {
@@ -59,6 +60,7 @@ function renderWindowSync(
   settleRemoteDeletedDoc: (docId: string) => Promise<boolean>,
   initialDocs: NoteDoc[] = [makeDoc("a"), makeDoc("b")],
   initialTrashed: TrashedNote[] = [],
+  initialGroups: NoteGroup[] = [],
 ) {
   const openDocument = vi.fn();
   const onActiveDocChanged = vi.fn();
@@ -74,6 +76,7 @@ function renderWindowSync(
     // hook must express every remote change as one store updater.
     const store = useMemo(() => createLibraryStore({
       docs: initialDocs,
+      groups: initialGroups,
       trashedNotes: initialTrashed,
       activeNoteId: initialDocs[0]?.id ?? null,
       notesDirectory: "/notes",
@@ -107,6 +110,7 @@ function renderWindowSync(
 beforeEach(() => {
   refs.handlers.clear();
   resetDocBodyClocks();
+  resetGroupSyncClocks();
 });
 
 describe("useWindowSync — remote body update", () => {
@@ -406,5 +410,147 @@ describe("useWindowSync — trash changes", () => {
     });
 
     expect(result.current.snapshot.trashedNotes).toEqual([]);
+  });
+});
+
+describe("useWindowSync — groups delta", () => {
+  const group = (id: string, overrides: Partial<NoteGroup> = {}): NoteGroup => ({
+    id,
+    name: id.toUpperCase(),
+    noteIds: [],
+    collapsed: false,
+    createdAt: 1000,
+    orderKey: "m",
+    orderUpdatedAt: 1000,
+    updatedAt: 1000,
+    ...overrides,
+  });
+
+  const deliver = (payload: Record<string, unknown>) => {
+    refs.handlers.get("groups-updated")?.({
+      payload: { sourceWindow: "window-b", upserted: [], removedIds: [], membership: [], ...payload },
+    });
+  };
+
+  it("a concurrent local rename and a local group survive a peer delta", async () => {
+    const hook = renderWindowSync(async () => true, [makeDoc("a")], [], [
+      group("g1", { name: "Renamed locally", updatedAt: 5000 }),
+      group("g2"),
+    ]);
+    await waitFor(() => expect(refs.handlers.has("groups-updated")).toBe(true));
+
+    // Peer renamed g1 at an OLDER stamp and does not mention g2 at all.
+    act(() => deliver({ upserted: [{ id: "g1", name: "Peer name", createdAt: 1000, orderKey: "m", orderUpdatedAt: 1000, updatedAt: 3000 }] }));
+
+    const groups = hook.result.current.snapshot.groups;
+    expect(groups.find((g) => g.id === "g1")?.name).toBe("Renamed locally");
+    expect(groups.some((g) => g.id === "g2")).toBe(true);
+  });
+
+  it("adopts a newer peer rename and orderKey by their own clocks", async () => {
+    const hook = renderWindowSync(async () => true, [makeDoc("a")], [], [group("g1")]);
+    await waitFor(() => expect(refs.handlers.has("groups-updated")).toBe(true));
+
+    act(() => deliver({ upserted: [{ id: "g1", name: "Peer name", createdAt: 1000, orderKey: "x", orderUpdatedAt: 4000, updatedAt: 4000 }] }));
+
+    const g1 = hook.result.current.snapshot.groups.find((g) => g.id === "g1");
+    expect(g1?.name).toBe("Peer name");
+    expect(g1?.orderKey).toBe("x");
+  });
+
+  it("a removal retires the group even when its upsert arrives later", async () => {
+    const hook = renderWindowSync(async () => true, [makeDoc("a")], [], [group("g1")]);
+    await waitFor(() => expect(refs.handlers.has("groups-updated")).toBe(true));
+
+    act(() => deliver({ removedIds: ["g1"] }));
+    // Out-of-order: the (older) creation/rename upsert arrives after the delete.
+    act(() => deliver({ upserted: [{ id: "g1", name: "Zombie", createdAt: 900, orderKey: "m", orderUpdatedAt: 900, updatedAt: 900 }] }));
+
+    expect(hook.result.current.snapshot.groups.some((g) => g.id === "g1")).toBe(false);
+  });
+
+  it("a duplicate delivery is a no-op", async () => {
+    const hook = renderWindowSync(async () => true, [makeDoc("a")], [], [group("g1")]);
+    await waitFor(() => expect(refs.handlers.has("groups-updated")).toBe(true));
+
+    const payload = { membership: [{ noteId: "a", groupId: "g1", at: 2000 }] };
+    act(() => deliver(payload));
+    const after = hook.result.current.snapshot;
+    expect(after.groups.find((g) => g.id === "g1")?.noteIds).toEqual(["a"]);
+    act(() => deliver(payload));
+    expect(hook.result.current.snapshot).toBe(after);
+  });
+
+  it("membership ops apply by clock: an older op loses, a newer one wins", async () => {
+    const hook = renderWindowSync(async () => true, [makeDoc("a")], [], [
+      group("g1", { noteIds: ["a"] }),
+      group("g2"),
+    ]);
+    await waitFor(() => expect(refs.handlers.has("groups-updated")).toBe(true));
+
+    act(() => deliver({ membership: [{ noteId: "a", groupId: "g2", at: 3000 }] }));
+    expect(hook.result.current.snapshot.groups.find((g) => g.id === "g2")?.noteIds).toEqual(["a"]);
+
+    // A delayed op with an older stamp must not move the note back.
+    act(() => deliver({ membership: [{ noteId: "a", groupId: "g1", at: 2500 }] }));
+    expect(hook.result.current.snapshot.groups.find((g) => g.id === "g2")?.noteIds).toEqual(["a"]);
+  });
+
+  it("a local emit's own stamps beat a late peer op", async () => {
+    const hook = renderWindowSync(async () => true, [makeDoc("a")], [], [group("g1"), group("g2")]);
+    await waitFor(() => expect(refs.handlers.has("groups-updated")).toBe(true));
+
+    // This window moved a into g2 at t=5000 (self-record at emit time).
+    emitGroupsDelta({ upserted: [], removedIds: [], membership: [{ noteId: "a", groupId: "g2", at: 5000 }] });
+    act(() => deliver({ membership: [{ noteId: "a", groupId: "g1", at: 4000 }] }));
+
+    // The late peer op is stale; nothing moved into g1.
+    expect(hook.result.current.snapshot.groups.find((g) => g.id === "g1")?.noteIds).toEqual([]);
+  });
+
+  it("keeps the receiver's per-machine collapsed state on rename and insert", async () => {
+    const hook = renderWindowSync(async () => true, [makeDoc("a")], [], [
+      group("g1", { collapsed: true }),
+    ]);
+    await waitFor(() => expect(refs.handlers.has("groups-updated")).toBe(true));
+
+    act(() => deliver({
+      upserted: [
+        { id: "g1", name: "Renamed", createdAt: 1000, orderKey: "m", orderUpdatedAt: 1000, updatedAt: 4000 },
+        { id: "g-new", name: "New", createdAt: 2000, orderKey: "z", orderUpdatedAt: 2000, updatedAt: 2000 },
+      ],
+    }));
+
+    const groups = hook.result.current.snapshot.groups;
+    expect(groups.find((g) => g.id === "g1")?.collapsed).toBe(true);
+    expect(groups.find((g) => g.id === "g-new")?.collapsed).toBe(false);
+  });
+
+  it("inserts an unknown group at its orderKey position", async () => {
+    const hook = renderWindowSync(async () => true, [makeDoc("a")], [], [
+      group("g1", { orderKey: "a" }),
+      group("g3", { orderKey: "z" }),
+    ]);
+    await waitFor(() => expect(refs.handlers.has("groups-updated")).toBe(true));
+
+    act(() => deliver({ upserted: [{ id: "g2", name: "Mid", createdAt: 2000, orderKey: "m", orderUpdatedAt: 2000, updatedAt: 2000 }] }));
+
+    expect(hook.result.current.snapshot.groups.map((g) => g.id)).toEqual(["g1", "g2", "g3"]);
+  });
+
+  it("an op for a missing group removes the note everywhere; a same-delta upsert receives it", async () => {
+    const hook = renderWindowSync(async () => true, [makeDoc("a")], [], [
+      group("g1", { noteIds: ["a"] }),
+    ]);
+    await waitFor(() => expect(refs.handlers.has("groups-updated")).toBe(true));
+
+    act(() => deliver({
+      upserted: [{ id: "g-new", name: "New", createdAt: 2000, orderKey: "z", orderUpdatedAt: 2000, updatedAt: 2000 }],
+      membership: [{ noteId: "a", groupId: "g-new", at: 3000 }],
+    }));
+
+    const groups = hook.result.current.snapshot.groups;
+    expect(groups.find((g) => g.id === "g1")?.noteIds).toEqual([]);
+    expect(groups.find((g) => g.id === "g-new")?.noteIds).toEqual(["a"]);
   });
 });

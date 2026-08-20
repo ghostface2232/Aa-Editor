@@ -9,7 +9,8 @@ import {
 } from "./useNotesLoader";
 import { genOrderKeyAfter, genOrderKeyBefore, genOrderKeyBetween } from "../utils/groupsIO";
 import { setGroupCollapsedPersisted } from "./useUiState";
-import { emitGroupsUpdated } from "./useWindowSync";
+import { emitGroupsDelta } from "./useWindowSync";
+import { diffGroupsDelta } from "../utils/groupsDelta";
 
 function withUpdatedAt(g: NoteGroup, now: number, name?: boolean): NoteGroup {
   return name === false
@@ -31,14 +32,20 @@ export function useNoteGroups(
   // broadcast — never a pre-commit derivation.
   const persist = useCallback(
     (update: (prev: NoteGroup[]) => NoteGroup[]) => {
+      let prevGroups: NoteGroup[] | null = null;
       let committed: NoteGroup[] | null = null;
       setGroups((prev) => {
+        prevGroups = prev;
         committed = update(prev);
         return committed;
       });
-      if (!committed) return;
+      if (!prevGroups || !committed) return;
       void saveManifest(docs, docs[activeIndex]?.id ?? null, committed).catch(() => {});
-      emitGroupsUpdated(committed);
+      // Broadcast the CHANGE this mutation made — the diff between the
+      // updater's own prev and what it committed — never a whole array: a
+      // snapshot makes every receiver adopt this window's view wholesale,
+      // undoing their concurrent group changes.
+      emitGroupsDelta(diffGroupsDelta(prevGroups, committed));
     },
     [docs, activeIndex, setGroups],
   );

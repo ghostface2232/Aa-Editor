@@ -150,7 +150,7 @@ vi.mock("./useWindowSync", () => ({
   emitDocCreated: vi.fn(),
   emitDocDeleted: vi.fn(),
   emitDocRenamed: vi.fn(),
-  emitGroupsUpdated: vi.fn(),
+  emitGroupsDelta: vi.fn(),
   emitNoteColorUpdated: vi.fn(),
   emitNotePinnedUpdated: vi.fn(),
   emitTrashUpdated: vi.fn(),
@@ -2235,7 +2235,7 @@ describe("useFileSystem — functional group commits survive concurrent store ch
   // COMMITTED array, so a peer group commit landing during the disk awaits is
   // neither erased locally nor clobbered in the peer windows by a stale
   // snapshot.
-  const emitGroupsUpdatedMock = windowSyncModule.emitGroupsUpdated as ReturnType<typeof vi.fn>;
+  const emitGroupsDeltaMock = windowSyncModule.emitGroupsDelta as ReturnType<typeof vi.fn>;
 
   const group = (id: string, noteIds: string[]): NoteGroup =>
     ({ id, name: id.toUpperCase(), noteIds, collapsed: false, createdAt: 1000 });
@@ -2257,9 +2257,13 @@ describe("useFileSystem — functional group commits survive concurrent store ch
 
     const ids = libraryStore.getSnapshot().groups.map((g) => g.id).sort();
     expect(ids).toEqual(["g1", "peer-g"]);
-    // The broadcast carries the committed array including the peer group.
-    const lastEmit = emitGroupsUpdatedMock.mock.calls[emitGroupsUpdatedMock.mock.calls.length - 1]?.[0] as NoteGroup[] | undefined;
-    if (lastEmit) expect(lastEmit.some((g) => g.id === "peer-g")).toBe(true);
+    // The broadcast is a delta naming only THIS window's change — a snapshot
+    // mentioning (or omitting) peer-g would clobber the peer's own windows.
+    for (const call of emitGroupsDeltaMock.mock.calls) {
+      const delta = call[0] as { upserted: { id: string }[]; removedIds: string[] };
+      expect(delta.upserted.some((g) => g.id === "peer-g")).toBe(false);
+      expect(delta.removedIds).not.toContain("peer-g");
+    }
   });
 
   it("newNote keeps a peer group deletion that landed during its provision write", async () => {
@@ -2348,8 +2352,13 @@ describe("useFileSystem — functional group commits survive concurrent store ch
     const snapshot = libraryStore.getSnapshot().groups;
     expect(snapshot.find((g) => g.id === "g1")?.noteIds).toEqual(["a", "uuid-1"]);
     expect(snapshot.some((g) => g.id === "peer-g")).toBe(true);
-    const lastEmit = emitGroupsUpdatedMock.mock.calls[emitGroupsUpdatedMock.mock.calls.length - 1][0] as NoteGroup[];
-    expect(lastEmit.some((g) => g.id === "peer-g")).toBe(true);
+    // The delta names only the import's own membership op.
+    const lastEmit = emitGroupsDeltaMock.mock.calls[emitGroupsDeltaMock.mock.calls.length - 1][0] as {
+      upserted: { id: string }[]; removedIds: string[]; membership: { noteId: string; groupId: string | null }[];
+    };
+    expect(lastEmit.membership).toEqual([{ noteId: "uuid-1", groupId: "g1", at: expect.any(Number) }]);
+    expect(lastEmit.upserted).toEqual([]);
+    expect(lastEmit.removedIds).toEqual([]);
   });
 });
 

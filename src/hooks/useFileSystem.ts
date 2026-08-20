@@ -25,7 +25,8 @@ import type { Locale, NotesSortOrder } from "./useSettings";
 import { getDefaultDocumentTitle } from "../utils/documentTitle";
 import { normalizeNoteTitle } from "../utils/noteText";
 import { duplicateNoteAssets, removeNoteAssetDir } from "../utils/imageAssetUtils";
-import { emitDocCreated, emitDocDeleted, emitDocRenamed, emitGroupsUpdated, emitNoteColorUpdated, emitNotePinnedUpdated, emitTrashUpdated } from "./useWindowSync";
+import { emitDocCreated, emitDocDeleted, emitDocRenamed, emitGroupsDelta, emitNoteColorUpdated, emitNotePinnedUpdated, emitTrashUpdated } from "./useWindowSync";
+import { diffGroupsDelta, type GroupsDelta } from "../utils/groupsDelta";
 import type { NoteColorId } from "../utils/noteColors";
 import { markOwnWrite } from "./ownWriteTracker";
 import { setKnownDiskContent } from "../utils/conflictBackup";
@@ -548,8 +549,9 @@ export function useFileSystem(
     // the imports land ungrouped. The broadcast carries the COMMITTED array.
     let committedGroups: NoteGroup[] | null = null;
     if (inheritedGroupId) {
-      let groupsChanged = false;
+      let prevGroups: NoteGroup[] | null = null;
       setGroups?.((prev) => {
+        prevGroups = prev;
         if (!prev.some((g) => g.id === inheritedGroupId)) {
           committedGroups = prev;
           return prev;
@@ -559,11 +561,11 @@ export function useFileSystem(
             ? { ...g, noteIds: [...g.noteIds, ...importedIds.filter((nid) => !g.noteIds.includes(nid))] }
             : g,
         );
-        groupsChanged = next.some((g, i) => g !== prev[i]);
         committedGroups = next;
         return next;
       });
-      if (groupsChanged && committedGroups) emitGroupsUpdated(committedGroups);
+      // Broadcast the membership ops this commit made (empty delta → no emit).
+      if (prevGroups && committedGroups) emitGroupsDelta(diffGroupsDelta(prevGroups, committedGroups));
     }
 
     sortAndPersistDocs((prev) => {
@@ -666,10 +668,12 @@ export function useFileSystem(
       // The inherited-group membership is re-checked against `prev` — a peer
       // deleting that group mid-flight wins and the note lands ungrouped —
       // and tombstones come from the ids THIS commit actually dropped.
+      let prevGroups: NoteGroup[] | null = null;
       let committedGroups: NoteGroup[] | null = null;
       const droppedGroupIds: string[] = [];
       let groupsChanged = false;
       setGroups?.((prev) => {
+        prevGroups = prev;
         let next = prev;
         if (willReplace && currentDoc) {
           const leavingId = currentDoc.id;
@@ -701,11 +705,11 @@ export function useFileSystem(
         return committedGroups;
       });
       for (const droppedId of droppedGroupIds) markGroupAsDeleted(droppedId);
-      if (groupsChanged && committedGroups) {
-        // Broadcast the COMMITTED array, never the pre-commit derivation, so a
-        // peer group that survived the functional commit is not dropped in
-        // every other window by a stale snapshot.
-        emitGroupsUpdated(committedGroups);
+      if (groupsChanged && prevGroups && committedGroups) {
+        // Broadcast the CHANGE this commit made (drops + the new note's
+        // membership), never an array: a snapshot would clobber the peers'
+        // concurrent group changes.
+        emitGroupsDelta(diffGroupsDelta(prevGroups, committedGroups));
       }
       const replacedId = willReplace && currentDoc ? currentDoc.id : null;
       sortAndPersistDocs((prev) => [
@@ -949,7 +953,8 @@ export function useFileSystem(
       const published: {
         snapshot: LibrarySnapshot | null;
         activeBeforePublish: string | null;
-      } = { snapshot: null, activeBeforePublish: null };
+        groupsDelta: GroupsDelta | null;
+      } = { snapshot: null, activeBeforePublish: null, groupsDelta: null };
       const transaction = await runPersistenceTransaction(
         "deleteNotes",
         targetIds,
@@ -1123,6 +1128,9 @@ export function useFileSystem(
               ? { ...group, noteIds: group.noteIds.filter((id) => !deletedIds.has(id)) }
               : group
           ));
+          // The broadcastable change is the diff of THIS commit — the ops that
+          // strip the deleted notes' membership — not the latest whole array.
+          published.groupsDelta = diffGroupsDelta(current.groups, nextGroups);
           const movedAtPublish = result.moved.map((entry) => {
             const currentTrash = current.trashedNotes.find((note) => note.id === entry.id);
             if (currentTrash && currentTrash.trashedAt >= entry.trashedAt) return currentTrash;
@@ -1187,10 +1195,7 @@ export function useFileSystem(
         tiptapRef.current?.invalidateDocumentSession?.(doc.id, doc.filePath);
         emitDocDeleted(doc.id);
       }
-      emitGroupsUpdated(latest.groups.map((group) => ({
-        ...group,
-        noteIds: [...group.noteIds],
-      })));
+      if (published.groupsDelta) emitGroupsDelta(published.groupsDelta);
       emitTrashUpdated({
         added: latest.trashedNotes.filter((note) => deletedSet.has(note.id)).map((note) => ({ ...note })),
       });
@@ -1511,12 +1516,14 @@ export function useFileSystem(
       // trashedAt of the entry this restore retired, so the broadcast names the
       // incarnation it removed rather than the note id alone.
       restoredTrashedAt: number | null;
+      groupsDelta: GroupsDelta | null;
     } = {
       activeBeforePublish: null,
       applied: false,
       created: false,
       emptiedGroupIds: [],
       restoredTrashedAt: null,
+      groupsDelta: null,
     };
     let committedGeneration: number | null = null;
     try {
@@ -1717,6 +1724,7 @@ export function useFileSystem(
               return [{ ...group, noteIds: without }];
             });
             published.emptiedGroupIds = emptied;
+            published.groupsDelta = diffGroupsDelta(current.groups, nextGroups);
             return {
               docs: sortNotes(nextDocs, notesSortOrder, locale),
               groups: nextGroups,
@@ -1752,7 +1760,7 @@ export function useFileSystem(
           removed: [{ id: trashedNoteId, trashedAt: published.restoredTrashedAt }],
         });
       }
-      emitGroupsUpdated(latest.groups.map((group) => ({ ...group, noteIds: [...group.noteIds] })));
+      if (published.groupsDelta) emitGroupsDelta(published.groupsDelta);
       if (published.created) emitDocCreated(restoredDoc);
     } catch {
       // The transaction already logged the failure; the trash entry stays.
