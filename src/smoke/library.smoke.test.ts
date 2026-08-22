@@ -48,13 +48,17 @@ describe("smoke: a single window's session round-trips through disk", () => {
     expect(winA.membership()).toEqual({ g1: [NOTE_A] });
 
     // A second persist of unchanged state must not rewrite anything, or every
-    // idle pass would churn sidecars a cloud client then re-syncs.
+    // idle pass would churn sidecars a cloud client then re-syncs. Content
+    // equality alone cannot see that churn — a rewrite with identical bytes
+    // passes it — so the mutation log must stay quiet too.
     const readable = (snap: Map<string, Uint8Array | "<dir>">) => [...snap]
       .map(([k, v]) => [k, typeof v === "string" ? v : new TextDecoder().decode(v)])
       .sort();
     const before = readable(fs.snapshot());
+    const mutationsBefore = fs.mutationLog.length;
     await winA.persist();
     expect(readable(fs.snapshot())).toEqual(before);
+    expect(fs.mutationLog.slice(mutationsBefore)).toEqual([]);
   });
 
   it("a reconcile over an unchanged folder is a no-op", async () => {
@@ -78,11 +82,21 @@ describe("smoke: a single window's session round-trips through disk", () => {
     fs.seedTextFile(`${DIR}/${NOTE_B}.md`, `# ${NOTE_B}\n`);
     winB.commitDocs((prev) => [...prev, makeDoc(NOTE_B)]);
     await winB.persist();
+    const peerSidecarPath = `${DIR}/.meta/${NOTE_B}.json`;
+    const peerSidecarBefore = await fs.readTextFile(peerSidecarPath);
 
     const { committed } = await winA.reconcile();
 
     expect(committed).toBe(true);
     expect(winA.docs().map((d) => d.id).sort()).toEqual([NOTE_A, NOTE_B].sort());
+    // Adoption must come from the peer's sidecar, not the unmanaged-file ingest
+    // branch: ingest would re-derive timestamps from file stat (≈ now, not the
+    // 1000 the peer stamped) and rewrite the sidecar the peer just wrote —
+    // exactly the peer-erasure class this suite exists to catch.
+    const adopted = winA.docs().find((d) => d.id === NOTE_B)!;
+    expect(adopted.createdAt).toBe(1000);
+    expect(adopted.updatedAt).toBe(1000);
+    expect(await fs.readTextFile(peerSidecarPath)).toBe(peerSidecarBefore);
   });
 });
 
@@ -126,12 +140,13 @@ describe("smoke: concurrent windows do not erase each other", () => {
   it("does not resurrect a group deleted while its tombstone is unwritten", async () => {
     await seedSharedLibrary();
 
-    // Local delete: the group leaves the store, the tombstone is only marked.
-    winA.markGroupDeleted("g1", 1);
-    winA.commitGroups((prev) => prev.filter((g) => g.id !== "g1"));
-
-    // A reload races it — .groups.json still shows g1 alive.
+    // A reload is already reading the folder — .groups.json still shows g1
+    // alive — when the local delete lands: the group leaves the store and the
+    // tombstone is only marked, not yet written. The merge reads pending
+    // tombstones after its awaits, so it must see this one and not resurrect
+    // g1 from the stale file.
     const reload = winA.reloadGroups();
+    winA.markGroupDeleted("g1", 1);
     winA.commitGroups((prev) => prev.filter((g) => g.id !== "g1"));
     await reload;
     expect(winA.groups()).toEqual([]);
@@ -151,8 +166,7 @@ describe("smoke: concurrent windows do not erase each other", () => {
     // A peer always writes the body before broadcasting, so the note exists on
     // disk by the time its delta lands here.
     const peerId = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
-    fs.seedTextFile(`${DIR}/${peerId}.md`, `# ${peerId}
-`);
+    fs.seedTextFile(`${DIR}/${peerId}.md`, `# ${peerId}\n`);
     winB.commitDocs((prev) => [...prev, makeDoc(peerId)]);
     await winB.persist();
 
@@ -303,18 +317,27 @@ describe("smoke: unwritten local moves outrank the sidecars that lag them", () =
     ]);
     await winA.persist();
     await winA.loadDiscardingLocal();
+    // A new body appears on disk so the pass has a change to commit; without
+    // one it returns changed:false and never resolves membership at all.
+    fs.seedTextFile(`${DIR}/${NOTE_B}.md`, `# ${NOTE_B}\n`);
 
     const pass = winA.reconcile();
+    // Only the INTENT lands mid-pass. Its store-side groups commit is
+    // deliberately absent: any store commit would trip the token guard and
+    // abandon the pass (the abandon-and-retry test above owns that path), and
+    // with the store already showing the move, the final assertion would be
+    // satisfied whether or not the pass ever consulted the intent.
     winA.markMembership(NOTE_A, "g2", 9000);
-    winA.commitGroups((prev) => prev.map((g) => {
-      if (g.id === "g1") return { ...g, noteIds: [] };
-      if (g.id === "g2") return { ...g, noteIds: [NOTE_A] };
-      return g;
-    }));
-    await pass;
+    const result = await pass;
 
-    // Either the pass drifted (store moved) or it committed the merged result;
-    // what must never happen is the note snapping back to g1.
+    // The pass itself committed, and its result honours the mid-pass intent.
+    // (The intent lands before the pass's sidecar read, so reconcileFolder's
+    // own at-read copy carries it too — what this pins is the CALLER handing
+    // over the live map rather than a copy taken when the pass started. An
+    // intent recorded after the sidecar read is honoured via the live map
+    // alone and is not covered here.)
+    expect(result).toEqual({ changed: true, committed: true });
+    expect(winA.docs().map((d) => d.id).sort()).toEqual([NOTE_A, NOTE_B].sort());
     expect(winA.membership()).toEqual({ g1: [], g2: [NOTE_A] });
   });
 
@@ -363,9 +386,9 @@ describe("smoke: unwritten local moves outrank the sidecars that lag them", () =
     // therefore outside this harness — see the note at the top of the file.
 
     // A window opening the folder now sees the move. (winB is deliberately not
-    // reused here: its readAllMeta cache is still warm from its own write, so
-    // for up to the cache TTL it legitimately reads the pre-move sidecar —
-    // production closes that gap with the sync event channel, not with disk.)
+    // reused here: a running peer learns of the move through the sync event
+    // channel, which is Tauri-bound and outside this harness — winC models the
+    // one disk-only path a real window has, opening the folder fresh.)
     const winC = createSmokeWindow(fs, "window-c");
     await winC.loadDiscardingLocal();
     expect(winC.membership()).toEqual({ g1: [], g2: [NOTE_A] });

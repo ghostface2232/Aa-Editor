@@ -65,6 +65,13 @@ function decodeText(data: Uint8Array): string {
 export interface InMemoryFileSystem extends FileSystem {
   /** Test helper: dump the entire FS as a map of path → contents (text or bytes). */
   snapshot(): Map<string, Uint8Array | "<dir>">;
+  /** Test helper: normalized path of every content mutation (file write,
+   *  remove, rename destination) since creation, in order — seeds included,
+   *  directory creation excluded.
+   *  Lets tests assert "nothing was rewritten", which content comparison
+   *  cannot: a rewrite with identical bytes is invisible to snapshot().
+   *  The array is shared by reference, so spread facades append to it too. */
+  readonly mutationLog: readonly string[];
   /** Test helper: pre-seed text files. Creates parent directories as needed. */
   seedTextFile(path: string, content: string): void;
   /** Test helper: pre-seed binary files. Creates parent directories as needed. */
@@ -76,6 +83,7 @@ export interface InMemoryFileSystem extends FileSystem {
 export function createInMemoryFileSystem(): InMemoryFileSystem {
   const nodes = new Map<string, Node>();
   nodes.set("/", { kind: "dir", birthtime: new Date(), mtime: new Date() });
+  const mutationLog: string[] = [];
 
   function getNode(path: string): Node | undefined {
     return nodes.get(normalize(path));
@@ -133,6 +141,7 @@ export function createInMemoryFileSystem(): InMemoryFileSystem {
     const now = new Date();
     const birthtime = existing && existing.kind === "file" ? existing.birthtime : now;
     nodes.set(p, { kind: "file", data: new Uint8Array(data), birthtime, mtime: now });
+    mutationLog.push(p);
     touchParent(p);
   }
 
@@ -148,6 +157,7 @@ export function createInMemoryFileSystem(): InMemoryFileSystem {
       for (const child of children) nodes.delete(child);
     }
     nodes.delete(p);
+    mutationLog.push(p);
     touchParent(p);
   }
 
@@ -270,6 +280,7 @@ export function createInMemoryFileSystem(): InMemoryFileSystem {
           nodes.delete(child);
         }
       }
+      mutationLog.push(dst);
       touchParent(src);
       touchParent(dst);
     },
@@ -304,6 +315,7 @@ export function createInMemoryFileSystem(): InMemoryFileSystem {
     seedDir(path) {
       mkdirRecursive(path);
     },
+    mutationLog,
   };
 
   return fs;

@@ -102,6 +102,7 @@ vi.mock("../utils/fileTimestamps", () => ({
 
 vi.mock("../utils/metadataIO", () => ({
   readMeta: vi.fn(async (_fs: unknown, _dir: string, id: string) => refs.metaById.get(id) ?? null),
+  invalidateReadAllMetaCache: vi.fn(),
 }));
 
 vi.mock("../utils/conflictFileDetector", () => ({
@@ -118,9 +119,13 @@ vi.mock("../utils/crashLog", () => ({
 
 import { useFileWatcher } from "./useFileWatcher";
 import { reconcileFolder } from "../utils/reconcileFolder";
+import { invalidateReadAllMetaCache } from "../utils/metadataIO";
+import { readDiskGroupsSnapshot } from "./useNotesLoader";
 import { libraryStore } from "../utils/libraryStore";
 
 const reconcileFolderMock = vi.mocked(reconcileFolder);
+const invalidateReadAllMetaCacheMock = vi.mocked(invalidateReadAllMetaCache);
+const readDiskGroupsSnapshotMock = vi.mocked(readDiskGroupsSnapshot);
 
 function makeDoc(id: string, overrides: Partial<NoteDoc> = {}): NoteDoc {
   return {
@@ -897,5 +902,49 @@ describe("useFileWatcher — reconcile drift barrier (P0-5)", () => {
     expect(reconcileFolderMock).toHaveBeenCalledTimes(2);
     expect(maxActivePasses).toBe(1);
     unmount();
+  });
+});
+
+describe("useFileWatcher — convergence flows drop the readAllMeta cache first", () => {
+  // Regression for the within-TTL clobber: a reconcile fired by a foreign
+  // event used to consume sidecars cached by an autosave up to 500ms earlier,
+  // miss a cloud peer's just-synced sidecar, and re-ingest its body — rewriting
+  // the peer's sidecar with stat-derived timestamps and no group. The smoke
+  // suite's adoption test pins the disk-level outcome; these pin the
+  // production call sites the smoke harness mirrors: the invalidation must
+  // land before the flow's sidecar read, not merely somewhere in the pass.
+  it("invalidates before reconcileFolder reads sidecars", async () => {
+    renderWatcher({ docs: [makeDoc("a")] });
+    await waitForRootHandler();
+
+    await act(async () => {
+      await refs.rootHandler!({
+        type: { create: { kind: "file" } },
+        paths: ["/notes/new-peer-note.md"],
+        attrs: {},
+      } as unknown as WatchEvent);
+    });
+
+    expect(invalidateReadAllMetaCacheMock).toHaveBeenCalledWith(expect.anything(), "/notes");
+    expect(reconcileFolderMock).toHaveBeenCalled();
+    expect(invalidateReadAllMetaCacheMock.mock.invocationCallOrder[0])
+      .toBeLessThan(reconcileFolderMock.mock.invocationCallOrder[0]);
+  });
+
+  it("invalidates before the group reload reads sidecars", async () => {
+    renderWatcher({ docs: [], groups: [makeGroup("g1", [])] });
+    await waitForRootHandler();
+
+    await act(async () => {
+      await refs.rootHandler!({
+        type: { modify: { kind: "data", mode: "any" } },
+        paths: ["/notes/.groups.json"],
+        attrs: {},
+      } as unknown as WatchEvent);
+    });
+
+    expect(readDiskGroupsSnapshotMock).toHaveBeenCalled();
+    expect(invalidateReadAllMetaCacheMock.mock.invocationCallOrder[0])
+      .toBeLessThan(readDiskGroupsSnapshotMock.mock.invocationCallOrder[0]);
   });
 });

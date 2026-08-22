@@ -24,7 +24,7 @@ import { tauriFileSystem } from "../utils/fs";
 import type { TiptapEditorHandle } from "../components/TiptapEditor";
 import { isOwnWrite, isOwnWriteContentMatch, pruneOwnWrites, pathKey } from "./ownWriteTracker";
 import { getFileTimestamps } from "../utils/fileTimestamps";
-import { readMeta } from "../utils/metadataIO";
+import { readMeta, invalidateReadAllMetaCache } from "../utils/metadataIO";
 import { scanAndAbsorbConflicts } from "../utils/conflictFileDetector";
 import { setKnownDiskContent } from "../utils/conflictBackup";
 import { markdownEqual } from "../utils/markdownEqual";
@@ -94,6 +94,11 @@ export function useFileWatcher(
     if (migrationInProgress) return;
     const dir = await getNotesDir();
     try {
+      // Same rule as performReconcile: this reload runs because something
+      // signalled the folder changed, so the sidecars it merges membership
+      // from must be read after that signal — never the autosave-path TTL
+      // cache, which only our own writes keep consistent (see the note there).
+      invalidateReadAllMetaCache(tauriFileSystem, dir);
       await syncGroupsSnapshotFromDisk(dir);
       const disk = await readDiskGroupsSnapshot(dir);
       // Disk state is MERGED into the live groups with the same per-field
@@ -226,6 +231,20 @@ export function useFileWatcher(
     if (migrationInProgress) return;
     const dir = await getNotesDir();
     try { await scanAndAbsorbConflicts(tauriFileSystem, dir); } catch { /* best-effort */ }
+
+    // This pass exists to converge memory with the folder, and it runs because
+    // something signalled the folder changed under us (a watch event, a focus
+    // return, the periodic interval). readAllMeta's short TTL cache serves the
+    // autosave hot path and is kept consistent only with OUR writes — a
+    // sidecar a cloud client synced after the cache filled is invisible to it,
+    // and a pass reconciling against that view takes the unmanaged-file ingest
+    // branch for the peer's note: it rewrites the just-synced sidecar with
+    // stat-derived timestamps and no group, which then propagates back through
+    // the cloud. The external signal outranks the TTL: drop the cache so the
+    // pass reads sidecars no older than its own trigger. (The smoke suite's
+    // adoption test pins the disk-level outcome against the harness mirror of
+    // this flow.)
+    invalidateReadAllMetaCache(tauriFileSystem, dir);
 
     // Snapshot the exact state reconcile computes against. reconcileFolder awaits
     // full-folder disk reads that take seconds on a cloud placeholder; if a

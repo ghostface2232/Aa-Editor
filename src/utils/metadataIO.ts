@@ -48,6 +48,13 @@ export async function ensureMetaDir(fs: FileSystem, notesDir: string): Promise<s
 // later calls free; per-write hooks keep the cache consistent with our own
 // disk ops so we don't have to invalidate-then-refill.
 //
+// The cache is consistent with OUR writes only — it cannot see a sidecar a
+// cloud client syncs into the folder. So flows that run BECAUSE the folder
+// changed under us (useFileWatcher's performReconcile / reloadGroupsFromDisk)
+// call invalidateReadAllMetaCache on entry: the external signal outranks the
+// TTL, or a pass within the TTL of an autosave read would miss the peer's
+// sidecar and re-ingest its note. Autosave itself keeps the warm cache.
+//
 // Keyed by FileSystem instance via WeakMap so tests using fresh in-memory fs
 // instances get isolated cache automatically (no manual reset in beforeEach).
 interface ReadAllMetaCacheEntry {

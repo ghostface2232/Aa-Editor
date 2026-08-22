@@ -24,7 +24,7 @@ import {
   type PersistState,
 } from "../utils/decomposedState";
 import { readGroupsFile } from "../utils/groupsIO";
-import { readAllMeta } from "../utils/metadataIO";
+import { readAllMeta, invalidateReadAllMetaCache } from "../utils/metadataIO";
 import { reconcileFolder, createReconcileState, type ReconcileState } from "../utils/reconcileFolder";
 import { mergeDiskGroups } from "../utils/mergeDiskGroups";
 import type { FileSystem } from "../utils/fs";
@@ -45,6 +45,10 @@ export interface SmokeWindow {
   commitDocs(update: (prev: NoteDoc[]) => NoteDoc[]): void;
   /** Functional groups commit (mirrors commitGroupsUpdate: entries cloned first). */
   commitGroups(update: (prev: NoteGroup[]) => NoteGroup[]): void;
+  /** Drop this window's readAllMeta TTL cache, as production's convergence
+   *  flows do on entry. Called by every disk-reading flow below — see the
+   *  note at the method. */
+  invalidateOwnMetaCache(): void;
   /** Seed this window from disk, DISCARDING local state — this models the
    *  directory-switch seed, not the loader's `mergeHydratedLibrary` rebase
    *  (which is generation-bound and Tauri-side). */
@@ -103,7 +107,24 @@ export function createSmokeWindow(sharedFs: FileSystem, label: string): SmokeWin
       store.commit({ groups: next }, "local");
     },
 
+    // Mirrors the invalidateReadAllMetaCache call at the top of production's
+    // convergence flows (useFileWatcher.performReconcile and
+    // reloadGroupsFromDisk, plus the loader's directory seeds): a flow that
+    // runs because the folder changed under us must read sidecars no older
+    // than its trigger — never the autosave-path TTL cache, which only our
+    // own writes keep consistent. In these tests every step runs within one
+    // 500ms TTL window, so without the drop each disk-reading flow would
+    // re-read the sidecars as of this window's LAST read, and whether the
+    // fresh or the stale path ran would depend on wall-clock time.
+    // persist() deliberately does NOT drop the cache — faithful to
+    // production: autosave is the hot path the cache exists for, and
+    // writeMeta patches it in place for our own writes.
+    invalidateOwnMetaCache() {
+      invalidateReadAllMetaCache(fs, DIR);
+    },
+
     async loadDiscardingLocal() {
+      win.invalidateOwnMetaCache();
       const loaded = await loadDecomposedState(fs, DIR, {
         activeNoteId: null,
         lastOpenedNoteId: null,
@@ -141,6 +162,7 @@ export function createSmokeWindow(sharedFs: FileSystem, label: string): SmokeWin
     },
 
     async reloadGroups() {
+      win.invalidateOwnMetaCache();
       // Production runs this first, and it is load-bearing: it resets the
       // write snapshot to disk state, so a store reverted by an absolute
       // commit would then look snapshot-equal at persist time and never be
@@ -167,6 +189,7 @@ export function createSmokeWindow(sharedFs: FileSystem, label: string): SmokeWin
     },
 
     async reconcile() {
+      win.invalidateOwnMetaCache();
       const token = store.getToken();
       const baseline = store.getSnapshot();
       const result = await reconcileFolder(
