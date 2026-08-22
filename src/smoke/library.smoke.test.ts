@@ -140,12 +140,13 @@ describe("smoke: concurrent windows do not erase each other", () => {
   it("does not resurrect a group deleted while its tombstone is unwritten", async () => {
     await seedSharedLibrary();
 
-    // Local delete: the group leaves the store, the tombstone is only marked.
-    winA.markGroupDeleted("g1", 1);
-    winA.commitGroups((prev) => prev.filter((g) => g.id !== "g1"));
-
-    // A reload races it — .groups.json still shows g1 alive.
+    // A reload is already reading the folder — .groups.json still shows g1
+    // alive — when the local delete lands: the group leaves the store and the
+    // tombstone is only marked, not yet written. The merge reads pending
+    // tombstones after its awaits, so it must see this one and not resurrect
+    // g1 from the stale file.
     const reload = winA.reloadGroups();
+    winA.markGroupDeleted("g1", 1);
     winA.commitGroups((prev) => prev.filter((g) => g.id !== "g1"));
     await reload;
     expect(winA.groups()).toEqual([]);
