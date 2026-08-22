@@ -66,7 +66,8 @@ export interface InMemoryFileSystem extends FileSystem {
   /** Test helper: dump the entire FS as a map of path → contents (text or bytes). */
   snapshot(): Map<string, Uint8Array | "<dir>">;
   /** Test helper: normalized path of every content mutation (file write,
-   *  remove, rename destination) since creation, in order — seeds included.
+   *  remove, rename destination) since creation, in order — seeds included,
+   *  directory creation excluded.
    *  Lets tests assert "nothing was rewritten", which content comparison
    *  cannot: a rewrite with identical bytes is invisible to snapshot().
    *  The array is shared by reference, so spread facades append to it too. */
