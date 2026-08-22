@@ -330,8 +330,12 @@ describe("smoke: unwritten local moves outrank the sidecars that lag them", () =
     winA.markMembership(NOTE_A, "g2", 9000);
     const result = await pass;
 
-    // The pass itself committed, and its result honours the mid-pass intent —
-    // which it can only have seen through the live map.
+    // The pass itself committed, and its result honours the mid-pass intent.
+    // (The intent lands before the pass's sidecar read, so reconcileFolder's
+    // own at-read copy carries it too — what this pins is the CALLER handing
+    // over the live map rather than a copy taken when the pass started. An
+    // intent recorded after the sidecar read is honoured via the live map
+    // alone and is not covered here.)
     expect(result).toEqual({ changed: true, committed: true });
     expect(winA.docs().map((d) => d.id).sort()).toEqual([NOTE_A, NOTE_B].sort());
     expect(winA.membership()).toEqual({ g1: [], g2: [NOTE_A] });
