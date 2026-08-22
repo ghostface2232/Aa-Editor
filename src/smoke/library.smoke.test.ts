@@ -313,18 +313,23 @@ describe("smoke: unwritten local moves outrank the sidecars that lag them", () =
     ]);
     await winA.persist();
     await winA.loadDiscardingLocal();
+    // A new body appears on disk so the pass has a change to commit; without
+    // one it returns changed:false and never resolves membership at all.
+    fs.seedTextFile(`${DIR}/${NOTE_B}.md`, `# ${NOTE_B}\n`);
 
     const pass = winA.reconcile();
+    // Only the INTENT lands mid-pass. Its store-side groups commit is
+    // deliberately absent: any store commit would trip the token guard and
+    // abandon the pass (the abandon-and-retry test above owns that path), and
+    // with the store already showing the move, the final assertion would be
+    // satisfied whether or not the pass ever consulted the intent.
     winA.markMembership(NOTE_A, "g2", 9000);
-    winA.commitGroups((prev) => prev.map((g) => {
-      if (g.id === "g1") return { ...g, noteIds: [] };
-      if (g.id === "g2") return { ...g, noteIds: [NOTE_A] };
-      return g;
-    }));
-    await pass;
+    const result = await pass;
 
-    // Either the pass drifted (store moved) or it committed the merged result;
-    // what must never happen is the note snapping back to g1.
+    // The pass itself committed, and its result honours the mid-pass intent —
+    // which it can only have seen through the live map.
+    expect(result).toEqual({ changed: true, committed: true });
+    expect(winA.docs().map((d) => d.id).sort()).toEqual([NOTE_A, NOTE_B].sort());
     expect(winA.membership()).toEqual({ g1: [], g2: [NOTE_A] });
   });
 
