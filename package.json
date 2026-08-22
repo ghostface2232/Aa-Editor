@@ -14,6 +14,7 @@
     "sync-version": "node scripts/sync-version.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:smoke": "vitest run src/smoke",
     "lint": "eslint src",
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm run lint && npm test"
