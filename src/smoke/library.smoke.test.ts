@@ -48,13 +48,17 @@ describe("smoke: a single window's session round-trips through disk", () => {
     expect(winA.membership()).toEqual({ g1: [NOTE_A] });
 
     // A second persist of unchanged state must not rewrite anything, or every
-    // idle pass would churn sidecars a cloud client then re-syncs.
+    // idle pass would churn sidecars a cloud client then re-syncs. Content
+    // equality alone cannot see that churn — a rewrite with identical bytes
+    // passes it — so the mutation log must stay quiet too.
     const readable = (snap: Map<string, Uint8Array | "<dir>">) => [...snap]
       .map(([k, v]) => [k, typeof v === "string" ? v : new TextDecoder().decode(v)])
       .sort();
     const before = readable(fs.snapshot());
+    const mutationsBefore = fs.mutationLog.length;
     await winA.persist();
     expect(readable(fs.snapshot())).toEqual(before);
+    expect(fs.mutationLog.slice(mutationsBefore)).toEqual([]);
   });
 
   it("a reconcile over an unchanged folder is a no-op", async () => {
