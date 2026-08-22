@@ -45,8 +45,9 @@ export interface SmokeWindow {
   commitDocs(update: (prev: NoteDoc[]) => NoteDoc[]): void;
   /** Functional groups commit (mirrors commitGroupsUpdate: entries cloned first). */
   commitGroups(update: (prev: NoteGroup[]) => NoteGroup[]): void;
-  /** Drop this window's readAllMeta TTL cache, as elapsed wall-clock would.
-   *  Called by every disk-reading flow below — see the note at the method. */
+  /** Drop this window's readAllMeta TTL cache, as production's convergence
+   *  flows do on entry. Called by every disk-reading flow below — see the
+   *  note at the method. */
   invalidateOwnMetaCache(): void;
   /** Seed this window from disk, DISCARDING local state — this models the
    *  directory-switch seed, not the loader's `mergeHydratedLibrary` rebase
@@ -106,19 +107,15 @@ export function createSmokeWindow(sharedFs: FileSystem, label: string): SmokeWin
       store.commit({ groups: next }, "local");
     },
 
-    // readAllMeta caches per (fs, dir) for 500ms. In these tests every step
-    // runs within one TTL window, so without an explicit drop each disk-reading
-    // flow would re-read the sidecars as of this window's LAST read and never
-    // see what a peer wrote in between — and whether the fresh or the stale
-    // path runs would depend on wall-clock time. The drop models TTL expiry:
-    // these tests assert disk convergence, so the flows a disk event would
-    // trigger must deterministically read disk truth.
-    // Note what this does NOT model: production's watcher flows keep their
-    // warm cache, so a reconcile firing within the TTL of a prior read can
-    // still miss a cloud peer's just-synced sidecar and re-ingest the body.
-    // The sync event channel covers same-machine windows only; for cloud
-    // peers that within-TTL window is a known hazard this harness cannot
-    // regress-test.
+    // Mirrors the invalidateReadAllMetaCache call at the top of production's
+    // convergence flows (useFileWatcher.performReconcile and
+    // reloadGroupsFromDisk, plus the loader's directory seeds): a flow that
+    // runs because the folder changed under us must read sidecars no older
+    // than its trigger — never the autosave-path TTL cache, which only our
+    // own writes keep consistent. In these tests every step runs within one
+    // 500ms TTL window, so without the drop each disk-reading flow would
+    // re-read the sidecars as of this window's LAST read, and whether the
+    // fresh or the stale path ran would depend on wall-clock time.
     // persist() deliberately does NOT drop the cache — faithful to
     // production: autosave is the hot path the cache exists for, and
     // writeMeta patches it in place for our own writes.
