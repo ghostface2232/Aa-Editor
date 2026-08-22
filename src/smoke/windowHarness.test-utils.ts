@@ -24,7 +24,7 @@ import {
   type PersistState,
 } from "../utils/decomposedState";
 import { readGroupsFile } from "../utils/groupsIO";
-import { readAllMeta } from "../utils/metadataIO";
+import { readAllMeta, invalidateReadAllMetaCache } from "../utils/metadataIO";
 import { reconcileFolder, createReconcileState, type ReconcileState } from "../utils/reconcileFolder";
 import { mergeDiskGroups } from "../utils/mergeDiskGroups";
 import type { FileSystem } from "../utils/fs";
@@ -45,6 +45,9 @@ export interface SmokeWindow {
   commitDocs(update: (prev: NoteDoc[]) => NoteDoc[]): void;
   /** Functional groups commit (mirrors commitGroupsUpdate: entries cloned first). */
   commitGroups(update: (prev: NoteGroup[]) => NoteGroup[]): void;
+  /** Drop this window's readAllMeta TTL cache, as elapsed wall-clock would.
+   *  Called by every disk-reading flow below — see the note at the method. */
+  invalidateOwnMetaCache(): void;
   /** Seed this window from disk, DISCARDING local state — this models the
    *  directory-switch seed, not the loader's `mergeHydratedLibrary` rebase
    *  (which is generation-bound and Tauri-side). */
@@ -103,7 +106,22 @@ export function createSmokeWindow(sharedFs: FileSystem, label: string): SmokeWin
       store.commit({ groups: next }, "local");
     },
 
+    // readAllMeta caches per (fs, dir) for 500ms. In these tests every step
+    // runs within one TTL window, so without an explicit drop each disk-reading
+    // flow would re-read the sidecars as of this window's LAST read and never
+    // see what a peer wrote in between — and whether the fresh or the stale
+    // path runs would depend on wall-clock time. Production's watcher flows
+    // don't rely on the cache being fresh either (the sync event channel closes
+    // that gap); what these tests assert is disk convergence, so the flows a
+    // disk event would trigger must deterministically read disk truth.
+    // persist() deliberately does NOT drop it: autosave is the hot path the
+    // cache exists for, and writeMeta patches it in place for our own writes.
+    invalidateOwnMetaCache() {
+      invalidateReadAllMetaCache(fs, DIR);
+    },
+
     async loadDiscardingLocal() {
+      win.invalidateOwnMetaCache();
       const loaded = await loadDecomposedState(fs, DIR, {
         activeNoteId: null,
         lastOpenedNoteId: null,
@@ -141,6 +159,7 @@ export function createSmokeWindow(sharedFs: FileSystem, label: string): SmokeWin
     },
 
     async reloadGroups() {
+      win.invalidateOwnMetaCache();
       // Production runs this first, and it is load-bearing: it resets the
       // write snapshot to disk state, so a store reverted by an absolute
       // commit would then look snapshot-equal at persist time and never be
@@ -167,6 +186,7 @@ export function createSmokeWindow(sharedFs: FileSystem, label: string): SmokeWin
     },
 
     async reconcile() {
+      win.invalidateOwnMetaCache();
       const token = store.getToken();
       const baseline = store.getSnapshot();
       const result = await reconcileFolder(

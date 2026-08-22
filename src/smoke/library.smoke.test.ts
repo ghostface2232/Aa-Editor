@@ -78,11 +78,21 @@ describe("smoke: a single window's session round-trips through disk", () => {
     fs.seedTextFile(`${DIR}/${NOTE_B}.md`, `# ${NOTE_B}\n`);
     winB.commitDocs((prev) => [...prev, makeDoc(NOTE_B)]);
     await winB.persist();
+    const peerSidecarPath = `${DIR}/.meta/${NOTE_B}.json`;
+    const peerSidecarBefore = await fs.readTextFile(peerSidecarPath);
 
     const { committed } = await winA.reconcile();
 
     expect(committed).toBe(true);
     expect(winA.docs().map((d) => d.id).sort()).toEqual([NOTE_A, NOTE_B].sort());
+    // Adoption must come from the peer's sidecar, not the unmanaged-file ingest
+    // branch: ingest would re-derive timestamps from file stat (≈ now, not the
+    // 1000 the peer stamped) and rewrite the sidecar the peer just wrote —
+    // exactly the peer-erasure class this suite exists to catch.
+    const adopted = winA.docs().find((d) => d.id === NOTE_B)!;
+    expect(adopted.createdAt).toBe(1000);
+    expect(adopted.updatedAt).toBe(1000);
+    expect(await fs.readTextFile(peerSidecarPath)).toBe(peerSidecarBefore);
   });
 });
 
@@ -363,9 +373,9 @@ describe("smoke: unwritten local moves outrank the sidecars that lag them", () =
     // therefore outside this harness — see the note at the top of the file.
 
     // A window opening the folder now sees the move. (winB is deliberately not
-    // reused here: its readAllMeta cache is still warm from its own write, so
-    // for up to the cache TTL it legitimately reads the pre-move sidecar —
-    // production closes that gap with the sync event channel, not with disk.)
+    // reused here: a running peer learns of the move through the sync event
+    // channel, which is Tauri-bound and outside this harness — winC models the
+    // one disk-only path a real window has, opening the folder fresh.)
     const winC = createSmokeWindow(fs, "window-c");
     await winC.loadDiscardingLocal();
     expect(winC.membership()).toEqual({ g1: [], g2: [NOTE_A] });
