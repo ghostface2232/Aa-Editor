@@ -166,8 +166,7 @@ describe("smoke: concurrent windows do not erase each other", () => {
     // A peer always writes the body before broadcasting, so the note exists on
     // disk by the time its delta lands here.
     const peerId = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
-    fs.seedTextFile(`${DIR}/${peerId}.md`, `# ${peerId}
-`);
+    fs.seedTextFile(`${DIR}/${peerId}.md`, `# ${peerId}\n`);
     winB.commitDocs((prev) => [...prev, makeDoc(peerId)]);
     await winB.persist();
 
