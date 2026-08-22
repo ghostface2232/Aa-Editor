@@ -110,12 +110,18 @@ export function createSmokeWindow(sharedFs: FileSystem, label: string): SmokeWin
     // runs within one TTL window, so without an explicit drop each disk-reading
     // flow would re-read the sidecars as of this window's LAST read and never
     // see what a peer wrote in between — and whether the fresh or the stale
-    // path runs would depend on wall-clock time. Production's watcher flows
-    // don't rely on the cache being fresh either (the sync event channel closes
-    // that gap); what these tests assert is disk convergence, so the flows a
-    // disk event would trigger must deterministically read disk truth.
-    // persist() deliberately does NOT drop it: autosave is the hot path the
-    // cache exists for, and writeMeta patches it in place for our own writes.
+    // path runs would depend on wall-clock time. The drop models TTL expiry:
+    // these tests assert disk convergence, so the flows a disk event would
+    // trigger must deterministically read disk truth.
+    // Note what this does NOT model: production's watcher flows keep their
+    // warm cache, so a reconcile firing within the TTL of a prior read can
+    // still miss a cloud peer's just-synced sidecar and re-ingest the body.
+    // The sync event channel covers same-machine windows only; for cloud
+    // peers that within-TTL window is a known hazard this harness cannot
+    // regress-test.
+    // persist() deliberately does NOT drop the cache — faithful to
+    // production: autosave is the hot path the cache exists for, and
+    // writeMeta patches it in place for our own writes.
     invalidateOwnMetaCache() {
       invalidateReadAllMetaCache(fs, DIR);
     },
