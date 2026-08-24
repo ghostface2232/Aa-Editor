@@ -347,6 +347,16 @@ function EditorToolbarImpl({
     }
   }, [sidebarOpen]);
 
+  // Last applied layout, keyed by target element AND state — style writes
+  // happen only when the two-row state or the sidebar-dependent offsets
+  // actually change. Unconditional writes made the offsetHeight read below a
+  // forced synchronous reflow on EVERY ResizeObserver tick (i.e. every frame
+  // of a window resize drag); with the gate, steady-state ticks are pure
+  // reads against already-clean layout. The element is part of the identity
+  // because the tools div unmounts with a null editor — a recreated node
+  // starts without the inline styles the key claims were applied.
+  const lastLayoutRef = useRef<{ el: HTMLElement; key: string } | null>(null);
+
   const measure = useCallback(() => {
     const g = gridRef.current;
     const t = toolsRef.current;
@@ -355,13 +365,17 @@ function EditorToolbarImpl({
     if (t) {
       const needs = !!editor && g.clientWidth < BREAKPOINT;
       isTwoRows.current = needs;
-      applyLayout(t, needs);
+      const layoutKey = `${needs}:${sidebarOpen}`;
+      if (lastLayoutRef.current?.el !== t || lastLayoutRef.current.key !== layoutKey) {
+        lastLayoutRef.current = { el: t, key: layoutKey };
+        applyLayout(t, needs);
+      }
     }
 
     const h = g.offsetHeight;
     setBarHeight(h);
     onBarHeight?.(h);
-  }, [applyLayout, editor, onBarHeight]);
+  }, [applyLayout, editor, onBarHeight, sidebarOpen]);
 
   useEffect(() => {
     const el = gridRef.current;
