@@ -61,7 +61,14 @@ export const useStyles = makeStyles({
     gap: "2px",
     "--sidebar-mask-top": "0px",
     "--sidebar-mask-bottom": "0px",
-    maskImage: "linear-gradient(to bottom, transparent, black var(--sidebar-mask-top), black calc(100% - var(--sidebar-mask-bottom)), transparent)",
+    // The mask exists only while a fade is visible (data-mask-active, kept
+    // through the fade-out by the Sidebar). A permanently applied mask — even
+    // with both stops at 0px — forces this scroll layer through an offscreen
+    // render target on every repaint, which a window-resize drag pays per
+    // frame.
+    "&[data-mask-active='true']": {
+      maskImage: "linear-gradient(to bottom, transparent, black var(--sidebar-mask-top), black calc(100% - var(--sidebar-mask-bottom)), transparent)",
+    },
     transitionProperty: "--sidebar-mask-top, --sidebar-mask-bottom",
     transitionDuration: MOTION_DURATION_SLOWER,
     transitionTimingFunction: "ease",
@@ -145,7 +152,10 @@ export const useStyles = makeStyles({
     gap: "2px",
     "--sidebar-mask-top": "0px",
     "--sidebar-mask-bottom": "0px",
-    maskImage: "linear-gradient(to bottom, transparent, black var(--sidebar-mask-top), black calc(100% - var(--sidebar-mask-bottom)), transparent)",
+    // See sidebarBody: mask only while a fade is visible.
+    "&[data-mask-active='true']": {
+      maskImage: "linear-gradient(to bottom, transparent, black var(--sidebar-mask-top), black calc(100% - var(--sidebar-mask-bottom)), transparent)",
+    },
     transitionProperty: "--sidebar-mask-top, --sidebar-mask-bottom",
     transitionDuration: MOTION_DURATION_SLOWER,
     transitionTimingFunction: "ease",

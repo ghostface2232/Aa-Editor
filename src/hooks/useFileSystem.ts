@@ -331,14 +331,19 @@ export function useFileSystem(
     const leaving = baseDocs.find((d) => d.id === leavingDocId);
     if (!leaving) return { docs: baseDocs, groups: currentGroups };
     const currentContent = leaving.content.trim();
+    if (currentContent || leaving.customName || baseDocs.length <= 1) {
+      return { docs: baseDocs, groups: currentGroups };
+    }
     // The docs list can lag the live editor: autosave just committed (isDirty
     // false) but the user typed once more before triggering the switch. Every
     // caller passes the doc the editor is still showing at this point, so
     // consult the editor directly — pruning on the stale list alone would
     // remove the file while a queued background save for it exists, and the
-    // cancelDocSave below would then drop that save, losing the input.
-    const liveContent = getCurrentMarkdown(tiptapRef).trim();
-    if (currentContent || liveContent || leaving.customName || baseDocs.length <= 1) {
+    // cancelDocSave below would then drop that save, losing the input. The
+    // read is a full-document serialization, so it runs only once the checks
+    // above say the doc is otherwise prunable — never on the common
+    // non-empty switch.
+    if (getCurrentMarkdown(tiptapRef).trim()) {
       return { docs: baseDocs, groups: currentGroups };
     }
 
@@ -809,16 +814,16 @@ export function useFileSystem(
     // the stale liveDocs would mis-route to the fast path, queue a background
     // save with the real (non-empty) content, and pruneEmptyCurrentDoc would
     // simultaneously delete the file — a guaranteed race.
+    //
+    // The editor read is a full-document serialization, so it is the LAST
+    // condition: it runs only for an empty-in-the-list, auto-titled doc that
+    // is not the only one — never on the common non-empty switch.
     const leavingDoc = liveDocs[currentActiveIndex];
-    const leavingHasContent = !!leavingDoc
-      && (
-        leavingDoc.content.trim() !== ""
-        || getCurrentMarkdown(tiptapRef).trim() !== ""
-      );
     const isPruneCandidate = !!leavingDoc
-      && !leavingHasContent
       && !leavingDoc.customName
-      && liveDocs.length > 1;
+      && liveDocs.length > 1
+      && leavingDoc.content.trim() === ""
+      && getCurrentMarkdown(tiptapRef).trim() === "";
 
     // Slow path absorbs both (a) prune candidates that need save-before-delete
     // serialization and (b) the defensive case where the capture ref hasn't

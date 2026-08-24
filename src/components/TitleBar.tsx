@@ -196,10 +196,18 @@ function TitleBarImpl({
     let unlisten: (() => void) | undefined;
     let active = true;
 
+    let coalesceTimer: number | null = null;
     appWindow.isMaximized().then((v) => { if (active) setIsMaximized(v); }).catch(() => {});
     appWindow
       .onResized(() => {
-        appWindow.isMaximized().then((v) => { if (active) setIsMaximized(v); }).catch(() => {});
+        // Trailing-edge coalesce: no isMaximized IPC per drag-resize tick —
+        // the flag flips only on discrete maximize/restore transitions, so
+        // one query after the burst settles keeps the caption icon correct.
+        if (coalesceTimer !== null) window.clearTimeout(coalesceTimer);
+        coalesceTimer = window.setTimeout(() => {
+          coalesceTimer = null;
+          appWindow.isMaximized().then((v) => { if (active) setIsMaximized(v); }).catch(() => {});
+        }, 100);
       })
       .then((fn) => {
         if (active) unlisten = fn;
@@ -209,6 +217,7 @@ function TitleBarImpl({
 
     return () => {
       active = false;
+      if (coalesceTimer !== null) window.clearTimeout(coalesceTimer);
       unlisten?.();
     };
   }, []);

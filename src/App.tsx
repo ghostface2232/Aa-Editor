@@ -199,25 +199,40 @@ function App() {
     let unlisten: (() => void) | undefined;
     let disposed = false;
     let prevMaximized = false;
+    let coalesceTimer: number | null = null;
     const win = getCurrentWindow();
     win.isMaximized().then((m) => { prevMaximized = m; }).catch(() => {});
     win
       .onResized(() => {
-        void (async () => {
-          const maximized = await win.isMaximized().catch(() => false);
-          const wasMaximized = prevMaximized;
-          prevMaximized = maximized;
-          if (wasMaximized && !maximized) {
-            void ensureWindowFitsPanels(minWidthRef.current);
-          }
-        })();
+        // Coalesce to the trailing edge: an edge drag emits a resize event
+        // per mouse move, and querying isMaximized (an IPC round-trip) on
+        // every one of them competes with the drag itself. The maximized
+        // flag only changes on discrete transitions, so sampling once after
+        // the burst settles detects the same restore.
+        if (coalesceTimer !== null) window.clearTimeout(coalesceTimer);
+        coalesceTimer = window.setTimeout(() => {
+          coalesceTimer = null;
+          void (async () => {
+            if (disposed) return;
+            const maximized = await win.isMaximized().catch(() => false);
+            const wasMaximized = prevMaximized;
+            prevMaximized = maximized;
+            if (wasMaximized && !maximized) {
+              void ensureWindowFitsPanels(minWidthRef.current);
+            }
+          })();
+        }, 100);
       })
       .then((fn) => {
         if (disposed) fn();
         else unlisten = fn;
       })
       .catch(() => {});
-    return () => { disposed = true; unlisten?.(); };
+    return () => {
+      disposed = true;
+      if (coalesceTimer !== null) window.clearTimeout(coalesceTimer);
+      unlisten?.();
+    };
   }, [ensureWindowFitsPanels]);
   const [sidebarResizing, setSidebarResizing] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -738,6 +753,16 @@ function App() {
   }, [activeIndex, docs, state]);
 
   const handleOpenSettings = useCallback(() => setSettingsOpen(true), []);
+
+  // Sidebar prop handlers must be identity-stable: Sidebar is memoized, and a
+  // fresh arrow here would put the full note-list reconciliation back on every
+  // App render.
+  const handleSidebarSearchClose = useCallback(() => {
+    setSidebarSearchOpen(false);
+    setSidebarSearchQuery("");
+  }, []);
+  const handlePendingRenameGroupIdClear = useCallback(() => setPendingRenameGroupId(null), []);
+  const handleClearColorFilter = useCallback(() => { void updateSetting("colorFilter", null); }, [updateSetting]);
 
   const handleUpdateParagraphSpacing = useCallback((v: ParagraphSpacing) => {
     void updateSetting("paragraphSpacing", v);
@@ -1471,7 +1496,7 @@ function App() {
               sidebarSearchOpen={sidebarSearchOpen}
               sidebarSearchQuery={sidebarSearchQuery}
               onSidebarSearchQueryChange={setSidebarSearchQuery}
-              onSidebarSearchClose={() => { setSidebarSearchOpen(false); setSidebarSearchQuery(""); }}
+              onSidebarSearchClose={handleSidebarSearchClose}
               groups={groups}
               onCreateGroup={noteGroups.createGroup}
               onRenameGroup={noteGroups.renameGroup}
@@ -1487,11 +1512,11 @@ function App() {
               selectMode={selectMode}
               onSelectModeChange={setSelectMode}
               pendingRenameGroupId={pendingRenameGroupId}
-              onPendingRenameGroupIdClear={() => setPendingRenameGroupId(null)}
+              onPendingRenameGroupIdClear={handlePendingRenameGroupIdClear}
               updateAvailable={updater.state.status === "available" || updater.state.status === "downloading" || updater.state.status === "ready"}
               isDarkMode={isDarkMode}
               colorFilter={settings.colorFilter}
-              onClearColorFilter={() => { void updateSetting("colorFilter", null); }}
+              onClearColorFilter={handleClearColorFilter}
               deleteUndoToast={deleteUndoToast}
               onUndoDelete={handleUndoDelete}
               onDismissDeleteUndoToast={dismissDeleteUndoToast}

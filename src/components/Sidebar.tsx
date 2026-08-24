@@ -326,7 +326,11 @@ interface SidebarProps {
   onDeleteUndoToastHoverEnd: () => void;
 }
 
-export function Sidebar({
+// Memoized: App re-renders for reasons unrelated to the sidebar (toolbar
+// height on window resize, editor chrome state), and an unmemoized Sidebar
+// re-reconciled the full note list on every one of them. All props must stay
+// identity-stable in App across such renders for this to hold.
+export const Sidebar = memo(function Sidebar({
   docs,
   activeIndex,
   getDocumentContent,
@@ -398,6 +402,30 @@ export function Sidebar({
   const [scrollAtBottom, setScrollAtBottom] = useState(true);
   const [allScrollTop, setAllScrollTop] = useState(true);
   const [allScrollBottom, setAllScrollBottom] = useState(true);
+
+  // The fade mask is applied only while visible (styles key off
+  // data-mask-active): a permanently masked scroll layer renders through an
+  // offscreen target on every repaint. "Visible" includes the pane itself:
+  // both panes stay mounted in the sliding viewTrack, and without the
+  // inAllNotes term the hidden pane's overflowing list would hold its mask
+  // attached indefinitely. Activation is immediate; deactivation waits out
+  // the 300ms stop fade-out (and the 250ms pane slide) so the mask does not
+  // pop off mid-fade or mid-slide.
+  const MASK_FADE_OUT_MS = 320;
+  const bodyMaskNeeded = !inAllNotes && (!scrollAtTop || !scrollAtBottom);
+  const [bodyMaskActive, setBodyMaskActive] = useState(false);
+  useEffect(() => {
+    if (bodyMaskNeeded) { setBodyMaskActive(true); return; }
+    const timer = window.setTimeout(() => setBodyMaskActive(false), MASK_FADE_OUT_MS);
+    return () => window.clearTimeout(timer);
+  }, [bodyMaskNeeded]);
+  const allMaskNeeded = inAllNotes && (!allScrollTop || !allScrollBottom);
+  const [allMaskActive, setAllMaskActive] = useState(false);
+  useEffect(() => {
+    if (allMaskNeeded) { setAllMaskActive(true); return; }
+    const timer = window.setTimeout(() => setAllMaskActive(false), MASK_FADE_OUT_MS);
+    return () => window.clearTimeout(timer);
+  }, [allMaskNeeded]);
 
   // Sync the fade masks to a scroll container's true overflow state. The mask
   // is keyed off being parked at an edge, so this must run on mount and after
@@ -595,7 +623,15 @@ export function Sidebar({
   }, [editingGroupId]);
 
 
+  // Ref-pinned like the row handlers below: commitRename goes to every
+  // NoteRow, so a `docs` dependency here would change its identity on every
+  // docs commit (each dirty switch, each background save) and defeat
+  // React.memo for all rows in both panes. Reads happen at commit time from
+  // .current so they always see the latest state.
+  const commitRenameStateRef = useRef({ editingNoteId, editingValue, docs, onRenameNote });
+  commitRenameStateRef.current = { editingNoteId, editingValue, docs, onRenameNote };
   const commitRename = useCallback(() => {
+    const { editingNoteId, editingValue, docs, onRenameNote } = commitRenameStateRef.current;
     if (editingNoteId !== null) {
       // Resolve the index at commit time — docs may have re-sorted since
       // editing began.
@@ -606,7 +642,7 @@ export function Sidebar({
       }
       setEditingNoteId(null);
     }
-  }, [editingNoteId, editingValue, docs, onRenameNote]);
+  }, []);
 
   const commitGroupRename = useCallback(() => {
     if (editingGroupId !== null) {
@@ -1283,6 +1319,7 @@ export function Sidebar({
             inert={inAllNotes}
             data-scroll-top={scrollAtTop ? "true" : "false"}
             data-scroll-bottom={scrollAtBottom ? "true" : "false"}
+            data-mask-active={bodyMaskActive ? "true" : "false"}
             onScroll={(e) => {
               measureScrollEdges(e.target as HTMLElement, setScrollAtTop, setScrollAtBottom);
             }}
@@ -1385,6 +1422,7 @@ export function Sidebar({
               className={styles.allNotesScroll}
               data-scroll-top={allScrollTop ? "true" : "false"}
               data-scroll-bottom={allScrollBottom ? "true" : "false"}
+              data-mask-active={allMaskActive ? "true" : "false"}
               onScroll={(e) => {
                 measureScrollEdges(e.target as HTMLElement, setAllScrollTop, setAllScrollBottom);
               }}
@@ -1571,4 +1609,4 @@ export function Sidebar({
       />
     </div>
   );
-}
+});
