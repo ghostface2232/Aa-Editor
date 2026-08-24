@@ -777,17 +777,17 @@ export function SettingsModal({ open, onClose, settings, isDarkMode, onUpdate, c
                     <div style={{ fontSize: "13px", color: tokens.colorNeutralForeground3, lineHeight: "1.6" }}>
                       {locale === "ko" ? (
                         <>
-                          · 여러 창과 클라우드 동기화에서 삭제된 노트가 되살아나지 않도록 충돌 처리 강화<br />
-                          · 원격 삭제, 충돌 백업, 마지막 노트 전환의 데이터 보호와 동기화 안정성 개선<br />
-                          · 대용량 노트의 툴바, 상태 표시, 파일 감시, 이미지 렌더링 성능 개선<br />
-                          · 포커스 모드, 앵커 링크, 긴 표 메뉴와 Tiptap 호환성 문제 수정
+                          · 라이브러리 상태를 단일 정준 저장소로 재구축해 여러 창·클라우드 동기화의 유실과 되살아남 방지<br />
+                          · 삭제·복원·그룹 이동을 델타로 동기화하고 로딩 중에도 다른 창의 변경이 보존되도록 개선<br />
+                          · 창 크기 조절과 노트 전환이 더 부드럽도록 렌더링·저장 경로 성능 개선<br />
+                          · 찾기 및 바꾸기에 대소문자 구분 옵션 추가, 사이드바 단축키와 위키 링크 문제 수정
                         </>
                       ) : (
                         <>
-                          · Strengthened conflict handling so deleted notes stay deleted across windows and cloud sync<br />
-                          · Improved data safety for remote deletion, conflict backups, and last-note transitions<br />
-                          · Improved toolbar, status, file-watching, and image-rendering performance for large notes<br />
-                          · Fixed focus mode, anchor links, long-table menus, and Tiptap compatibility issues
+                          · Rebuilt library state on a single canonical store so multi-window and cloud sync can no longer lose or resurrect notes<br />
+                          · Deletes, restores, and group moves now sync as deltas, and edits from other windows survive loading<br />
+                          · Smoother window resizing and faster note switching via rendering and save-path performance work<br />
+                          · Added a match-case option to find and replace; fixed sidebar shortcut and wiki-link issues
                         </>
                       )}
                     </div>
