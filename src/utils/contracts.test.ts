@@ -354,7 +354,12 @@ describe("contract: switchDocument's prune detector consults the live editor", (
 
   it("isPruneCandidate definition references getCurrentMarkdown(tiptapRef)", () => {
     const text = read(FS_FILE);
-    const block = text.match(/const switchDocument[\s\S]*?const isPruneCandidate[\s\S]*?\n\n/);
+    // Anchor to the initializer expression alone (declaration up to its first
+    // semicolon, which nothing inside the boolean chain contains). A wider
+    // span covering switchDocument's head would let a future comment that
+    // merely mentions getCurrentMarkdown satisfy the pin with the actual
+    // editor read removed.
+    const block = text.match(/const isPruneCandidate =[\s\S]*?;/);
     expect(block, "switchDocument's isPruneCandidate definition not found").not.toBeNull();
     expect(block![0]).toMatch(/getCurrentMarkdown\(tiptapRef\)/);
   });
