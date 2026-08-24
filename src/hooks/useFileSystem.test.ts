@@ -17,6 +17,7 @@ const refs = vi.hoisted(() => ({
   readFaultByPath: new Map<string, Error>(),
   copyFileShouldThrow: null as Error | null,
   editorContent: "",
+  editorReads: 0,
   uuidCounter: 0,
   librarySnapshot: null as LibrarySnapshot | null,
   beforeTransactionPublish: null as (() => void | Promise<void>) | null,
@@ -332,7 +333,7 @@ function renderFs(opts: RenderOpts = {}) {
   const focusEditor = opts.focusEditor ?? vi.fn();
   const tiptapRef = {
     current: {
-      getEditor: () => ({ getMarkdown: () => refs.editorContent }),
+      getEditor: () => ({ getMarkdown: () => { refs.editorReads += 1; return refs.editorContent; } }),
       openDocument,
       invalidateDocumentSession,
       focus: focusEditor,
@@ -388,6 +389,7 @@ beforeEach(() => {
   refs.readFaultByPath = new Map();
   refs.copyFileShouldThrow = null;
   refs.editorContent = "";
+  refs.editorReads = 0;
   refs.uuidCounter = 0;
   refs.beforeTransactionPublish = null;
   refs.afterTransactionPublish = null;
@@ -1352,6 +1354,26 @@ describe("useFileSystem — switchDocument prunes an empty leaving doc", () => {
     expect(removeMock).not.toHaveBeenCalledWith("/notes/a.md");
     const lastDocs = [...libraryStore.getSnapshot().docs];
     expect(lastDocs.map((d) => d.id).sort()).toEqual(["a", "b"]);
+  });
+
+  it("never serializes the editor when the leaving doc is non-empty or custom-named", async () => {
+    // getCurrentMarkdown is a full-document serialization. The prune consults
+    // the live editor only for the docs-lag race (empty in the list, typed-in
+    // editor); on the common non-empty switch that read is discarded work, so
+    // it must not run at all — a large note would pay it on every switch.
+    const filled = makeDoc("a", { content: "has content" });
+    const named = makeDoc("b", { content: "", customName: true });
+    const other = makeDoc("c", { content: "x" });
+    const { result } = renderFs({ docs: [filled, named, other], activeIndex: 0 });
+
+    await act(async () => {
+      await result.current.switchDocument(1);
+    });
+    await act(async () => {
+      await result.current.switchDocument(2);
+    });
+
+    expect(refs.editorReads).toBe(0);
   });
 
   it("treats unsaved editor content as content (no prune) even when docs lag", async () => {
