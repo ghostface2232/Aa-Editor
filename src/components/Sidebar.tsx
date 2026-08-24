@@ -403,6 +403,26 @@ export const Sidebar = memo(function Sidebar({
   const [allScrollTop, setAllScrollTop] = useState(true);
   const [allScrollBottom, setAllScrollBottom] = useState(true);
 
+  // The fade mask is applied only while visible (styles key off
+  // data-mask-active): a permanently masked scroll layer renders through an
+  // offscreen target on every repaint. Activation is immediate; deactivation
+  // waits out the 300ms stop fade-out so the mask does not pop off mid-fade.
+  const MASK_FADE_OUT_MS = 320;
+  const bodyMaskNeeded = !scrollAtTop || !scrollAtBottom;
+  const [bodyMaskActive, setBodyMaskActive] = useState(false);
+  useEffect(() => {
+    if (bodyMaskNeeded) { setBodyMaskActive(true); return; }
+    const timer = window.setTimeout(() => setBodyMaskActive(false), MASK_FADE_OUT_MS);
+    return () => window.clearTimeout(timer);
+  }, [bodyMaskNeeded]);
+  const allMaskNeeded = !allScrollTop || !allScrollBottom;
+  const [allMaskActive, setAllMaskActive] = useState(false);
+  useEffect(() => {
+    if (allMaskNeeded) { setAllMaskActive(true); return; }
+    const timer = window.setTimeout(() => setAllMaskActive(false), MASK_FADE_OUT_MS);
+    return () => window.clearTimeout(timer);
+  }, [allMaskNeeded]);
+
   // Sync the fade masks to a scroll container's true overflow state. The mask
   // is keyed off being parked at an edge, so this must run on mount and after
   // any content/size change — not just on scroll — or a list that overflows on
@@ -1295,6 +1315,7 @@ export const Sidebar = memo(function Sidebar({
             inert={inAllNotes}
             data-scroll-top={scrollAtTop ? "true" : "false"}
             data-scroll-bottom={scrollAtBottom ? "true" : "false"}
+            data-mask-active={bodyMaskActive ? "true" : "false"}
             onScroll={(e) => {
               measureScrollEdges(e.target as HTMLElement, setScrollAtTop, setScrollAtBottom);
             }}
@@ -1397,6 +1418,7 @@ export const Sidebar = memo(function Sidebar({
               className={styles.allNotesScroll}
               data-scroll-top={allScrollTop ? "true" : "false"}
               data-scroll-bottom={allScrollBottom ? "true" : "false"}
+              data-mask-active={allMaskActive ? "true" : "false"}
               onScroll={(e) => {
                 measureScrollEdges(e.target as HTMLElement, setAllScrollTop, setAllScrollBottom);
               }}
