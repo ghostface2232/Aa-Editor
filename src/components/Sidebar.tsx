@@ -405,17 +405,21 @@ export const Sidebar = memo(function Sidebar({
 
   // The fade mask is applied only while visible (styles key off
   // data-mask-active): a permanently masked scroll layer renders through an
-  // offscreen target on every repaint. Activation is immediate; deactivation
-  // waits out the 300ms stop fade-out so the mask does not pop off mid-fade.
+  // offscreen target on every repaint. "Visible" includes the pane itself:
+  // both panes stay mounted in the sliding viewTrack, and without the
+  // inAllNotes term the hidden pane's overflowing list would hold its mask
+  // attached indefinitely. Activation is immediate; deactivation waits out
+  // the 300ms stop fade-out (and the 250ms pane slide) so the mask does not
+  // pop off mid-fade or mid-slide.
   const MASK_FADE_OUT_MS = 320;
-  const bodyMaskNeeded = !scrollAtTop || !scrollAtBottom;
+  const bodyMaskNeeded = !inAllNotes && (!scrollAtTop || !scrollAtBottom);
   const [bodyMaskActive, setBodyMaskActive] = useState(false);
   useEffect(() => {
     if (bodyMaskNeeded) { setBodyMaskActive(true); return; }
     const timer = window.setTimeout(() => setBodyMaskActive(false), MASK_FADE_OUT_MS);
     return () => window.clearTimeout(timer);
   }, [bodyMaskNeeded]);
-  const allMaskNeeded = !allScrollTop || !allScrollBottom;
+  const allMaskNeeded = inAllNotes && (!allScrollTop || !allScrollBottom);
   const [allMaskActive, setAllMaskActive] = useState(false);
   useEffect(() => {
     if (allMaskNeeded) { setAllMaskActive(true); return; }
