@@ -326,7 +326,11 @@ interface SidebarProps {
   onDeleteUndoToastHoverEnd: () => void;
 }
 
-export function Sidebar({
+// Memoized: App re-renders for reasons unrelated to the sidebar (toolbar
+// height on window resize, editor chrome state), and an unmemoized Sidebar
+// re-reconciled the full note list on every one of them. All props must stay
+// identity-stable in App across such renders for this to hold.
+export const Sidebar = memo(function Sidebar({
   docs,
   activeIndex,
   getDocumentContent,
@@ -595,7 +599,15 @@ export function Sidebar({
   }, [editingGroupId]);
 
 
+  // Ref-pinned like the row handlers below: commitRename goes to every
+  // NoteRow, so a `docs` dependency here would change its identity on every
+  // docs commit (each dirty switch, each background save) and defeat
+  // React.memo for all rows in both panes. Reads happen at commit time from
+  // .current so they always see the latest state.
+  const commitRenameStateRef = useRef({ editingNoteId, editingValue, docs, onRenameNote });
+  commitRenameStateRef.current = { editingNoteId, editingValue, docs, onRenameNote };
   const commitRename = useCallback(() => {
+    const { editingNoteId, editingValue, docs, onRenameNote } = commitRenameStateRef.current;
     if (editingNoteId !== null) {
       // Resolve the index at commit time — docs may have re-sorted since
       // editing began.
@@ -606,7 +618,7 @@ export function Sidebar({
       }
       setEditingNoteId(null);
     }
-  }, [editingNoteId, editingValue, docs, onRenameNote]);
+  }, []);
 
   const commitGroupRename = useCallback(() => {
     if (editingGroupId !== null) {
@@ -1571,4 +1583,4 @@ export function Sidebar({
       />
     </div>
   );
-}
+});

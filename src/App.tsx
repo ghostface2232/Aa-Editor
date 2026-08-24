@@ -739,6 +739,16 @@ function App() {
 
   const handleOpenSettings = useCallback(() => setSettingsOpen(true), []);
 
+  // Sidebar prop handlers must be identity-stable: Sidebar is memoized, and a
+  // fresh arrow here would put the full note-list reconciliation back on every
+  // App render.
+  const handleSidebarSearchClose = useCallback(() => {
+    setSidebarSearchOpen(false);
+    setSidebarSearchQuery("");
+  }, []);
+  const handlePendingRenameGroupIdClear = useCallback(() => setPendingRenameGroupId(null), []);
+  const handleClearColorFilter = useCallback(() => { void updateSetting("colorFilter", null); }, [updateSetting]);
+
   const handleUpdateParagraphSpacing = useCallback((v: ParagraphSpacing) => {
     void updateSetting("paragraphSpacing", v);
   }, [updateSetting]);
@@ -1471,7 +1481,7 @@ function App() {
               sidebarSearchOpen={sidebarSearchOpen}
               sidebarSearchQuery={sidebarSearchQuery}
               onSidebarSearchQueryChange={setSidebarSearchQuery}
-              onSidebarSearchClose={() => { setSidebarSearchOpen(false); setSidebarSearchQuery(""); }}
+              onSidebarSearchClose={handleSidebarSearchClose}
               groups={groups}
               onCreateGroup={noteGroups.createGroup}
               onRenameGroup={noteGroups.renameGroup}
@@ -1487,11 +1497,11 @@ function App() {
               selectMode={selectMode}
               onSelectModeChange={setSelectMode}
               pendingRenameGroupId={pendingRenameGroupId}
-              onPendingRenameGroupIdClear={() => setPendingRenameGroupId(null)}
+              onPendingRenameGroupIdClear={handlePendingRenameGroupIdClear}
               updateAvailable={updater.state.status === "available" || updater.state.status === "downloading" || updater.state.status === "ready"}
               isDarkMode={isDarkMode}
               colorFilter={settings.colorFilter}
-              onClearColorFilter={() => { void updateSetting("colorFilter", null); }}
+              onClearColorFilter={handleClearColorFilter}
               deleteUndoToast={deleteUndoToast}
               onUndoDelete={handleUndoDelete}
               onDismissDeleteUndoToast={dismissDeleteUndoToast}
