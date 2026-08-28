@@ -90,9 +90,54 @@ const useStyles = makeStyles({
   btnActive: {
     backgroundColor: tokens.colorNeutralBackground1Pressed,
   },
-  caseBtn: {
+  caseSwitch: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: "4px",
+    height: "28px",
+    border: "none",
+    borderRadius: "4px",
+    backgroundColor: "transparent",
+    color: tokens.colorNeutralForeground3,
+    cursor: "pointer",
+    flexShrink: 0,
+    padding: "0 4px",
+    marginRight: "2px",
     fontSize: "12px",
     fontFamily: "inherit",
+    lineHeight: 1,
+    ...pressableButton,
+    ":hover": {
+      backgroundColor: tokens.colorNeutralBackground1Hover,
+    },
+  },
+  caseSwitchOn: {
+    color: tokens.colorBrandForeground1,
+  },
+  caseTrack: {
+    position: "relative",
+    width: "22px",
+    height: "12px",
+    borderRadius: "6px",
+    backgroundColor: tokens.colorNeutralStrokeAccessible,
+    transition: "background-color 120ms ease",
+    flexShrink: 0,
+  },
+  caseTrackOn: {
+    backgroundColor: tokens.colorCompoundBrandBackground,
+  },
+  caseKnob: {
+    position: "absolute",
+    top: "2px",
+    left: "2px",
+    width: "8px",
+    height: "8px",
+    borderRadius: "50%",
+    backgroundColor: tokens.colorNeutralForegroundInverted,
+    transition: "transform 120ms ease",
+  },
+  caseKnobOn: {
+    transform: "translateX(10px)",
   },
   textBtn: {
     display: "inline-flex",
@@ -273,18 +318,22 @@ export function SearchBar({ editor, onClose, replaceOpen, onToggleReplace, local
           placeholder={i("search.placeholder")}
           spellCheck={false}
         />
-        <button
-          className={mergeClasses(styles.btn, styles.caseBtn, caseSensitive && styles.btnActive)}
-          onClick={toggleCaseSensitive}
-          title={i("search.caseSensitive")}
-          aria-label={i("search.caseSensitive")}
-          aria-pressed={caseSensitive}
-        >
-          Aa
-        </button>
         <span className={styles.count} style={{ visibility: query ? "visible" : "hidden" }}>
           {query ? (matchCount > 0 ? `${activeIndex + 1}/${matchCount}` : "0") : "0/0"}
         </span>
+        <button
+          className={mergeClasses(styles.caseSwitch, caseSensitive && styles.caseSwitchOn)}
+          onClick={toggleCaseSensitive}
+          title={i("search.caseSensitive")}
+          aria-label={i("search.caseSensitive")}
+          role="switch"
+          aria-checked={caseSensitive}
+        >
+          <span aria-hidden="true">Aa</span>
+          <span aria-hidden="true" className={mergeClasses(styles.caseTrack, caseSensitive && styles.caseTrackOn)}>
+            <span className={mergeClasses(styles.caseKnob, caseSensitive && styles.caseKnobOn)} />
+          </span>
+        </button>
         <button
           className={mergeClasses(styles.btn, replaceOpen && styles.btnActive)}
           onClick={() => onToggleReplace(!replaceOpen)}
