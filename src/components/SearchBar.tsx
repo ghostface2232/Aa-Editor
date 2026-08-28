@@ -29,7 +29,7 @@ const useStyles = makeStyles({
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: "8px",
     boxShadow: tokens.shadow8,
-    width: "280px",
+    width: "310px",
     pointerEvents: "auto",
   },
   topRow: {
