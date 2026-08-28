@@ -112,7 +112,7 @@ const useStyles = makeStyles({
     },
   },
   caseSwitchOn: {
-    color: tokens.colorBrandForeground1,
+    color: tokens.colorNeutralForeground1,
   },
   caseTrack: {
     position: "relative",
@@ -126,13 +126,14 @@ const useStyles = makeStyles({
     flexShrink: 0,
   },
   caseTrackOn: {
-    ...shorthands.borderColor(tokens.colorCompoundBrandBackground),
-    backgroundColor: tokens.colorCompoundBrandBackground,
+    ...shorthands.borderColor(tokens.colorNeutralForeground2),
+    backgroundColor: tokens.colorNeutralForeground2,
   },
   caseKnob: {
     position: "absolute",
-    top: "2px",
+    top: "50%",
     left: "2px",
+    marginTop: "-3px",
     width: "6px",
     height: "6px",
     borderRadius: "50%",
