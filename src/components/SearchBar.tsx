@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { makeStyles, mergeClasses, tokens } from "@fluentui/react-components";
+import { makeStyles, mergeClasses, shorthands, tokens } from "@fluentui/react-components";
 import {
   ArrowUpRegular,
   ArrowDownRegular,
@@ -116,28 +116,32 @@ const useStyles = makeStyles({
   },
   caseTrack: {
     position: "relative",
+    boxSizing: "border-box",
     width: "22px",
     height: "12px",
     borderRadius: "6px",
-    backgroundColor: tokens.colorNeutralStrokeAccessible,
-    transition: "background-color 120ms ease",
+    ...shorthands.border("1px", "solid", tokens.colorNeutralStrokeAccessible),
+    backgroundColor: "transparent",
+    ...shorthands.transition([["background-color", "120ms", "ease"], ["border-color", "120ms", "ease"]]),
     flexShrink: 0,
   },
   caseTrackOn: {
+    ...shorthands.borderColor(tokens.colorCompoundBrandBackground),
     backgroundColor: tokens.colorCompoundBrandBackground,
   },
   caseKnob: {
     position: "absolute",
     top: "2px",
     left: "2px",
-    width: "8px",
-    height: "8px",
+    width: "6px",
+    height: "6px",
     borderRadius: "50%",
-    backgroundColor: tokens.colorNeutralForegroundInverted,
-    transition: "transform 120ms ease",
+    backgroundColor: tokens.colorNeutralStrokeAccessible,
+    ...shorthands.transition([["transform", "120ms", "ease"], ["background-color", "120ms", "ease"]]),
   },
   caseKnobOn: {
     transform: "translateX(10px)",
+    backgroundColor: tokens.colorNeutralForegroundInverted,
   },
   textBtn: {
     display: "inline-flex",
