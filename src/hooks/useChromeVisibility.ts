@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, type RefObject } from "react";
+import { useState, useEffect, useLayoutEffect, useCallback, useRef, type RefObject } from "react";
 
 const CHROME_HIDE_SCROLL_THRESHOLD = 36;
 const CHROME_LOCK_MS = 300;
@@ -7,13 +7,25 @@ export function useChromeVisibility(
   contentRef: RefObject<HTMLDivElement | null>,
   activeDocId: string | undefined,
   pinEditorToolbar: boolean,
+  // While a floating bar (find/replace, go-to-line) is open, the toolbar must
+  // neither hide nor reappear on scroll: the bar is anchored below the
+  // toolbar, so every toggle would shift it under the user's cursor. Opening
+  // the bar shows the toolbar once (so the bar always sits in the same place
+  // and an editor click cannot un-hide it later), then visibility is frozen
+  // until the bar closes, when one fresh evaluation runs.
+  freezeChrome = false,
 ) {
   const [chromeVisible, setChromeVisible] = useState(true);
   const chromeLockUntilRef = useRef(0);
   const chromeVisibleRef = useRef(true);
   const lastScrollTopRef = useRef(0);
+  const freezeChromeRef = useRef(freezeChrome);
+  useLayoutEffect(() => {
+    freezeChromeRef.current = freezeChrome;
+  }, [freezeChrome]);
 
   const handleShowEditorChrome = useCallback(() => {
+    if (freezeChromeRef.current) return;
     chromeVisibleRef.current = true;
     setChromeVisible(true);
     chromeLockUntilRef.current = Date.now() + CHROME_LOCK_MS;
@@ -62,7 +74,7 @@ export function useChromeVisibility(
       const nextTop = el.scrollTop;
       const now = Date.now();
 
-      if (now < chromeLockUntilRef.current) {
+      if (freezeChromeRef.current || now < chromeLockUntilRef.current) {
         lastScrollTopRef.current = nextTop;
         return;
       }
@@ -113,11 +125,39 @@ export function useChromeVisibility(
       if (!el) return;
       const nextTop = el.scrollTop;
       lastScrollTopRef.current = nextTop;
-      const next = nextTop < CHROME_HIDE_SCROLL_THRESHOLD;
+      const next = freezeChromeRef.current || nextTop < CHROME_HIDE_SCROLL_THRESHOLD;
       chromeVisibleRef.current = next;
       setChromeVisible(next);
     });
   }, [activeDocId, contentRef, pinEditorToolbar]);
+
+  // Entering the freeze: show the toolbar so the bar anchors below it.
+  // Leaving it: re-run the position check once, since scrolls during the
+  // freeze were recorded but never acted on (a bar closed at the top of the
+  // document must not leave the toolbar hidden with no scroll left to show it).
+  const freezeInitRef = useRef(true);
+  useEffect(() => {
+    if (freezeInitRef.current) {
+      freezeInitRef.current = false;
+      if (!freezeChrome) return;
+    }
+    if (freezeChrome) {
+      chromeVisibleRef.current = true;
+      setChromeVisible(true);
+      chromeLockUntilRef.current = 0;
+      return;
+    }
+    if (pinEditorToolbar) return;
+    const el = contentRef.current;
+    if (!el) return;
+    const nextTop = el.scrollTop;
+    lastScrollTopRef.current = nextTop;
+    const next = nextTop < CHROME_HIDE_SCROLL_THRESHOLD;
+    if (next !== chromeVisibleRef.current) {
+      chromeVisibleRef.current = next;
+      setChromeVisible(next);
+    }
+  }, [freezeChrome, pinEditorToolbar, contentRef]);
 
   return {
     chromeVisible,

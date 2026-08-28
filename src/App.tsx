@@ -1032,7 +1032,7 @@ function App() {
     lockEditorChrome,
     unlockEditorChrome,
     handleBarHeight,
-  } = useChromeVisibility(contentRef, activeDoc?.id, settings.pinEditorToolbar);
+  } = useChromeVisibility(contentRef, activeDoc?.id, settings.pinEditorToolbar, activeFloatingEditorControl !== null);
 
   // v0.3.0 editor-mode toggles. Focus mode and the outline panel are coupled
   // (focus mode closes the outline and restores it on exit, the toggle is
