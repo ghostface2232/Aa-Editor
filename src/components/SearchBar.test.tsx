@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { FluentProvider, webLightTheme } from "@fluentui/react-components";
 import { Editor } from "@tiptap/core";
 import StarterKit from "@tiptap/starter-kit";
@@ -8,11 +8,27 @@ import { SearchBar } from "./SearchBar";
 
 let active: Editor | null = null;
 
+beforeEach(() => {
+  vi.useFakeTimers();
+});
+
 afterEach(() => {
   cleanup();
   active?.destroy();
   active = null;
+  vi.useRealTimers();
 });
+
+/** Lets the spoken status catch up with the query. */
+function settle() {
+  act(() => {
+    vi.advanceTimersByTime(500);
+  });
+}
+
+function spoken() {
+  return screen.getByRole("status").textContent;
+}
 
 function makeEditor(content: string) {
   const editor = new Editor({ extensions: [StarterKit, SearchHighlight], content });
@@ -69,7 +85,19 @@ describe("match counter", () => {
     fireEvent.change(findInput, { target: { value: "foo" } });
 
     expect(counter().textContent).toBe("1/2");
-    expect(screen.getByRole("status").textContent).toBe("Match 1 of 2");
+    settle();
+    expect(spoken()).toBe("Match 1 of 2");
+  });
+
+  it("waits for typing to pause before speaking the count", () => {
+    const { findInput } = renderBar("<p>foo bar foo</p>");
+    fireEvent.change(findInput, { target: { value: "f" } });
+    fireEvent.change(findInput, { target: { value: "fo" } });
+    fireEvent.change(findInput, { target: { value: "foo" } });
+
+    expect(spoken()).toBe("");
+    settle();
+    expect(spoken()).toBe("Match 1 of 2");
   });
 
   it("wraps backwards from the first match to the last", () => {
@@ -86,7 +114,8 @@ describe("match counter", () => {
     fireEvent.change(findInput, { target: { value: "zzz" } });
 
     expect(counter().textContent).toBe("0/0");
-    expect(screen.getByRole("status").textContent).toBe("No matches");
+    settle();
+    expect(spoken()).toBe("No matches");
     expect(counter().className).not.toBe(baseline);
   });
 
@@ -94,12 +123,15 @@ describe("match counter", () => {
     const baseline = baselineCounterClass("<p>foo bar foo</p>", "foo");
     const { findInput, replaceInput } = renderBar("<p>foo bar foo</p>");
     fireEvent.change(findInput, { target: { value: "foo" } });
+    settle();
+    expect(spoken()).toBe("Match 1 of 2");
     fireEvent.change(replaceInput, { target: { value: "baz" } });
     fireEvent.keyDown(replaceInput, { key: "Enter", ctrlKey: true });
 
     expect(counter().textContent).toBe("0/0");
     expect(counter().className).toBe(baseline);
-    expect(screen.getByRole("status").textContent).toBe("");
+    settle();
+    expect(spoken()).toBe("");
   });
 
   it("marks a miss again once the query changes after a replace", () => {
@@ -111,7 +143,8 @@ describe("match counter", () => {
     fireEvent.change(findInput, { target: { value: "zzz" } });
 
     expect(counter().className).not.toBe(baseline);
-    expect(screen.getByRole("status").textContent).toBe("No matches");
+    settle();
+    expect(spoken()).toBe("No matches");
   });
 });
 

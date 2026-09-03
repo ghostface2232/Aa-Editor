@@ -186,6 +186,11 @@ const useStyles = makeStyles({
 // Ties the replace toggle to the row it discloses.
 const REPLACE_ROW_ID = "search-bar-replace-row";
 
+// How long the spoken match status waits for the query to settle. Every
+// keystroke recomputes the count, and a live region that changes ten times
+// while a ten-letter query is typed queues ten announcements.
+const STATUS_ANNOUNCE_DELAY_MS = 400;
+
 interface SearchBarProps {
   editor: Editor | null;
   onClose: () => void;
@@ -365,6 +370,11 @@ export function SearchBar({ editor, onClose, replaceOpen, onToggleReplace, local
     : matchCount > 0
       ? i("search.matchStatus").replace("{i}", String(activeIndex + 1)).replace("{n}", String(matchCount))
       : i("search.noMatches");
+  const [spokenStatus, setSpokenStatus] = useState("");
+  useEffect(() => {
+    const id = window.setTimeout(() => setSpokenStatus(matchStatus), STATUS_ANNOUNCE_DELAY_MS);
+    return () => window.clearTimeout(id);
+  }, [matchStatus]);
 
   return (
     <div className={styles.wrapper}>
@@ -386,7 +396,7 @@ export function SearchBar({ editor, onClose, replaceOpen, onToggleReplace, local
           {matchCount > 0 ? `${activeIndex + 1}/${matchCount}` : "0/0"}
         </span>
         <span role="status" className={styles.visuallyHidden}>
-          {matchStatus}
+          {spokenStatus}
         </span>
         <button
           className={mergeClasses(styles.caseSwitch, caseSensitive && styles.caseSwitchOn)}
