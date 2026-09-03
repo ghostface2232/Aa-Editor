@@ -165,9 +165,18 @@ describe("controls", () => {
     fireEvent.change(findInput, { target: { value: "foo" } });
     expect(counter().textContent).toBe("1/2");
 
-    fireEvent.keyDown(findInput, { key: "c", altKey: true });
+    fireEvent.keyDown(findInput, { key: "c", code: "KeyC", altKey: true });
 
     expect(screen.getByRole("switch").getAttribute("aria-checked")).toBe("true");
     expect(counter().textContent).toBe("1/1");
+  });
+
+  it("recognizes Alt+C by physical key while an IME rewrites e.key", () => {
+    const { findInput } = renderBar("<p>Foo foo</p>");
+    fireEvent.change(findInput, { target: { value: "foo" } });
+
+    fireEvent.keyDown(findInput, { key: "Process", code: "KeyC", altKey: true });
+
+    expect(screen.getByRole("switch").getAttribute("aria-checked")).toBe("true");
   });
 });

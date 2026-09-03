@@ -333,9 +333,10 @@ export function SearchBar({ editor, onClose, replaceOpen, onToggleReplace, local
 
   // The bar's buttons are pointer targets only, so every control it offers needs
   // a key that works from the input the focus never leaves. Alt+C is the one the
-  // case switch would otherwise lack.
+  // case switch would otherwise lack. Matched on the physical key: with a Korean
+  // IME engaged, e.key can arrive as "Process" or a Hangul jamo rather than "c".
   const isCaseShortcut = (e: React.KeyboardEvent) =>
-    e.altKey && !e.ctrlKey && !e.metaKey && e.key.toLowerCase() === "c";
+    e.altKey && !e.ctrlKey && !e.metaKey && e.code === "KeyC";
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
