@@ -76,9 +76,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "failed to download latest.json" }
 
           Write-Host "[2/4] Validating changelog.json..."
-          # Mirrors parseChangelogNotes in src/utils/changelog.ts. Syntax alone is
-          # not enough: notes the app rejects fall back to rendering the raw body,
-          # which would dump this JSON at users. Fail the release instead.
+          # Applies every rule parseChangelogNotes (src/utils/changelog.ts)
+          # applies, plus equal line counts, which the app does not check.
+          # Syntax alone is not enough: notes the app rejects fall back to
+          # rendering the raw body, which would dump this JSON at users. Fail
+          # the release instead.
           $changelog = Get-Content -LiteralPath (Join-Path $PWD "changelog.json") -Raw -Encoding UTF8
           $parsed = $changelog | ConvertFrom-Json
           foreach ($loc in @("ko", "en")) {
