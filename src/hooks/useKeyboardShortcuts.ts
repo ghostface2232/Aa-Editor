@@ -40,6 +40,8 @@ export interface UseKeyboardShortcutsParams {
   setDocSearchOpen: Dispatch<SetStateAction<boolean>>;
   setDocSearchReplace: Dispatch<SetStateAction<boolean>>;
   setDocGoToLineOpen: Dispatch<SetStateAction<boolean>>;
+  /** Ctrl+F while the find bar is already open returns focus to its input. */
+  onFocusDocSearch: () => void;
   onNewNote: () => Promise<void>;
   onImportFile: () => void;
   onToggleOutline: () => void;
@@ -53,6 +55,7 @@ export function useKeyboardShortcuts({
   setDocSearchOpen,
   setDocSearchReplace,
   setDocGoToLineOpen,
+  onFocusDocSearch,
   onNewNote,
   onImportFile,
   onToggleOutline,
@@ -125,9 +128,16 @@ export function useKeyboardShortcuts({
       if (ctrl && e.shiftKey && !e.altKey && key === "n") { e.preventDefault(); openNewWindow(); }
       if (ctrl && !e.shiftKey && !e.altKey && key === "f") {
         e.preventDefault();
+        // The bar's buttons are not tabbable, so once focus has wandered into
+        // the editor this is the only way back; toggling closed here would
+        // unmount the bar and discard the query.
+        if (docSearchOpen) {
+          onFocusDocSearch();
+          return;
+        }
         setDocGoToLineOpen(false);
         setDocSearchReplace(false);
-        setDocSearchOpen((o) => !o);
+        setDocSearchOpen(true);
         return;
       }
       if (ctrl && !e.shiftKey && !e.altKey && key === "h") {

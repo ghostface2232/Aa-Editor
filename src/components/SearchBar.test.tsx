@@ -20,9 +20,8 @@ function makeEditor(content: string) {
   return editor;
 }
 
-function renderBar(content: string, onNotice = vi.fn()) {
-  const editor = makeEditor(content);
-  const view = render(
+function bar(editor: Editor, onNotice: () => void, focusNonce = 0) {
+  return (
     <FluentProvider theme={webLightTheme}>
       <SearchBar
         editor={editor}
@@ -31,9 +30,15 @@ function renderBar(content: string, onNotice = vi.fn()) {
         onToggleReplace={vi.fn()}
         locale="en"
         onNotice={onNotice}
+        focusNonce={focusNonce}
       />
-    </FluentProvider>,
+    </FluentProvider>
   );
+}
+
+function renderBar(content: string, onNotice = vi.fn()) {
+  const editor = makeEditor(content);
+  const view = render(bar(editor, onNotice));
   const [findInput, replaceInput] = screen.getAllByRole("textbox");
   return { editor, view, onNotice, findInput, replaceInput };
 }
@@ -140,6 +145,19 @@ describe("controls", () => {
     expect(screen.getByLabelText("Next match")).toBeTruthy();
     expect(screen.getByLabelText("Close find")).toBeTruthy();
     expect(screen.getByLabelText("Replace").getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("takes focus back and selects the query when asked", () => {
+    const { editor, view, onNotice, findInput, replaceInput } = renderBar("<p>foo</p>");
+    fireEvent.change(findInput, { target: { value: "foo" } });
+    replaceInput.focus();
+    expect(document.activeElement).toBe(replaceInput);
+
+    view.rerender(bar(editor, onNotice, 1));
+
+    expect(document.activeElement).toBe(findInput);
+    expect((findInput as HTMLInputElement).selectionStart).toBe(0);
+    expect((findInput as HTMLInputElement).selectionEnd).toBe(3);
   });
 
   it("toggles match case from the input with Alt+C", () => {

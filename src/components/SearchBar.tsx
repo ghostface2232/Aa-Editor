@@ -194,9 +194,11 @@ interface SearchBarProps {
   locale: Locale;
   /** Announces how many matches a Replace all touched; nothing else reports it. */
   onNotice: (text: string) => void;
+  /** Each change moves focus back to the query input and selects it. */
+  focusNonce?: number;
 }
 
-export function SearchBar({ editor, onClose, replaceOpen, onToggleReplace, locale, onNotice }: SearchBarProps) {
+export function SearchBar({ editor, onClose, replaceOpen, onToggleReplace, locale, onNotice, focusNonce = 0 }: SearchBarProps) {
   const styles = useStyles();
   const inputRef = useRef<HTMLInputElement>(null);
   const replaceInputRef = useRef<HTMLInputElement>(null);
@@ -211,7 +213,13 @@ export function SearchBar({ editor, onClose, replaceOpen, onToggleReplace, local
   const [emptiedByReplace, setEmptiedByReplace] = useState(false);
   const i = (key: Parameters<typeof t>[0]) => t(key, locale);
 
-  useEffect(() => { inputRef.current?.focus(); }, []);
+  useEffect(() => {
+    const input = inputRef.current;
+    if (!input) return;
+    input.focus();
+    // On a refocus the query is usually about to be retyped.
+    if (focusNonce > 0) input.select();
+  }, [focusNonce]);
   useEffect(() => { if (replaceOpen) replaceInputRef.current?.focus(); }, [replaceOpen]);
 
   const dispatchTiptap = useCallback(

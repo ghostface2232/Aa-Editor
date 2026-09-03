@@ -238,6 +238,9 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [docSearchOpen, setDocSearchOpen] = useState(false);
   const [docSearchReplace, setDocSearchReplace] = useState(false);
+  // Bumped to send focus back into the open find bar (Ctrl+F while open).
+  const [docSearchFocusNonce, setDocSearchFocusNonce] = useState(0);
+  const focusDocSearch = useCallback(() => setDocSearchFocusNonce((n) => n + 1), []);
   const [docGoToLineOpen, setDocGoToLineOpen] = useState(false);
   const activeFloatingEditorControl: FloatingEditorControl = docSearchOpen ? "search" : docGoToLineOpen ? "goto" : null;
   const [sidebarSearchOpen, setSidebarSearchOpen] = useState(false);
@@ -1137,6 +1140,7 @@ function App() {
     setDocSearchOpen,
     setDocSearchReplace,
     setDocGoToLineOpen,
+    onFocusDocSearch: focusDocSearch,
     onNewNote: fs.newNote,
     onImportFile: fs.importFile,
     onToggleOutline: handleToggleOutline,
@@ -1586,6 +1590,7 @@ function App() {
                       onToggleReplace={setDocSearchReplace}
                       locale={locale}
                       onNotice={showEditorNotice}
+                      focusNonce={docSearchFocusNonce}
                     />
                   ) : (
                     <GoToLineBar

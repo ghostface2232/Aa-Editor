@@ -21,6 +21,7 @@ function makeParams(): UseKeyboardShortcutsParams {
     setDocSearchOpen: vi.fn(),
     setDocSearchReplace: vi.fn(),
     setDocGoToLineOpen: vi.fn(),
+    onFocusDocSearch: vi.fn(),
     onNewNote: vi.fn(async () => {}),
     onImportFile: vi.fn(),
     onToggleOutline: vi.fn(),
@@ -240,5 +241,26 @@ describe("useKeyboardShortcuts — v0.3.0 toggles (Ctrl+Shift+O, F8)", () => {
     expect(press(plainEl, { key: "p", ctrlKey: true })).toBe(true);
     expect(params.onToggleOutline).not.toHaveBeenCalled();
     expect(params.onToggleFocusMode).not.toHaveBeenCalled();
+  });
+});
+
+describe("useKeyboardShortcuts — Ctrl+F", () => {
+  it("opens the find bar when it is closed", () => {
+    const params = makeParams();
+    renderHook(() => useKeyboardShortcuts(params));
+    expect(press(editorEl, { key: "f", ctrlKey: true })).toBe(true);
+    expect(params.setDocSearchOpen).toHaveBeenCalledWith(true);
+    expect(params.onFocusDocSearch).not.toHaveBeenCalled();
+  });
+
+  it("returns focus to the open find bar instead of closing it", () => {
+    // The bar's buttons are not tabbable, so after clicking into the editor
+    // this is the only way back; closing would discard the query.
+    const params = { ...makeParams(), docSearchOpen: true };
+    renderHook(() => useKeyboardShortcuts(params));
+    expect(press(editorEl, { key: "f", ctrlKey: true })).toBe(true);
+    expect(params.onFocusDocSearch).toHaveBeenCalledTimes(1);
+    expect(params.setDocSearchOpen).not.toHaveBeenCalled();
+    expect(params.setDocSearchReplace).not.toHaveBeenCalled();
   });
 });
