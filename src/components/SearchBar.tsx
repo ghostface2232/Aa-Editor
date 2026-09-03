@@ -72,6 +72,20 @@ const useStyles = makeStyles({
   countNoMatch: {
     color: tokens.colorPaletteRedForeground1,
   },
+  // The visible counter is a glyph pair ("3/12") that reads poorly aloud, and
+  // its empty state is carried by color alone. This is the spoken equivalent.
+  visuallyHidden: {
+    position: "absolute",
+    width: "1px",
+    height: "1px",
+    margin: "-1px",
+    padding: 0,
+    overflow: "hidden",
+    clip: "rect(0 0 0 0)",
+    clipPath: "inset(50%)",
+    whiteSpace: "nowrap",
+    border: 0,
+  },
   btn: {
     display: "inline-flex",
     alignItems: "center",
@@ -324,6 +338,11 @@ export function SearchBar({ editor, onClose, replaceOpen, onToggleReplace, local
   );
 
   const noMatch = query !== "" && matchCount === 0 && !emptiedByReplace;
+  const matchStatus = query === ""
+    ? ""
+    : matchCount > 0
+      ? i("search.matchStatus").replace("{i}", String(activeIndex + 1)).replace("{n}", String(matchCount))
+      : i("search.noMatches");
 
   return (
     <div className={styles.wrapper}>
@@ -340,8 +359,12 @@ export function SearchBar({ editor, onClose, replaceOpen, onToggleReplace, local
         <span
           className={mergeClasses(styles.count, noMatch && styles.countNoMatch)}
           style={{ visibility: query ? "visible" : "hidden" }}
+          aria-hidden="true"
         >
           {matchCount > 0 ? `${activeIndex + 1}/${matchCount}` : "0/0"}
+        </span>
+        <span role="status" className={styles.visuallyHidden}>
+          {matchStatus}
         </span>
         <button
           className={mergeClasses(styles.caseSwitch, caseSensitive && styles.caseSwitchOn)}

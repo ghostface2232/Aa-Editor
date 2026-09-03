@@ -310,6 +310,8 @@ const dict = {
   "search.previous": { en: "Previous match", ko: "이전 결과" },
   "search.next": { en: "Next match", ko: "다음 결과" },
   "search.close": { en: "Close find", ko: "찾기 닫기" },
+  "search.matchStatus": { en: "Match {i} of {n}", ko: "{n}개 중 {i}번째" },
+  "search.noMatches": { en: "No matches", ko: "일치하는 내용 없음" },
   "search.replaced": { en: "Replaced {n}", ko: "{n}개 치환됨" },
   "search.gotoLinePlaceholder": { en: "Go to line", ko: "줄 이동" },
   "search.sidebarPlaceholder": { en: "Search notes", ko: "노트 검색" },
