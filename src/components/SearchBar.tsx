@@ -188,6 +188,10 @@ export function SearchBar({ editor, onClose, replaceOpen, onToggleReplace, local
   const [matchCount, setMatchCount] = useState(0);
   const [activeIndex, setActiveIndex] = useState(0);
   const [caseSensitive, setCaseSensitive] = useState(false);
+  // A replace that consumes the last match also drops the count to zero. Without
+  // this the counter would then wear the same red "nothing found" state a failed
+  // query gets, reporting a successful replace as a miss.
+  const [emptiedByReplace, setEmptiedByReplace] = useState(false);
   const i = (key: Parameters<typeof t>[0]) => t(key, locale);
 
   useEffect(() => { inputRef.current?.focus(); }, []);
@@ -219,6 +223,7 @@ export function SearchBar({ editor, onClose, replaceOpen, onToggleReplace, local
       const result = dispatchTiptap(q, idx, matchCase);
       setMatchCount(result.count);
       setActiveIndex(result.clamped);
+      setEmptiedByReplace(false);
     },
     [dispatchTiptap, caseSensitive],
   );
@@ -266,6 +271,7 @@ export function SearchBar({ editor, onClose, replaceOpen, onToggleReplace, local
 
       setMatchCount(count);
       setActiveIndex(idx);
+      setEmptiedByReplace(count === 0);
       if (count > 0 && ps.matches[idx]) {
         scrollToPos(editor.view.dom, () => editor.view.coordsAtPos(ps.matches[idx].from));
       }
@@ -317,7 +323,7 @@ export function SearchBar({ editor, onClose, replaceOpen, onToggleReplace, local
     [handleClose, handleReplace, handleReplaceAll],
   );
 
-  const noMatch = query !== "" && matchCount === 0;
+  const noMatch = query !== "" && matchCount === 0 && !emptiedByReplace;
 
   return (
     <div className={styles.wrapper}>
