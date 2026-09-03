@@ -777,17 +777,15 @@ export function SettingsModal({ open, onClose, settings, isDarkMode, onUpdate, c
                     <div style={{ fontSize: "13px", color: tokens.colorNeutralForeground3, lineHeight: "1.6" }}>
                       {locale === "ko" ? (
                         <>
-                          · 라이브러리 상태를 단일 정준 저장소로 재구축해 여러 창·클라우드 동기화의 유실과 되살아남 방지<br />
-                          · 삭제·복원·그룹 이동을 델타로 동기화하고 로딩 중에도 다른 창의 변경이 보존되도록 개선<br />
-                          · 창 크기 조절과 노트 전환이 더 부드럽도록 렌더링·저장 경로 성능 개선<br />
-                          · 찾기 및 바꾸기에 대소문자 구분 옵션 추가, 사이드바 단축키와 위키 링크 문제 수정
+                          · 찾기 바의 대소문자 구분을 켜짐/꺼짐이 뚜렷한 스위치로 바꾸고 바꾸기 버튼 옆으로 이동<br />
+                          · 찾기 바 너비를 넓혀 "찾을 내용" 입력란이 잘리지 않도록 수정<br />
+                          · 찾기·바꾸기나 줄 이동 바가 열려 있는 동안 툴바가 숨지 않도록 해 바가 움직이는 문제 수정
                         </>
                       ) : (
                         <>
-                          · Rebuilt library state on a single canonical store so multi-window and cloud sync can no longer lose or resurrect notes<br />
-                          · Deletes, restores, and group moves now sync as deltas, and edits from other windows survive loading<br />
-                          · Smoother window resizing and faster note switching via rendering and save-path performance work<br />
-                          · Added a match-case option to find and replace; fixed sidebar shortcut and wiki-link issues
+                          · Turned the find bar's match-case control into a switch with a clear on/off state, next to the replace button<br />
+                          · Widened the find bar so the query field no longer clips its placeholder<br />
+                          · Kept the toolbar from hiding while the find or go-to-line bar is open, so the bar no longer shifts under the cursor
                         </>
                       )}
                     </div>
