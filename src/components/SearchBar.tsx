@@ -69,6 +69,9 @@ const useStyles = makeStyles({
     textAlign: "right",
     fontVariantNumeric: "tabular-nums",
   },
+  countNoMatch: {
+    color: tokens.colorPaletteRedForeground1,
+  },
   btn: {
     display: "inline-flex",
     alignItems: "center",
@@ -172,9 +175,11 @@ interface SearchBarProps {
   replaceOpen: boolean;
   onToggleReplace: (open: boolean) => void;
   locale: Locale;
+  /** Announces how many matches a Replace all touched; nothing else reports it. */
+  onNotice: (text: string) => void;
 }
 
-export function SearchBar({ editor, onClose, replaceOpen, onToggleReplace, locale }: SearchBarProps) {
+export function SearchBar({ editor, onClose, replaceOpen, onToggleReplace, locale, onNotice }: SearchBarProps) {
   const styles = useStyles();
   const inputRef = useRef<HTMLInputElement>(null);
   const replaceInputRef = useRef<HTMLInputElement>(null);
@@ -292,7 +297,8 @@ export function SearchBar({ editor, onClose, replaceOpen, onToggleReplace, local
     }
     editor.view.dispatch(tr);
     syncAfterReplace(0);
-  }, [editor, query, replaceText, matchCount, syncAfterReplace]);
+    onNotice(t("search.replaced", locale).replace("{n}", String(matches.length)));
+  }, [editor, query, replaceText, matchCount, syncAfterReplace, onNotice, locale]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -311,6 +317,8 @@ export function SearchBar({ editor, onClose, replaceOpen, onToggleReplace, local
     [handleClose, handleReplace, handleReplaceAll],
   );
 
+  const noMatch = query !== "" && matchCount === 0;
+
   return (
     <div className={styles.wrapper}>
       <div className={styles.topRow}>
@@ -323,8 +331,11 @@ export function SearchBar({ editor, onClose, replaceOpen, onToggleReplace, local
           placeholder={i("search.placeholder")}
           spellCheck={false}
         />
-        <span className={styles.count} style={{ visibility: query ? "visible" : "hidden" }}>
-          {query ? (matchCount > 0 ? `${activeIndex + 1}/${matchCount}` : "0") : "0/0"}
+        <span
+          className={mergeClasses(styles.count, noMatch && styles.countNoMatch)}
+          style={{ visibility: query ? "visible" : "hidden" }}
+        >
+          {matchCount > 0 ? `${activeIndex + 1}/${matchCount}` : "0/0"}
         </span>
         <button
           className={mergeClasses(styles.caseSwitch, caseSensitive && styles.caseSwitchOn)}
@@ -344,16 +355,18 @@ export function SearchBar({ editor, onClose, replaceOpen, onToggleReplace, local
           onClick={() => onToggleReplace(!replaceOpen)}
           tabIndex={-1}
           title={i("search.replace")}
+          aria-label={i("search.replace")}
+          aria-pressed={replaceOpen}
         >
           <ArrowSwapRegular fontSize={16} />
         </button>
-        <button className={styles.btn} onClick={goPrev} tabIndex={-1}>
+        <button className={styles.btn} onClick={goPrev} tabIndex={-1} title={i("search.previous")} aria-label={i("search.previous")}>
           <ArrowUpRegular fontSize={16} />
         </button>
-        <button className={styles.btn} onClick={goNext} tabIndex={-1}>
+        <button className={styles.btn} onClick={goNext} tabIndex={-1} title={i("search.next")} aria-label={i("search.next")}>
           <ArrowDownRegular fontSize={16} />
         </button>
-        <button className={styles.btn} onClick={handleClose} tabIndex={-1}>
+        <button className={styles.btn} onClick={handleClose} tabIndex={-1} title={i("search.close")} aria-label={i("search.close")}>
           <DismissRegular fontSize={16} />
         </button>
       </div>

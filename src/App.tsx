@@ -1585,6 +1585,7 @@ function App() {
                       replaceOpen={docSearchReplace}
                       onToggleReplace={setDocSearchReplace}
                       locale={locale}
+                      onNotice={showEditorNotice}
                     />
                   ) : (
                     <GoToLineBar
