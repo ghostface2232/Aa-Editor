@@ -19,6 +19,31 @@ describe("parseChangelogNotes", () => {
     expect(parseChangelogNotes(JSON.stringify({ ko: ["가"], en: [""] }))).toBeNull();
     expect(parseChangelogNotes(JSON.stringify({ ko: ["가"], en: [3] }))).toBeNull();
   });
+
+  it("treats an empty locale as a miss so the raw body still shows", () => {
+    expect(parseChangelogNotes(JSON.stringify({ ko: [], en: [] }))).toBeNull();
+    expect(parseChangelogNotes(JSON.stringify({ ko: ["가"], en: [] }))).toBeNull();
+  });
+
+  it("rejects notes too large to render", () => {
+    const many = Array.from({ length: 21 }, (_, n) => `line ${n}`);
+    expect(parseChangelogNotes(JSON.stringify({ ko: many, en: many }))).toBeNull();
+    const long = "x".repeat(301);
+    expect(parseChangelogNotes(JSON.stringify({ ko: [long], en: ["a"] }))).toBeNull();
+  });
+
+  it("accepts notes at the size limits", () => {
+    const twenty = Array.from({ length: 20 }, (_, n) => `line ${n}`);
+    expect(parseChangelogNotes(JSON.stringify({ ko: twenty, en: twenty }))).not.toBeNull();
+    const long = "x".repeat(300);
+    expect(parseChangelogNotes(JSON.stringify({ ko: [long], en: [long] }))).not.toBeNull();
+  });
+
+  it("ignores a payload trying to reach the prototype", () => {
+    const parsed = parseChangelogNotes('{"ko":["가"],"en":["a"],"__proto__":{"polluted":true}}');
+    expect(parsed).toEqual({ ko: ["가"], en: ["a"] });
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+  });
 });
 
 describe("bundled changelog", () => {

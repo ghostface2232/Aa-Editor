@@ -69,24 +69,40 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $ErrorActionPreference = "Stop"
-          Write-Host "[1/3] Downloading latest.json from the draft release..."
+          Write-Host "[1/4] Downloading latest.json from the draft release..."
           $dir = Join-Path $PWD "updater-manifest"
           New-Item -ItemType Directory -Path $dir -Force | Out-Null
           gh release download ${{ github.ref_name }} --pattern latest.json --dir $dir --clobber
           if ($LASTEXITCODE -ne 0) { throw "failed to download latest.json" }
 
-          Write-Host "[2/3] Setting notes from changelog.json..."
-          $manifestPath = Join-Path $dir "latest.json"
+          Write-Host "[2/4] Validating changelog.json..."
+          # Mirrors parseChangelogNotes in src/utils/changelog.ts. Syntax alone is
+          # not enough: notes the app rejects fall back to rendering the raw body,
+          # which would dump this JSON at users. Fail the release instead.
           $changelog = Get-Content -LiteralPath (Join-Path $PWD "changelog.json") -Raw -Encoding UTF8
-          # Round-trips through the parser so a malformed changelog fails the
-          # release here rather than shipping notes the app cannot parse.
-          $notes = ($changelog | ConvertFrom-Json | ConvertTo-Json -Compress -Depth 5)
+          $parsed = $changelog | ConvertFrom-Json
+          foreach ($loc in @("ko", "en")) {
+            $lines = $parsed.$loc
+            if ($null -eq $lines -or $lines -isnot [array]) { throw "changelog.json: '$loc' must be an array of strings" }
+            if ($lines.Count -eq 0 -or $lines.Count -gt 20) { throw "changelog.json: '$loc' must hold 1-20 lines, found $($lines.Count)" }
+            foreach ($line in $lines) {
+              if ($line -isnot [string] -or [string]::IsNullOrWhiteSpace($line)) { throw "changelog.json: '$loc' has an empty or non-string line" }
+              if ($line.Length -gt 300) { throw "changelog.json: a '$loc' line exceeds 300 characters" }
+            }
+          }
+          if ($parsed.ko.Count -ne $parsed.en.Count) {
+            throw "changelog.json: ko has $($parsed.ko.Count) lines but en has $($parsed.en.Count)"
+          }
+
+          Write-Host "[3/4] Setting notes from changelog.json..."
+          $manifestPath = Join-Path $dir "latest.json"
+          $notes = ($parsed | ConvertTo-Json -Compress -Depth 5)
           $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
           $manifest.notes = $notes
           $json = $manifest | ConvertTo-Json -Depth 10
           [IO.File]::WriteAllText($manifestPath, $json, (New-Object Text.UTF8Encoding $false))
 
-          Write-Host "[3/3] Re-uploading latest.json..."
+          Write-Host "[4/4] Re-uploading latest.json..."
           gh release upload ${{ github.ref_name }} $manifestPath --clobber
           if ($LASTEXITCODE -ne 0) { throw "failed to upload latest.json" }
 
