@@ -312,7 +312,7 @@ const dict = {
   "search.close": { en: "Close find", ko: "찾기 닫기" },
   "search.matchStatus": { en: "Match {i} of {n}", ko: "{n}개 중 {i}번째" },
   "search.noMatches": { en: "No matches", ko: "일치하는 내용 없음" },
-  "search.replaced": { en: "Replaced {n}", ko: "{n}개 치환됨" },
+  "search.replaced": { en: "Replaced {n} matches", ko: "{n}개 바꿈" },
   "search.gotoLinePlaceholder": { en: "Go to line", ko: "줄 이동" },
   "search.sidebarPlaceholder": { en: "Search notes", ko: "노트 검색" },
   "search.noResults": { en: "No matching notes", ko: "일치하는 노트 없음" },
