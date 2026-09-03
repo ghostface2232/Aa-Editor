@@ -122,7 +122,7 @@ describe("replace all", () => {
     fireEvent.change(replaceInput, { target: { value: "baz" } });
     fireEvent.keyDown(replaceInput, { key: "Enter", ctrlKey: true });
 
-    expect(onNotice).toHaveBeenCalledWith("Replaced 2 matches");
+    expect(onNotice).toHaveBeenCalledWith("2 replaced");
     expect(editor.state.doc.textContent).toBe("baz bar baz");
   });
 
@@ -132,7 +132,7 @@ describe("replace all", () => {
     fireEvent.change(replaceInput, { target: { value: "b" } });
     fireEvent.keyDown(replaceInput, { key: "Enter", ctrlKey: true });
 
-    expect(onNotice).toHaveBeenCalledWith("Replaced 2 matches");
+    expect(onNotice).toHaveBeenCalledWith("2 replaced");
     expect(editor.state.doc.textContent).toBe("bb");
   });
 });
