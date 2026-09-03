@@ -157,10 +157,10 @@ Releases are fully automated by `.github/workflows/release.yml`, triggered by pu
 To cut a release:
 
 1. Edit `package.json`'s `version`, then run `npm run sync-version`. The script propagates it to `package-lock.json`, `src-tauri/tauri.conf.json`, the four `Cargo.toml` files, and our entries in both `Cargo.lock` files. The `v…` label in `SettingsModal.tsx` reads `getVersion()` at runtime and needs no sync — add a new entry to the script only if you introduce another hardcoded version site.
-2. Rewrite the SettingsModal changelog block (Korean + English). This is human-written copy and is intentionally not touched by the script.
+2. Rewrite `changelog.json` at the repository root (Korean + English arrays, same line count). This is human-written copy and is intentionally not touched by the script. `SettingsModal` bundles it as the running build's highlights, and the release workflow copies it into the updater manifest's `notes`, so the About tab shows the *new* version's highlights at check time, before the update is installed. Notes that do not parse as this shape (older releases, hand-written text) fall back to rendering the raw body.
 3. Commit, push `main`, then `git tag -a vX.Y.Z <commit> -m …` and push the tag.
 
-CI builds the helper, runs the commit-SHA-pinned `tauri-apps/tauri-action` v1 to produce signed updater artifacts, then builds and Authenticode-signs the bootstrapper. The result is a **draft** release that must be reviewed and **manually published** — only then does the in-app updater see it, because the endpoint (`.../releases/latest/download/latest.json`) resolves `latest` to the most recent *published* release.
+CI builds the helper, runs the commit-SHA-pinned `tauri-apps/tauri-action` v1 to produce signed updater artifacts, rewrites `latest.json`'s `notes` from `changelog.json`, then builds and Authenticode-signs the bootstrapper. The result is a **draft** release that must be reviewed and **manually published** — only then does the in-app updater see it, because the endpoint (`.../releases/latest/download/latest.json`) resolves `latest` to the most recent *published* release.
 
 - Production publishing requires `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, `CODE_SIGN_PFX`, and `CODE_SIGN_PFX_PASSWORD`. The Authenticode step is conditional when the PFX is absent, but an unsigned bootstrapper must not be published as a production release.
 - The Tauri pubkey in `tauri.conf.json` must stay paired with the private key — rotating one without the other breaks updates for existing installs.

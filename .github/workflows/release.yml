@@ -60,6 +60,36 @@ jobs:
           releaseName: Noten v__VERSION__
           releaseDraft: true
 
+      - name: Inject changelog into updater manifest
+        # tauri-action writes latest.json with the (empty) draft release body as
+        # `notes`. Replace it with changelog.json so the About tab can show the
+        # new version's highlights at check time, before the update is installed.
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          Write-Host "[1/3] Downloading latest.json from the draft release..."
+          $dir = Join-Path $PWD "updater-manifest"
+          New-Item -ItemType Directory -Path $dir -Force | Out-Null
+          gh release download ${{ github.ref_name }} --pattern latest.json --dir $dir --clobber
+          if ($LASTEXITCODE -ne 0) { throw "failed to download latest.json" }
+
+          Write-Host "[2/3] Setting notes from changelog.json..."
+          $manifestPath = Join-Path $dir "latest.json"
+          $changelog = Get-Content -LiteralPath (Join-Path $PWD "changelog.json") -Raw -Encoding UTF8
+          # Round-trips through the parser so a malformed changelog fails the
+          # release here rather than shipping notes the app cannot parse.
+          $notes = ($changelog | ConvertFrom-Json | ConvertTo-Json -Compress -Depth 5)
+          $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+          $manifest.notes = $notes
+          $json = $manifest | ConvertTo-Json -Depth 10
+          [IO.File]::WriteAllText($manifestPath, $json, (New-Object Text.UTF8Encoding $false))
+
+          Write-Host "[3/3] Re-uploading latest.json..."
+          gh release upload ${{ github.ref_name }} $manifestPath --clobber
+          if ($LASTEXITCODE -ne 0) { throw "failed to upload latest.json" }
+
       - name: Copy NSIS payload into bootstrapper assets
         shell: pwsh
         run: |

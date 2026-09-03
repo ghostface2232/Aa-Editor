@@ -1,0 +1,12 @@
+{
+  "ko": [
+    "찾기 바의 대소문자 구분을 켜짐/꺼짐이 뚜렷한 스위치로 바꾸고 바꾸기 버튼 옆으로 이동",
+    "찾기 바 너비를 넓혀 \"찾을 내용\" 입력란이 잘리지 않도록 수정",
+    "찾기·바꾸기나 줄 이동 바가 열려 있는 동안 툴바가 숨지 않도록 해 바가 움직이는 문제 수정"
+  ],
+  "en": [
+    "Turned the find bar's match-case control into a switch with a clear on/off state, next to the replace button",
+    "Widened the find bar so the query field no longer clips its placeholder",
+    "Kept the toolbar from hiding while the find or go-to-line bar is open, so the bar no longer shifts under the cursor"
+  ]
+}

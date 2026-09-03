@@ -42,6 +42,7 @@ import {
 import { getVersion } from "@tauri-apps/api/app";
 import { MOTION_DURATION_FAST, MOTION_DURATION_MEDIUM, pressableButton } from "../styles/interactions";
 import { t } from "../i18n";
+import { changelogLines, getBundledChangelog, parseChangelogNotes } from "../utils/changelog";
 import type { UpdaterState } from "../hooks/useUpdater";
 import type {
   FontFamily,
@@ -332,6 +333,16 @@ function settingItemClass(
   return mergeClasses(styles.settingItem, isFirst && styles.settingItemFirst);
 }
 
+function ChangelogList({ lines }: { lines: string[] }) {
+  return (
+    <div style={{ fontSize: "13px", color: tokens.colorNeutralForeground3, lineHeight: "1.6" }}>
+      {lines.map((line, index) => (
+        <div key={index}>· {line}</div>
+      ))}
+    </div>
+  );
+}
+
 export function SettingsModal({ open, onClose, settings, isDarkMode, onUpdate, currentNotesDir, onChangeNotesDir, onResetNotesDir, trashedNotes, onRestoreNote, onPermanentlyDeleteNote, onEmptyTrash, updaterState, onCheckForUpdate, onInstallUpdate, onRestartApp }: SettingsModalProps) {
   const styles = useStyles();
   const locale = settings.locale;
@@ -340,6 +351,9 @@ export function SettingsModal({ open, onClose, settings, isDarkMode, onUpdate, c
   const [appVersion, setAppVersion] = useState("");
   const [confirmOpen, setConfirmOpen] = useState(false);
   const updateAvailable = updaterState.status === "available" || updaterState.status === "downloading" || updaterState.status === "ready";
+  // Highlights for the version being offered, carried in the updater manifest so
+  // they render before the update is installed.
+  const incomingChangelog = useMemo(() => parseChangelogNotes(updaterState.body), [updaterState.body]);
   const subtleBtnStyle: React.CSSProperties = { backgroundColor: isDarkMode ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.04)" };
 
   useEffect(() => {
@@ -774,21 +788,7 @@ export function SettingsModal({ open, onClose, settings, isDarkMode, onUpdate, c
 
                   {!updateAvailable && (
                   <div className={settingItemClass(styles)} style={{ paddingTop: "18px" }}>
-                    <div style={{ fontSize: "13px", color: tokens.colorNeutralForeground3, lineHeight: "1.6" }}>
-                      {locale === "ko" ? (
-                        <>
-                          · 찾기 바의 대소문자 구분을 켜짐/꺼짐이 뚜렷한 스위치로 바꾸고 바꾸기 버튼 옆으로 이동<br />
-                          · 찾기 바 너비를 넓혀 "찾을 내용" 입력란이 잘리지 않도록 수정<br />
-                          · 찾기·바꾸기나 줄 이동 바가 열려 있는 동안 툴바가 숨지 않도록 해 바가 움직이는 문제 수정
-                        </>
-                      ) : (
-                        <>
-                          · Turned the find bar's match-case control into a switch with a clear on/off state, next to the replace button<br />
-                          · Widened the find bar so the query field no longer clips its placeholder<br />
-                          · Kept the toolbar from hiding while the find or go-to-line bar is open, so the bar no longer shifts under the cursor
-                        </>
-                      )}
-                    </div>
+                    <ChangelogList lines={changelogLines(getBundledChangelog(), locale)} />
                   </div>
                   )}
 
@@ -802,11 +802,15 @@ export function SettingsModal({ open, onClose, settings, isDarkMode, onUpdate, c
                         <span style={{ fontSize: "15px", fontWeight: 500 }}>
                           {i("about.available")}: v{updaterState.version}
                         </span>
-                        {updaterState.body && (
+                        {incomingChangelog ? (
+                          <div style={{ maxHeight: "160px", overflow: "auto" }}>
+                            <ChangelogList lines={changelogLines(incomingChangelog, locale)} />
+                          </div>
+                        ) : updaterState.body ? (
                           <div style={{ fontSize: "13px", color: tokens.colorNeutralForeground3, lineHeight: "1.6", whiteSpace: "pre-wrap", maxHeight: "160px", overflow: "auto" }}>
                             {updaterState.body}
                           </div>
-                        )}
+                        ) : null}
                       </div>
                     )}
 
