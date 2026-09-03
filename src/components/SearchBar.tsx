@@ -183,6 +183,9 @@ const useStyles = makeStyles({
   },
 });
 
+// Ties the replace toggle to the row it discloses.
+const REPLACE_ROW_ID = "search-bar-replace-row";
+
 interface SearchBarProps {
   editor: Editor | null;
   onClose: () => void;
@@ -320,21 +323,29 @@ export function SearchBar({ editor, onClose, replaceOpen, onToggleReplace, local
     onNotice(t("search.replaced", locale).replace("{n}", String(matches.length)));
   }, [editor, query, replaceText, matchCount, syncAfterReplace, onNotice, locale]);
 
+  // The bar's buttons are pointer targets only, so every control it offers needs
+  // a key that works from the input the focus never leaves. Alt+C is the one the
+  // case switch would otherwise lack.
+  const isCaseShortcut = (e: React.KeyboardEvent) =>
+    e.altKey && !e.ctrlKey && !e.metaKey && e.key.toLowerCase() === "c";
+
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       if (e.key === "Escape") { e.preventDefault(); handleClose(); }
+      else if (isCaseShortcut(e)) { e.preventDefault(); toggleCaseSensitive(); }
       else if (e.key === "Enter") { e.preventDefault(); e.shiftKey ? goPrev() : goNext(); }
     },
-    [handleClose, goNext, goPrev],
+    [handleClose, goNext, goPrev, toggleCaseSensitive],
   );
 
   const handleReplaceKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       if (e.key === "Escape") { e.preventDefault(); handleClose(); }
+      else if (isCaseShortcut(e)) { e.preventDefault(); toggleCaseSensitive(); }
       else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); handleReplaceAll(); }
       else if (e.key === "Enter") { e.preventDefault(); handleReplace(); }
     },
-    [handleClose, handleReplace, handleReplaceAll],
+    [handleClose, handleReplace, handleReplaceAll, toggleCaseSensitive],
   );
 
   const noMatch = query !== "" && matchCount === 0 && !emptiedByReplace;
@@ -369,8 +380,10 @@ export function SearchBar({ editor, onClose, replaceOpen, onToggleReplace, local
         <button
           className={mergeClasses(styles.caseSwitch, caseSensitive && styles.caseSwitchOn)}
           onClick={toggleCaseSensitive}
-          title={i("search.caseSensitive")}
+          tabIndex={-1}
+          title={`${i("search.caseSensitive")} (Alt+C)`}
           aria-label={i("search.caseSensitive")}
+          aria-keyshortcuts="Alt+C"
           role="switch"
           aria-checked={caseSensitive}
         >
@@ -385,7 +398,8 @@ export function SearchBar({ editor, onClose, replaceOpen, onToggleReplace, local
           tabIndex={-1}
           title={i("search.replace")}
           aria-label={i("search.replace")}
-          aria-pressed={replaceOpen}
+          aria-expanded={replaceOpen}
+          aria-controls={REPLACE_ROW_ID}
         >
           <ArrowSwapRegular fontSize={16} />
         </button>
@@ -401,7 +415,7 @@ export function SearchBar({ editor, onClose, replaceOpen, onToggleReplace, local
       </div>
 
       {replaceOpen && (
-        <div className={styles.replaceRow}>
+        <div className={styles.replaceRow} id={REPLACE_ROW_ID}>
           <input
             ref={replaceInputRef}
             className={styles.input}
