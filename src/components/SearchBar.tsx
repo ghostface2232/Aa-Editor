@@ -349,7 +349,9 @@ export function SearchBar({ editor, onClose, replaceOpen, onToggleReplace, local
   );
 
   const noMatch = query !== "" && matchCount === 0 && !emptiedByReplace;
-  const matchStatus = query === ""
+  // Silent after a replace empties the matches: the replace notice already
+  // reported the outcome, and "no matches" would contradict it.
+  const matchStatus = query === "" || emptiedByReplace
     ? ""
     : matchCount > 0
       ? i("search.matchStatus").replace("{i}", String(activeIndex + 1)).replace("{n}", String(matchCount))

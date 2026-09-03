@@ -94,6 +94,7 @@ describe("match counter", () => {
 
     expect(counter().textContent).toBe("0/0");
     expect(counter().className).toBe(baseline);
+    expect(screen.getByRole("status").textContent).toBe("");
   });
 
   it("marks a miss again once the query changes after a replace", () => {
@@ -105,6 +106,7 @@ describe("match counter", () => {
     fireEvent.change(findInput, { target: { value: "zzz" } });
 
     expect(counter().className).not.toBe(baseline);
+    expect(screen.getByRole("status").textContent).toBe("No matches");
   });
 });
 
