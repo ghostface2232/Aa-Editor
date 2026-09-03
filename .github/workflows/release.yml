@@ -82,6 +82,9 @@ jobs:
           $changelog = Get-Content -LiteralPath (Join-Path $PWD "changelog.json") -Raw -Encoding UTF8
           $parsed = $changelog | ConvertFrom-Json
           foreach ($loc in @("ko", "en")) {
+            # PowerShell property lookup ignores case; the app's does not, so
+            # "KO" would pass here and still be rejected on the client.
+            if ($parsed.PSObject.Properties.Name -cnotcontains $loc) { throw "changelog.json: missing '$loc' (keys are case-sensitive)" }
             $lines = $parsed.$loc
             if ($null -eq $lines -or $lines -isnot [array]) { throw "changelog.json: '$loc' must be an array of strings" }
             if ($lines.Count -eq 0 -or $lines.Count -gt 20) { throw "changelog.json: '$loc' must hold 1-20 lines, found $($lines.Count)" }
