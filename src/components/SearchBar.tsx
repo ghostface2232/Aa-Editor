@@ -363,8 +363,10 @@ export function SearchBar({ editor, onClose, replaceOpen, onToggleReplace, local
   );
 
   const noMatch = query !== "" && matchCount === 0 && !emptiedByReplace;
-  // Silent after a replace empties the matches: the replace notice already
-  // reported the outcome, and "no matches" would contradict it.
+  // Silent after a replace empties the matches. "No matches" would be wrong:
+  // the query did match, the user consumed the hits. Replace all has already
+  // reported its count through the notice; a single replace reports nothing,
+  // so its final hit is announced only by the document changing.
   const matchStatus = query === "" || emptiedByReplace
     ? ""
     : matchCount > 0
