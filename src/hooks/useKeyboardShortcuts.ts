@@ -172,6 +172,7 @@ export function useKeyboardShortcuts({
   }, [
     docGoToLineOpen,
     docSearchOpen,
+    onFocusDocSearch,
     onImportFile,
     onNewNote,
     onToggleFocusMode,
