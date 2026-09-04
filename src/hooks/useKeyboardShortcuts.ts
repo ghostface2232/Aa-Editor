@@ -33,6 +33,8 @@ function isTextEntryTarget(target: EventTarget | null) {
   return !!element.closest('[contenteditable="true"], [contenteditable=""]');
 }
 
+export type DocSearchFocusTarget = "find" | "replace";
+
 export interface UseKeyboardShortcutsParams {
   tiptapRef: RefObject<TiptapEditorHandle | null>;
   docSearchOpen: boolean;
@@ -40,6 +42,8 @@ export interface UseKeyboardShortcutsParams {
   setDocSearchOpen: Dispatch<SetStateAction<boolean>>;
   setDocSearchReplace: Dispatch<SetStateAction<boolean>>;
   setDocGoToLineOpen: Dispatch<SetStateAction<boolean>>;
+  /** Ctrl+F / Ctrl+H while the find bar is already open return focus to it. */
+  onFocusDocSearch: (target: DocSearchFocusTarget) => void;
   onNewNote: () => Promise<void>;
   onImportFile: () => void;
   onToggleOutline: () => void;
@@ -53,6 +57,7 @@ export function useKeyboardShortcuts({
   setDocSearchOpen,
   setDocSearchReplace,
   setDocGoToLineOpen,
+  onFocusDocSearch,
   onNewNote,
   onImportFile,
   onToggleOutline,
@@ -125,13 +130,28 @@ export function useKeyboardShortcuts({
       if (ctrl && e.shiftKey && !e.altKey && key === "n") { e.preventDefault(); openNewWindow(); }
       if (ctrl && !e.shiftKey && !e.altKey && key === "f") {
         e.preventDefault();
+        // Only the bar's inputs are tabbable, so once focus has wandered into
+        // the editor the ways back are Shift+Tab across whatever sits between
+        // or this key; toggling closed here would unmount the bar and discard
+        // the query.
+        if (docSearchOpen) {
+          onFocusDocSearch("find");
+          return;
+        }
         setDocGoToLineOpen(false);
         setDocSearchReplace(false);
-        setDocSearchOpen((o) => !o);
+        setDocSearchOpen(true);
         return;
       }
       if (ctrl && !e.shiftKey && !e.altKey && key === "h") {
         e.preventDefault();
+        if (docSearchOpen) {
+          // Same return path as Ctrl+F, landing in the replace field; also
+          // discloses the row if only the find half was open.
+          setDocSearchReplace(true);
+          onFocusDocSearch("replace");
+          return;
+        }
         setDocGoToLineOpen(false);
         setDocSearchOpen(true);
         setDocSearchReplace(true);
@@ -162,6 +182,7 @@ export function useKeyboardShortcuts({
   }, [
     docGoToLineOpen,
     docSearchOpen,
+    onFocusDocSearch,
     onImportFile,
     onNewNote,
     onToggleFocusMode,

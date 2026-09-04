@@ -21,6 +21,7 @@ function makeParams(): UseKeyboardShortcutsParams {
     setDocSearchOpen: vi.fn(),
     setDocSearchReplace: vi.fn(),
     setDocGoToLineOpen: vi.fn(),
+    onFocusDocSearch: vi.fn(),
     onNewNote: vi.fn(async () => {}),
     onImportFile: vi.fn(),
     onToggleOutline: vi.fn(),
@@ -240,5 +241,48 @@ describe("useKeyboardShortcuts — v0.3.0 toggles (Ctrl+Shift+O, F8)", () => {
     expect(press(plainEl, { key: "p", ctrlKey: true })).toBe(true);
     expect(params.onToggleOutline).not.toHaveBeenCalled();
     expect(params.onToggleFocusMode).not.toHaveBeenCalled();
+  });
+});
+
+describe("useKeyboardShortcuts — Ctrl+F", () => {
+  it("opens the find bar when it is closed", () => {
+    const params = makeParams();
+    renderHook(() => useKeyboardShortcuts(params));
+    expect(press(editorEl, { key: "f", ctrlKey: true })).toBe(true);
+    expect(params.setDocSearchOpen).toHaveBeenCalledWith(true);
+    expect(params.onFocusDocSearch).not.toHaveBeenCalled();
+  });
+
+  it("returns focus to the open find bar instead of closing it", () => {
+    // After clicking into the editor this is the discoverable way back into
+    // the bar's input; closing would discard the query.
+    const params = { ...makeParams(), docSearchOpen: true };
+    renderHook(() => useKeyboardShortcuts(params));
+    expect(press(editorEl, { key: "f", ctrlKey: true })).toBe(true);
+    expect(params.onFocusDocSearch).toHaveBeenCalledTimes(1);
+    expect(params.onFocusDocSearch).toHaveBeenCalledWith("find");
+    expect(params.setDocSearchOpen).not.toHaveBeenCalled();
+    expect(params.setDocSearchReplace).not.toHaveBeenCalled();
+  });
+});
+
+describe("useKeyboardShortcuts — Ctrl+H", () => {
+  it("opens the find bar with the replace row when it is closed", () => {
+    const params = makeParams();
+    renderHook(() => useKeyboardShortcuts(params));
+    expect(press(editorEl, { key: "h", ctrlKey: true })).toBe(true);
+    expect(params.setDocSearchOpen).toHaveBeenCalledWith(true);
+    expect(params.setDocSearchReplace).toHaveBeenCalledWith(true);
+    expect(params.onFocusDocSearch).not.toHaveBeenCalled();
+  });
+
+  it("returns focus to the replace field of the open bar", () => {
+    const params = { ...makeParams(), docSearchOpen: true };
+    renderHook(() => useKeyboardShortcuts(params));
+    expect(press(editorEl, { key: "h", ctrlKey: true })).toBe(true);
+    expect(params.setDocSearchReplace).toHaveBeenCalledWith(true);
+    expect(params.onFocusDocSearch).toHaveBeenCalledTimes(1);
+    expect(params.onFocusDocSearch).toHaveBeenCalledWith("replace");
+    expect(params.setDocSearchOpen).not.toHaveBeenCalled();
   });
 });
