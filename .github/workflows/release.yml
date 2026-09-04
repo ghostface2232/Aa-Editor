@@ -91,7 +91,11 @@ jobs:
             if ($null -eq $lines -or $lines -isnot [array]) { throw "changelog.json: '$loc' must be an array of strings" }
             if ($lines.Count -eq 0 -or $lines.Count -gt 20) { throw "changelog.json: '$loc' must hold 1-20 lines, found $($lines.Count)" }
             foreach ($line in $lines) {
-              if ($line -isnot [string] -or [string]::IsNullOrWhiteSpace($line)) { throw "changelog.json: '$loc' has an empty or non-string line" }
+              # JS trim() strips U+FEFF; .NET's whitespace test does not, so a
+              # line of only that character would pass here and fail in the app.
+              # (.NET also treats U+0085 as whitespace where JS does not; that
+              # only makes this check stricter, which is fine.)
+              if ($line -isnot [string] -or [string]::IsNullOrWhiteSpace($line.Replace([string][char]0xFEFF, ""))) { throw "changelog.json: '$loc' has an empty or non-string line" }
               if ($line.Length -gt 300) { throw "changelog.json: a '$loc' line exceeds 300 characters" }
             }
           }
