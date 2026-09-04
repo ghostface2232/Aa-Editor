@@ -33,6 +33,8 @@ function isTextEntryTarget(target: EventTarget | null) {
   return !!element.closest('[contenteditable="true"], [contenteditable=""]');
 }
 
+export type DocSearchFocusTarget = "find" | "replace";
+
 export interface UseKeyboardShortcutsParams {
   tiptapRef: RefObject<TiptapEditorHandle | null>;
   docSearchOpen: boolean;
@@ -40,8 +42,8 @@ export interface UseKeyboardShortcutsParams {
   setDocSearchOpen: Dispatch<SetStateAction<boolean>>;
   setDocSearchReplace: Dispatch<SetStateAction<boolean>>;
   setDocGoToLineOpen: Dispatch<SetStateAction<boolean>>;
-  /** Ctrl+F while the find bar is already open returns focus to its input. */
-  onFocusDocSearch: () => void;
+  /** Ctrl+F / Ctrl+H while the find bar is already open return focus to it. */
+  onFocusDocSearch: (target: DocSearchFocusTarget) => void;
   onNewNote: () => Promise<void>;
   onImportFile: () => void;
   onToggleOutline: () => void;
@@ -133,7 +135,7 @@ export function useKeyboardShortcuts({
         // or this key; toggling closed here would unmount the bar and discard
         // the query.
         if (docSearchOpen) {
-          onFocusDocSearch();
+          onFocusDocSearch("find");
           return;
         }
         setDocGoToLineOpen(false);
@@ -143,6 +145,13 @@ export function useKeyboardShortcuts({
       }
       if (ctrl && !e.shiftKey && !e.altKey && key === "h") {
         e.preventDefault();
+        if (docSearchOpen) {
+          // Same return path as Ctrl+F, landing in the replace field; also
+          // discloses the row if only the find half was open.
+          setDocSearchReplace(true);
+          onFocusDocSearch("replace");
+          return;
+        }
         setDocGoToLineOpen(false);
         setDocSearchOpen(true);
         setDocSearchReplace(true);

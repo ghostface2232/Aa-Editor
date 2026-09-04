@@ -47,7 +47,7 @@ const OUTLINE_JUMP_SCROLL_MS = 280;
 // stays on screen.
 const EDITOR_NOTICE_MS = 1100;
 import { SettingsModal } from "./components/SettingsModal";
-import { SearchBar } from "./components/SearchBar";
+import { NO_FOCUS_REQUEST, SearchBar, type DocSearchFocusRequest } from "./components/SearchBar";
 import { GoToLineBar } from "./components/GoToLineBar";
 import { searchPluginKey, type SearchPluginState } from "./extensions/SearchHighlight";
 import { refreshWikiLinkDecorations } from "./extensions/WikiLink";
@@ -66,7 +66,7 @@ import { createReconcileState } from "./utils/reconcileFolder";
 import { useWindowSync } from "./hooks/useWindowSync";
 import { useMigrationSync, broadcastMigrationStarted, broadcastMigrationFinished } from "./hooks/useMigrationSync";
 import { useChromeVisibility } from "./hooks/useChromeVisibility";
-import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
+import { useKeyboardShortcuts, type DocSearchFocusTarget } from "./hooks/useKeyboardShortcuts";
 import { useFocusOutlineSync } from "./hooks/useFocusOutlineSync";
 import { useDragDrop } from "./hooks/useDragDrop";
 import { useUpdater } from "./hooks/useUpdater";
@@ -238,9 +238,12 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [docSearchOpen, setDocSearchOpen] = useState(false);
   const [docSearchReplace, setDocSearchReplace] = useState(false);
-  // Bumped to send focus back into the open find bar (Ctrl+F while open).
-  const [docSearchFocusNonce, setDocSearchFocusNonce] = useState(0);
-  const focusDocSearch = useCallback(() => setDocSearchFocusNonce((n) => n + 1), []);
+  // Sends focus back into the open find bar (Ctrl+F / Ctrl+H while open).
+  const [docSearchFocusRequest, setDocSearchFocusRequest] = useState<DocSearchFocusRequest>(NO_FOCUS_REQUEST);
+  const focusDocSearch = useCallback(
+    (target: DocSearchFocusTarget) => setDocSearchFocusRequest((r) => ({ nonce: r.nonce + 1, target })),
+    [],
+  );
   const [docGoToLineOpen, setDocGoToLineOpen] = useState(false);
   const activeFloatingEditorControl: FloatingEditorControl = docSearchOpen ? "search" : docGoToLineOpen ? "goto" : null;
   const [sidebarSearchOpen, setSidebarSearchOpen] = useState(false);
@@ -1590,7 +1593,7 @@ function App() {
                       onToggleReplace={setDocSearchReplace}
                       locale={locale}
                       onNotice={showEditorNotice}
-                      focusNonce={docSearchFocusNonce}
+                      focusRequest={docSearchFocusRequest}
                     />
                   ) : (
                     <GoToLineBar

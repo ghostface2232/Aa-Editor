@@ -4,7 +4,7 @@ import { FluentProvider, webLightTheme } from "@fluentui/react-components";
 import { Editor } from "@tiptap/core";
 import StarterKit from "@tiptap/starter-kit";
 import { SearchHighlight } from "../extensions/SearchHighlight";
-import { SearchBar } from "./SearchBar";
+import { NO_FOCUS_REQUEST, SearchBar, type DocSearchFocusRequest } from "./SearchBar";
 
 let active: Editor | null = null;
 
@@ -36,7 +36,7 @@ function makeEditor(content: string) {
   return editor;
 }
 
-function bar(editor: Editor, onNotice: () => void, focusNonce = 0) {
+function bar(editor: Editor, onNotice: () => void, focusRequest: DocSearchFocusRequest = NO_FOCUS_REQUEST) {
   return (
     <FluentProvider theme={webLightTheme}>
       <SearchBar
@@ -46,17 +46,22 @@ function bar(editor: Editor, onNotice: () => void, focusNonce = 0) {
         onToggleReplace={vi.fn()}
         locale="en"
         onNotice={onNotice}
-        focusNonce={focusNonce}
+        focusRequest={focusRequest}
       />
     </FluentProvider>
   );
 }
 
-function renderBar(content: string, onNotice = vi.fn()) {
+function renderBar(content: string, onNotice = vi.fn(), focusRequest: DocSearchFocusRequest = NO_FOCUS_REQUEST) {
   const editor = makeEditor(content);
-  const view = render(bar(editor, onNotice));
+  const view = render(bar(editor, onNotice, focusRequest));
   const [findInput, replaceInput] = screen.getAllByRole("textbox");
   return { editor, view, onNotice, findInput, replaceInput };
+}
+
+function selection(input: HTMLElement) {
+  const el = input as HTMLInputElement;
+  return [el.selectionStart, el.selectionEnd];
 }
 
 function counter() {
@@ -180,17 +185,47 @@ describe("controls", () => {
     expect(screen.getByLabelText("Replace").getAttribute("aria-expanded")).toBe("true");
   });
 
-  it("takes focus back and selects the query when asked", () => {
+  it("focuses the replace field on mount when its row is open", () => {
+    // Ctrl+H opens the bar with the row already disclosed; the row's own
+    // effect wins over the query input's mount focus.
+    const { replaceInput } = renderBar("<p>foo</p>");
+    expect(document.activeElement).toBe(replaceInput);
+  });
+
+  it("takes focus back to the query and selects it when asked", () => {
     const { editor, view, onNotice, findInput, replaceInput } = renderBar("<p>foo</p>");
     fireEvent.change(findInput, { target: { value: "foo" } });
     replaceInput.focus();
     expect(document.activeElement).toBe(replaceInput);
 
-    view.rerender(bar(editor, onNotice, 1));
+    view.rerender(bar(editor, onNotice, { nonce: 1, target: "find" }));
 
     expect(document.activeElement).toBe(findInput);
-    expect((findInput as HTMLInputElement).selectionStart).toBe(0);
-    expect((findInput as HTMLInputElement).selectionEnd).toBe(3);
+    expect(selection(findInput)).toEqual([0, 3]);
+  });
+
+  it("takes focus back to the replace field and selects it when asked", () => {
+    const { editor, view, onNotice, findInput, replaceInput } = renderBar("<p>foo</p>");
+    fireEvent.change(replaceInput, { target: { value: "bar" } });
+    findInput.focus();
+
+    view.rerender(bar(editor, onNotice, { nonce: 1, target: "replace" }));
+
+    expect(document.activeElement).toBe(replaceInput);
+    expect(selection(replaceInput)).toEqual([0, 3]);
+  });
+
+  it("does not replay a request left over from before it mounted", () => {
+    // The bar is unmounted on close and the request state lives in App, so a
+    // reopened bar mounts with an old nonce; it must behave like a fresh one.
+    // A replayed request is the only path that selects, so that is the tell.
+    const select = vi.spyOn(HTMLInputElement.prototype, "select");
+    try {
+      renderBar("<p>foo</p>", vi.fn(), { nonce: 7, target: "find" });
+      expect(select).not.toHaveBeenCalled();
+    } finally {
+      select.mockRestore();
+    }
   });
 
   it("toggles match case from the input with Alt+C", () => {

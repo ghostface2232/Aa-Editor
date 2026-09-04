@@ -186,6 +186,18 @@ const useStyles = makeStyles({
 // Ties the replace toggle to the row it discloses.
 const REPLACE_ROW_ID = "search-bar-replace-row";
 
+/**
+ * A request to move focus back into the bar. The nonce changes per request;
+ * the bar remembers the nonce it mounted with so a request left over from a
+ * previous life of the bar is not replayed on reopen.
+ */
+export interface DocSearchFocusRequest {
+  nonce: number;
+  target: "find" | "replace";
+}
+
+export const NO_FOCUS_REQUEST: DocSearchFocusRequest = { nonce: 0, target: "find" };
+
 // How long the spoken match status waits for the query to settle. Every
 // keystroke recomputes the count, and a live region that changes ten times
 // while a ten-letter query is typed queues ten announcements.
@@ -199,11 +211,11 @@ interface SearchBarProps {
   locale: Locale;
   /** Announces how many matches a Replace all touched; nothing else reports it. */
   onNotice: (text: string) => void;
-  /** Each change moves focus back to the query input and selects it. */
-  focusNonce?: number;
+  /** Each new nonce moves focus to the named input and selects its text. */
+  focusRequest?: DocSearchFocusRequest;
 }
 
-export function SearchBar({ editor, onClose, replaceOpen, onToggleReplace, locale, onNotice, focusNonce = 0 }: SearchBarProps) {
+export function SearchBar({ editor, onClose, replaceOpen, onToggleReplace, locale, onNotice, focusRequest = NO_FOCUS_REQUEST }: SearchBarProps) {
   const styles = useStyles();
   const inputRef = useRef<HTMLInputElement>(null);
   const replaceInputRef = useRef<HTMLInputElement>(null);
@@ -218,13 +230,18 @@ export function SearchBar({ editor, onClose, replaceOpen, onToggleReplace, local
   const [emptiedByReplace, setEmptiedByReplace] = useState(false);
   const i = (key: Parameters<typeof t>[0]) => t(key, locale);
 
+  const mountNonceRef = useRef(focusRequest.nonce);
+  useEffect(() => { inputRef.current?.focus(); }, []);
   useEffect(() => {
-    const input = inputRef.current;
+    if (focusRequest.nonce === mountNonceRef.current) return;
+    // The replace row renders in the same commit that requests it, so the ref
+    // is populated by the time this effect runs.
+    const input = focusRequest.target === "replace" ? replaceInputRef.current : inputRef.current;
     if (!input) return;
     input.focus();
-    // On a refocus the query is usually about to be retyped.
-    if (focusNonce > 0) input.select();
-  }, [focusNonce]);
+    // On a return trip the text is usually about to be retyped.
+    input.select();
+  }, [focusRequest.nonce, focusRequest.target]);
   useEffect(() => { if (replaceOpen) replaceInputRef.current?.focus(); }, [replaceOpen]);
 
   const dispatchTiptap = useCallback(
