@@ -128,9 +128,10 @@ export function useKeyboardShortcuts({
       if (ctrl && e.shiftKey && !e.altKey && key === "n") { e.preventDefault(); openNewWindow(); }
       if (ctrl && !e.shiftKey && !e.altKey && key === "f") {
         e.preventDefault();
-        // The bar's buttons are not tabbable, so once focus has wandered into
-        // the editor this is the only way back; toggling closed here would
-        // unmount the bar and discard the query.
+        // Only the bar's inputs are tabbable, so once focus has wandered into
+        // the editor the ways back are Shift+Tab across whatever sits between
+        // or this key; toggling closed here would unmount the bar and discard
+        // the query.
         if (docSearchOpen) {
           onFocusDocSearch();
           return;

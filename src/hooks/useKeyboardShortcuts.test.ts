@@ -254,8 +254,8 @@ describe("useKeyboardShortcuts — Ctrl+F", () => {
   });
 
   it("returns focus to the open find bar instead of closing it", () => {
-    // The bar's buttons are not tabbable, so after clicking into the editor
-    // this is the only way back; closing would discard the query.
+    // After clicking into the editor this is the discoverable way back into
+    // the bar's input; closing would discard the query.
     const params = { ...makeParams(), docSearchOpen: true };
     renderHook(() => useKeyboardShortcuts(params));
     expect(press(editorEl, { key: "f", ctrlKey: true })).toBe(true);
